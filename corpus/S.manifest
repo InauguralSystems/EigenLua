@@ -1,0 +1,34 @@
+# Tier S rows. include = graded. exclude = not graded, with a reason.
+# all.lua is the driver and is not a row. 27 include rows.
+include api.lua
+exclude attrib.lua fails standalone under the reference: needs all.lua setup or a C module
+exclude big.lua fails standalone under the reference: needs all.lua setup or a C module
+include bitwise.lua
+include bwcoercion.lua
+include calls.lua
+include closure.lua
+include code.lua
+include constructs.lua
+include coroutine.lua
+include cstack.lua
+include db.lua
+include errors.lua
+include events.lua
+exclude files.lua fails standalone under the reference: stdin seek at line 84 does not fail when stdin is seekable
+include gc.lua
+include gengc.lua
+include goto.lua
+exclude heavy.lua stress test, over 120 s
+include literals.lua
+include locals.lua
+exclude main.lua fails standalone under the reference: needs the lua driver or a C module
+include math.lua
+include nextvar.lua
+include pm.lua
+include sort.lua
+include strings.lua
+include tpack.lua
+include tracegc.lua
+include utf8.lua
+include vararg.lua
+include verybig.lua
