@@ -58,7 +58,7 @@ build() {
   src="$d/lua-5.4.9/src/lbaselib.c" mk="$d/lua-5.4.9/src/Makefile"
   if [[ ${3:-} != compat ]]; then
     sed -i 's/^CFLAGS= -O2 -Wall -Wextra -DLUA_COMPAT_5_3 /CFLAGS= -O2 -Wall -Wextra /' "$mk"
-    ! grep -q 'LUA_COMPAT_5_3' "$mk"
+    if grep -q 'LUA_COMPAT_5_3' "$mk"; then echo "build_ref: could not strip LUA_COMPAT_5_3 from $mk" >&2; exit 1; fi
   fi
   if [[ ${3:-} == patch || ${3:-} == toothless ]]; then patch -s -p1 -d "$d/lua-5.4.9" <"$PATCH"; fi
   if [[ ${3:-} == toothless ]]; then

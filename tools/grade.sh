@@ -70,7 +70,7 @@ first_diff() {
     function q(s) { gsub(/\\/, "\\\\", s); if (length(s) > 60) s = substr(s, 1, 60); return s }
     BEGIN { while ((getline l < REF) > 0) r[++rn] = l }
     { c[FNR] = $0; cn = FNR
-      if ($0 != r[FNR]) { printf "line %d ref=%s cand=%s", FNR, q(r[FNR]), q($0); found = 1; exit }
+      if (($0 "") != (r[FNR] "")) { printf "line %d ref=%s cand=%s", FNR, q(r[FNR]), q($0); found = 1; exit }
     }
     END {
       if (found) exit
