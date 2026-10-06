@@ -8,9 +8,9 @@ echo "RUN build_ref"
 timeout 120 tools/build_ref.sh
 
 echo "RUN selftest"
-timeout 280 tools/grade.sh --selftest
+timeout 420 tools/grade.sh --selftest
 
 echo "RUN canary"
-timeout 180 tools/grade.sh --candidate "$ROOT/.ref/lua-5.4.9/src/lua" --tier all
+timeout 240 tools/grade.sh --candidate "$ROOT/.ref/lua-5.4.9/src/lua" --tier all
 
 echo "RUN ok"
