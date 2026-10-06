@@ -1,6 +1,7 @@
 # Tier S rows. include = graded by exact assert count. count-unspecified =
-# graded by count >= 60% of the min of 20 reference runs, with the measured reason the
-# count is unspecified. exclude = not graded, with a reason.
+# graded by count >= F x min of 20 reference runs, F = the row's floor= field,
+# then the measured reason the count is unspecified. exclude = not graded,
+# with a reason.
 # all.lua is the driver and is not a row. 23 graded rows.
 exclude api.lua near-vacuous: returns at line 6 when the internal T test library is absent (standard build), 0 assertions run
 exclude attrib.lua fails standalone under the reference: needs all.lua setup or a C module
@@ -24,8 +25,8 @@ exclude heavy.lua stress test, over 120 s
 include literals.lua
 include locals.lua
 exclude main.lua fails standalone under the reference: needs the lua driver or a C module
-count-unspecified math.lua line 845 calls math.randomseed() with no argument, which seeds from time and an address; the statistics loops after it (doagain) then run a seed-dependent number of rounds
-count-unspecified nextvar.lua find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
+count-unspecified math.lua floor=0.60 line 845 calls math.randomseed() with no argument, which seeds from time and an address; the statistics loops after it (doagain) then run a seed-dependent number of rounds
+count-unspecified nextvar.lua floor=0.90 find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
 include pm.lua
 include sort.lua
 include strings.lua

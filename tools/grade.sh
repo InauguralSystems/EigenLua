@@ -15,12 +15,12 @@
 # lines with no digit equal the reference's (progress cross-check), and:
 #  include: count == reference count (2 reference runs must agree, else
 #    UNSTABLE);
-#  count-unspecified: count >= floor = 60% of the min of 20 reference runs, no
-#    upper bound. math.lua counts come in quanta of 10602 (its float loop
-#    repeats); over 1220 runs the lowest mode (36.2k, 0.6%) sits at 53-77% of
-#    a min-of-20, so 60% keeps the reference above the floor (resampled
-#    P(run < floor) = 2e-5). Counts follow unspecified behaviour, so a count a
-#    little off (off-by-one plant) is NOT caught; a large shortfall is.
+#  count-unspecified: count >= floor = F x min of 20 reference runs, no upper
+#    bound; F is the row's required `floor=0.N` field in S.manifest (missing:
+#    exit 2). math.lua F=0.60: counts come in quanta of 10602 and the lowest
+#    mode (36.2k, 0.6% of 1220 runs) is 53-77% of a min-of-20. nextvar F=0.90:
+#    1220 runs span 9838..9942. Counts follow unspecified behaviour, so a count
+#    a little off (off-by-one plant) is NOT caught; a large shortfall is.
 # Tier D: stdout and rc byte-identical to the reference. Each program must
 # print the same under lua-seedA twice, lua-seedB and the pristine build, or
 # it is a corpus defect (exit 2). Residuals: tier D ignores stderr; a nonzero
@@ -121,19 +121,15 @@ emit() {
   esac
 }
 twice() {
-  local cwd=$1 sec=$2 cmd=$3 file=$4 pre=$5 t0 t1 ms2
-  t0=$(date +%s%N)
-  run_at "$cwd" "$sec" "$cmd" "$file" "$pre.1o" "$pre.1e"
-  RC1=$RUN_RC
-  t1=$(date +%s%N)
-  MS=$(( (t1 - t0) / 1000000 ))
-  t0=$(date +%s%N)
-  run_at "$cwd" "$sec" "$cmd" "$file" "$pre.2o" "$pre.2e"
-  RC2=$RUN_RC
-  t1=$(date +%s%N)
-  ms2=$(( (t1 - t0) / 1000000 ))
-  (( ms2 > MS )) && MS=$ms2
-  [[ $RC1 -eq 99 || $RC2 -eq 99 ]] && die "could not enter $cwd"
+  local cwd=$1 sec=$2 cmd=$3 file=$4 pre=$5 k t0 t
+  MS=0
+  for k in 1 2; do
+    t0=$(date +%s%N)
+    run_at "$cwd" "$sec" "$cmd" "$file" "$pre.${k}o" "$pre.${k}e"
+    [[ $RUN_RC -eq 99 ]] && die "could not enter $cwd"
+    printf -v "RC$k" '%s' "$RUN_RC"
+    t=$(( ($(date +%s%N) - t0) / 1000000 )); (( t > MS )) && MS=$t
+  done
 }
 CAND=""
 TIER=all
@@ -197,7 +193,10 @@ while read -r status name reason; do
   s_status[$name]=$status
   [[ -f $SUITE/$name ]] || die "manifest row has no file: $name"
   if [[ $status == include ]]; then [[ -z ${reason:-} ]]; else [[ -n ${reason:-} ]]; fi || die "bad reason field for $status row: $name"
-  [[ $status == count-unspecified ]] && s_cu[$name]=1
+  if [[ $status == count-unspecified ]]; then
+    [[ $reason =~ ^floor=0\.([0-9][0-9]?)\ +[^\ ] ]] || die "count-unspecified row has no floor=0.N fraction: $name"
+    s_cu[$name]=${BASH_REMATCH[1]}0 s_cu[$name]=${s_cu[$name]:0:2}
+  fi
   [[ $status == exclude ]] || s_include+=("$name")
 done <"$SMAN"
 [[ ${#s_include[@]} -eq 23 ]] || die "graded S count ${#s_include[@]} != 23"
@@ -372,7 +371,7 @@ if (( ${#s_sel[@]} > 0 )) && [[ $TRUST == trusted ]]; then
     # <<< guard:stable
     s_lo[$name]=$lo s_hi[$name]=$hi
     if [[ -n ${s_cu[$name]:-} ]]; then
-      floor=$(( lo * 60 / 100 ))
+      floor=$(( lo * 10#${s_cu[$name]} / 100 ))
       s_lo[$name]=$floor s_hi[$name]=-1
     fi
   done
@@ -418,7 +417,7 @@ grade_s() {
     run_s "$name" "cand$k" "$CAND" "$sec"
     rc=$S_RC c=$S_C pr=same
     tag="count=$c"
-    [[ -n ${s_cu[$name]:-} ]] && tag="class=count-unspecified floor=$lo count=$c"
+    [[ -n ${s_cu[$name]:-} ]] && tag="class=count-unspecified fraction=0.${s_cu[$name]} floor=$lo count=$c"
     (( REPEAT > 1 )) && tag="$tag run=$k/$REPEAT"
     special=$(classify "$rc" "$pre-cand$k.e")
     if [[ -n $special ]]; then emit S "$name" "$special" "rc=$rc $tag"; return; fi

@@ -1,0 +1,15 @@
+-- surface: strings pattern classes %s %w %p %x, sets, %b() and the frontier %f
+local s = "Hi! 0x1F, (a(b)c) end."
+print(string.gsub(s, "%s", "_"))
+print(string.gsub(s, "%w", ""))
+print(string.gsub(s, "%p", ""))
+print(string.match(s, "0x(%x+)"))
+print(string.gsub("deadBEEF xyz", "%x", "."))
+print(string.gsub(s, "[^%a]", ""))
+print(string.gsub("a-b_c", "[%-_]", " "))
+print(string.match(s, "%b()"))
+print(string.gsub("f(x) + g(h(y))", "%b()", "[]"))
+print(string.gsub("THE (quick) fox", "%f[%a]%a+", "W"))
+print(string.gsub("hello world", "%f[%w]%w", string.upper))
+print(string.find("THE (quick) fox", "%f[%a]%a+%f[%A]", 5))
+print(string.match("key123", "%a+()%d+"))

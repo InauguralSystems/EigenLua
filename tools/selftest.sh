@@ -62,21 +62,12 @@ do_perturb() {
   plant perturb "$exp" "$got"
 }
 do_silent() {
-  local sonly="goto.lua,literals.lua,calls.lua,utf8.lua,events.lua,strings.lua"
-  local sn sok=0 dok=0
-  sn=$(awk -F, '{print NF}' <<<"$sonly")
+  local sonly="goto.lua,literals.lua,calls.lua,utf8.lua,events.lua,strings.lua" sok=0 dok=0
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier S --only "$sonly"
-  local sbad
-  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $5 != "assert-untrusted") {c++} END{print c+0}' "$WORK/out.txt")
-  [[ $GRADE_RC -eq 1 && $(row_n) -eq $sn && $sbad -eq 0 ]] && sok=1
+  [[ $GRADE_RC -eq 1 && $(row_n) -eq 6 && $(awk '/^ROW S / && ($4 != "FAIL" || $5 != "assert-untrusted")' "$WORK/out.txt") == '' ]] && sok=1
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier D
-  local dbad
-  dbad=$(row_bad DIVERGE)
-  [[ $GRADE_RC -eq 1 && $(row_n) -eq $nd && $dbad -eq 0 ]] && dok=1
-  local exp="S=FAIL,D=DIVERGE"
-  local got=$exp
-  [[ $sok -eq 1 && $dok -eq 1 ]] || got="S=$sok D=$dok"
-  plant silent "$exp" "$got"
+  [[ $GRADE_RC -eq 1 && $(row_n) -eq $nd && $(row_bad DIVERGE) -eq 0 ]] && dok=1
+  plant silent "S=1 D=1" "S=$sok D=$dok"
 }
 do_early_exit() {
   run_at_grade "$GRADE" --candidate "$PLANTS/early-exit.sh" --ref "$REF" --tier S --only goto.lua
@@ -228,6 +219,13 @@ do_unstable_ref() {
   FLAKY_STATE="$WORK/flaky.n" run_at_grade "$GRADE" --candidate "$COUNT" --ref "$d/lua" --tier S --only goto.lua
   plant unstable-ref "goto.lua=UNSTABLE rc=1" "$(awk '/^ROW /{print $3 "=" $4}' "$WORK/out.txt") rc=$GRADE_RC"
 }
+do_no_fraction() {
+  local dest
+  dest=$(stage "$WORK/nofrac")
+  sed -i 's/^count-unspecified nextvar.lua floor=0\.90 /count-unspecified nextvar.lua /' "$dest/corpus/S.manifest"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$COUNT" --ref "$REF" --tier S --only goto.lua
+  harness no-fraction "has no floor=0.N fraction"
+}
 dispatch() {
   local fn="do_${1//-/_}"
   if declare -F "$fn" >/dev/null; then "$fn"; else printf 'selftest: unknown plant %s\n' "$1" >&2; bad=1; fi
@@ -239,7 +237,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi
