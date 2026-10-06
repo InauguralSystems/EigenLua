@@ -1,6 +1,6 @@
 -- surface: xpcall with a handler
 local ok, err = xpcall(function() error("zz") end, function(e)
-  return "handled:" .. string.match(e, "([^:]+)$")
+  return "handled:" .. tostring(string.match(e, "zz$"))
 end)
 print(ok, err)
 ok, err = xpcall(function() error({1, 2}) end, function(e)

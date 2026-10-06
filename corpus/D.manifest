@@ -1,37 +1,38 @@
-co_error.lua
-co_resume_yield.lua
-co_status.lua
-co_wrap.lua
-err_level.lua
-err_nonstr.lua
-err_pcall.lua
-err_xpcall.lua
-goto_stmt.lua
-int_maxinteger.lua
-int_neg_idiv.lua
-int_one_vs_one.lua
-int_past53.lua
-int_wrap.lua
-meta_call.lua
-meta_concat.lua
-meta_eq.lua
-meta_index.lua
-meta_len.lua
-meta_lt.lua
-meta_newindex.lua
-multi_assign.lua
-multi_return.lua
-scope_closure.lua
-scope_local_block.lua
-scope_loop_capture.lua
-scope_shadow.lua
-str_byte_char_sub_rep.lua
-str_embedded_nul.lua
-str_format.lua
-str_high_bytes.lua
-str_len.lua
-tbl_int_float_key.lua
-tbl_len_border.lua
-tbl_next_pairs.lua
-tbl_nil_holes.lua
-vararg_pack.lua
+co_error.lua unspecified-audit: ok
+co_resume_yield.lua unspecified-audit: ok
+co_status.lua unspecified-audit: ok
+co_wrap.lua unspecified-audit: ok
+err_level.lua unspecified-audit: ok
+err_nonstr.lua unspecified-audit: ok
+err_pcall.lua unspecified-audit: ok
+err_xpcall.lua unspecified-audit: ok
+goto_stmt.lua unspecified-audit: ok
+int_maxinteger.lua unspecified-audit: ok
+int_neg_idiv.lua unspecified-audit: ok
+int_one_vs_one.lua unspecified-audit: ok
+int_past53.lua unspecified-audit: ok
+int_wrap.lua unspecified-audit: ok
+meta_call.lua unspecified-audit: ok
+meta_concat.lua unspecified-audit: ok
+meta_eq.lua unspecified-audit: ok
+meta_index.lua unspecified-audit: ok
+meta_len.lua unspecified-audit: ok
+meta_lt.lua unspecified-audit: ok
+meta_newindex.lua unspecified-audit: ok
+multi_assign.lua unspecified-audit: ok
+multi_return.lua unspecified-audit: ok
+rng_xoshiro.lua unspecified-audit: ok
+scope_closure.lua unspecified-audit: ok
+scope_local_block.lua unspecified-audit: ok
+scope_loop_capture.lua unspecified-audit: ok
+scope_shadow.lua unspecified-audit: ok
+str_byte_char_sub_rep.lua unspecified-audit: ok
+str_embedded_nul.lua unspecified-audit: ok
+str_format.lua unspecified-audit: ok
+str_high_bytes.lua unspecified-audit: ok
+str_len.lua unspecified-audit: ok
+tbl_int_float_key.lua unspecified-audit: ok
+tbl_len_border.lua unspecified-audit: ok
+tbl_next_pairs.lua unspecified-audit: ok
+tbl_nil_holes.lua unspecified-audit: ok
+vararg_pack.lua unspecified-audit: ok
