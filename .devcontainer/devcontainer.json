@@ -1,7 +1,7 @@
 {
   "name": "eigenlua",
   "build": { "dockerfile": "Dockerfile" },
-  "workspaceFolder": "/workspaces/eigenlua",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
   "remoteUser": "root",
 
   // Point the repo's ./eigs symlink at the installed runtime (the committed
