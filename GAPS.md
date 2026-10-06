@@ -65,7 +65,22 @@ inline intrinsic that never raises passed a probe that used `assert` only as a v
 - **Every graded row has a negative control.** The candidate runs on that exact file with `assert(false);` put in
   front of line 1, with no newline, so line numbers do not move. It must exit non-zero with `assertion failed!`, or
   the row is `FAIL assert-untrusted(control)` (plant `callsite-toothless`). The reference must fail the control too.
-  The control costs about 1 s per full grade.
+  The control's measured cost, on an idle box, is about 1.2 s for both arms over all 23 rows.
+
+**Tier S trusts the VALUES fed to `assert`, so Tier D enumerates them.** A fourth critic showed that a candidate
+whose `not` returns integer `0`, which is truthy, instead of `false` passed 21 of 23 S rows with a trusted `assert`.
+Every `assert(not …)` in those files could no longer fail. Adding more probe shapes only moves that hole outward.
+Instead, Tier D's `ops_matrix.lua` applies every Lua 5.4 operator to a fixed set of 17 values:
+- all 4 unary operators;
+- all 21 binary operators over every pair of values (`lparser.c`'s `getunopr`/`getbinopr` in 5.4.9).
+
+It prints each result's type and value, or `err`, and it also prints truthiness through `if` and `while`. The
+grader exits 2 unless that program's operator table equals the operator list declared in `corpus/D.manifest`
+(plant `ops-drop`).
+
+**So a grade means BOTH tiers.** Tier S alone can read 21/23 for a candidate that Tier D marks wrong. Only
+`S=N/N D=M/M` (exit 0) is a pass. Value bugs in builtins, beyond the operators and the string library, are not yet
+enumerated: EigenLua#3.
 
 **Declared residual:** a front end whose `assert` is correct on line 1 and in every probe shape, but toothless at some
 other call site, would pass. That needs a compiler that treats identical call sites differently by position. It is
