@@ -1,0 +1,382 @@
+# EigenLua lexer: Lua 5.4 source text -> token lists (manual 3.1).
+# lua_lex returns {"t": types, "v": values, "l": lines, "f": float-literal flags,
+# "z": string-has-NUL flags}. Token type is "name", "string", "number",
+# "eof", or the keyword / punctuation text itself. A lexical error raises
+# ["SYNTAX", line, message].
+
+define lex_err(line, msg) as:
+    throw of ["SYNTAX", line, msg]
+
+define lex_is_alpha(c) as:
+    return (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95
+
+define lex_is_digit(c) as:
+    return c >= 48 and c <= 57
+
+define lex_is_xdigit(c) as:
+    return (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+
+define lex_xval(c) as:
+    if c >= 48 and c <= 57:
+        return c - 48
+    if c >= 97 and c <= 102:
+        return c - 87
+    return c - 55
+
+# UTF-8 encoding of a code point up to 2^31 (Lua's \u{XXX}, manual 3.1).
+define lex_utf8(cp) as:
+    if cp < 128:
+        return [cp]
+    local mfb is 63
+    local tmp is []
+    local go is 1
+    loop while go:
+        list_insert_at of [tmp, 0, 128 + (cp % 64)]
+        cp is floor of (cp / 64)
+        mfb is floor of (mfb / 2)
+        go is cp > mfb
+    local first is bit_and of [bit_or of [bit_shl of [bit_not of (mfb), 1], cp], 255]
+    list_insert_at of [tmp, 0, first]
+    return tmp
+
+define lua_lex(src) as:
+    local kw is {"and": 1, "break": 1, "do": 1, "else": 1, "elseif": 1, "end": 1, "false": 1, "for": 1, "function": 1, "goto": 1, "if": 1, "in": 1, "local": 1, "nil": 1, "not": 1, "or": 1, "repeat": 1, "return": 1, "then": 1, "true": 1, "until": 1, "while": 1}
+    local T is []
+    local V is []
+    local Ln is []
+    local Fl is []
+    local Z is []
+    local n is len of src
+    local i is 0
+    local line is 1
+    # shebang line
+    if n > 0 and src[0] == "#":
+        loop while i < n and src[i] != "\n":
+            i is i + 1
+    loop while i < n:
+        local c is ord of src[i]
+        if c == 10:
+            line is line + 1
+            i is i + 1
+        elif c == 13:
+            # \r, \r\n and \n\r each count as one line break
+            line is line + 1
+            i is i + 1
+            if i < n and src[i] == "\n":
+                i is i + 1
+        elif c == 32 or c == 9 or c == 11 or c == 12:
+            i is i + 1
+        elif c == 45 and i + 1 < n and src[i + 1] == "-":
+            # comment
+            i is i + 2
+            local lv is -1
+            if i < n and src[i] == "[":
+                lv is lex_long_level of [src, i]
+            if lv >= 0:
+                local r is lex_long of [src, i, lv, line, 1]
+                i is r[0]
+                line is r[1]
+            else:
+                loop while i < n and src[i] != "\n" and src[i] != "\r":
+                    i is i + 1
+        elif lex_is_alpha of c:
+            local j is i
+            loop while j < n and (lex_is_alpha of (ord of src[j]) or lex_is_digit of (ord of src[j])):
+                j is j + 1
+            local w is src[i:j]
+            if has_key of [kw, w]:
+                append of [T, w]
+            else:
+                append of [T, "name"]
+            append of [V, w]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, 0]
+            i is j
+        elif lex_is_digit of c or (c == 46 and i + 1 < n and lex_is_digit of (ord of src[i + 1])):
+            local r is lex_number of [src, i, line]
+            append of [T, "number"]
+            append of [V, r[1]]
+            append of [Ln, line]
+            append of [Fl, r[2]]
+            append of [Z, 0]
+            i is r[0]
+        elif c == 34 or c == 39:
+            local r is lex_string of [src, i, line]
+            append of [T, "string"]
+            append of [V, r[1]]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, r[3]]
+            i is r[0]
+            line is r[2]
+        elif c == 91 and lex_long_level of [src, i] >= 0:
+            local lv is lex_long_level of [src, i]
+            local sl is line
+            local r is lex_long of [src, i, lv, line, 0]
+            append of [T, "string"]
+            append of [V, r[2]]
+            append of [Ln, sl]
+            append of [Fl, 0]
+            append of [Z, r[3]]
+            i is r[0]
+            line is r[1]
+        else:
+            local p3 is src[i:min of [i + 3, n]]
+            local p2 is src[i:min of [i + 2, n]]
+            local op is ""
+            if p3 == "...":
+                op is p3
+            elif p2 == "==" or p2 == "~=" or p2 == "<=" or p2 == ">=" or p2 == "//" or p2 == "::" or p2 == "<<" or p2 == ">>" or p2 == "..":
+                op is p2
+            elif index_of of ["+-*/%^#&~|<>=(){}[];:,.", src[i]] >= 0:
+                op is src[i]
+            else:
+                lex_err of [line, f"unexpected symbol near '{src[i]}'"]
+            append of [T, op]
+            append of [V, op]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, 0]
+            i is i + len of op
+    append of [T, "eof"]
+    append of [V, "<eof>"]
+    append of [Ln, line]
+    append of [Fl, 0]
+    append of [Z, 0]
+    return {"t": T, "v": V, "l": Ln, "f": Fl, "z": Z}
+
+# Level of a long bracket opening at i ("[" "="* "["), or -1.
+define lex_long_level(src, i) as:
+    local j is i + 1
+    local n is len of src
+    loop while j < n and src[j] == "=":
+        j is j + 1
+    if j < n and src[j] == "[":
+        return j - i - 1
+    return -1
+
+# Read a long bracket starting at i with level lv. Returns
+# [next_index, line, text, has_nul]. The first newline is skipped.
+define lex_long(src, i, lv, line, is_comment) as:
+    local n is len of src
+    local j is i + lv + 2
+    local startline is line
+    if j < n and (src[j] == "\r" or src[j] == "\n"):
+        local c0 is src[j]
+        j is j + 1
+        if j < n and (src[j] == "\r" or src[j] == "\n") and src[j] != c0:
+            j is j + 1
+        line is line + 1
+    local parts is []
+    local seg is j
+    loop while 1:
+        if j >= n:
+            if is_comment:
+                lex_err of [line, "unfinished long comment near '<eof>'"]
+            lex_err of [line, "unfinished long string near '<eof>'"]
+        local ch is src[j]
+        if ch == "]":
+            local k is j + 1
+            loop while k < n and src[k] == "=":
+                k is k + 1
+            if k < n and src[k] == "]" and k - j - 1 == lv:
+                append of [parts, src[seg:j]]
+                return [k + 1, line, join of [parts, ""], 0]
+            j is j + 1
+        elif ch == "\r" or ch == "\n":
+            append of [parts, src[seg:j]]
+            append of [parts, "\n"]
+            j is j + 1
+            if j < n and (src[j] == "\r" or src[j] == "\n") and src[j] != ch:
+                j is j + 1
+            line is line + 1
+            seg is j
+        else:
+            j is j + 1
+
+# Numeral at i. Returns [next_index, value, is_float]. Hex integers wrap
+# modulo 2^64 in Lua; that wrap is not representable on one double and is
+# left to the value (an EigenScript gap, see LEDGER.md).
+define lex_number(src, i, line) as:
+    local n is len of src
+    local j is i
+    local isf is 0
+    if src[i] == "0" and i + 1 < n and (src[i + 1] == "x" or src[i + 1] == "X"):
+        j is i + 2
+        local mant is 0
+        local exp is 0
+        local any is 0
+        loop while j < n and lex_is_xdigit of (ord of src[j]):
+            mant is mant * 16 + (lex_xval of (ord of src[j]))
+            any is 1
+            j is j + 1
+        if j < n and src[j] == ".":
+            isf is 1
+            j is j + 1
+            loop while j < n and lex_is_xdigit of (ord of src[j]):
+                mant is mant * 16 + (lex_xval of (ord of src[j]))
+                exp is exp - 4
+                any is 1
+                j is j + 1
+        if any == 0:
+            lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
+        if j < n and (src[j] == "p" or src[j] == "P"):
+            isf is 1
+            j is j + 1
+            local sg is 1
+            if j < n and (src[j] == "+" or src[j] == "-"):
+                if src[j] == "-":
+                    sg is -1
+                j is j + 1
+            if j >= n or not (lex_is_digit of (ord of src[j])):
+                lex_err of [line, f"malformed number near '{src[i:j]}'"]
+            local e is 0
+            loop while j < n and lex_is_digit of (ord of src[j]):
+                e is e * 10 + (ord of src[j]) - 48
+                j is j + 1
+            exp is exp + sg * e
+        if j < n and (lex_is_alpha of (ord of src[j]) or lex_is_digit of (ord of src[j]) or src[j] == "."):
+            lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
+        local val is mant
+        if exp != 0:
+            val is mant * (pow of [2, exp])
+        return [j, val, isf]
+    loop while j < n and lex_is_digit of (ord of src[j]):
+        j is j + 1
+    if j < n and src[j] == ".":
+        isf is 1
+        j is j + 1
+        loop while j < n and lex_is_digit of (ord of src[j]):
+            j is j + 1
+    if j < n and (src[j] == "e" or src[j] == "E"):
+        isf is 1
+        j is j + 1
+        if j < n and (src[j] == "+" or src[j] == "-"):
+            j is j + 1
+        if j >= n or not (lex_is_digit of (ord of src[j])):
+            lex_err of [line, f"malformed number near '{src[i:j]}'"]
+        loop while j < n and lex_is_digit of (ord of src[j]):
+            j is j + 1
+    if j < n and (lex_is_alpha of (ord of src[j]) or src[j] == "."):
+        lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
+    local text is src[i:j]
+    if text[0] == ".":
+        text is "0" + text
+    if text[len of text - 1] == ".":
+        text is text + "0"
+    return [j, num of text, isf]
+
+# Short string at i. Returns [next_index, text, line, has_nul]. A NUL byte
+# cannot live in an EigenScript string (NUL-terminated, EigenScript gap); it
+# is replaced by byte 1 and has_nul is set so the emitter refuses the literal.
+define lex_string(src, i, line) as:
+    local n is len of src
+    local q is src[i]
+    local j is i + 1
+    local parts is []
+    local seg is j
+    local nul is 0
+    loop while 1:
+        if j >= n:
+            lex_err of [line, "unfinished string near '<eof>'"]
+        local ch is src[j]
+        if ch == q:
+            append of [parts, src[seg:j]]
+            return [j + 1, join of [parts, ""], line, nul]
+        if ch == "\n" or ch == "\r":
+            lex_err of [line, "unfinished string"]
+        if ch == "\\":
+            append of [parts, src[seg:j]]
+            j is j + 1
+            if j >= n:
+                lex_err of [line, "unfinished string near '<eof>'"]
+            local e is src[j]
+            local bytes is []
+            if e == "n":
+                bytes is [10]
+                j is j + 1
+            elif e == "t":
+                bytes is [9]
+                j is j + 1
+            elif e == "a":
+                bytes is [7]
+                j is j + 1
+            elif e == "b":
+                bytes is [8]
+                j is j + 1
+            elif e == "f":
+                bytes is [12]
+                j is j + 1
+            elif e == "v":
+                bytes is [11]
+                j is j + 1
+            elif e == "r":
+                bytes is [13]
+                j is j + 1
+            elif e == "\\" or e == "\"" or e == "'":
+                bytes is [ord of e]
+                j is j + 1
+            elif e == "\n" or e == "\r":
+                bytes is [10]
+                j is j + 1
+                if j < n and (src[j] == "\n" or src[j] == "\r") and src[j] != e:
+                    j is j + 1
+                line is line + 1
+            elif e == "x":
+                j is j + 1
+                if j + 1 >= n or not (lex_is_xdigit of (ord of src[j])) or not (lex_is_xdigit of (ord of src[j + 1])):
+                    lex_err of [line, "hexadecimal digit expected"]
+                bytes is [(lex_xval of (ord of src[j])) * 16 + (lex_xval of (ord of src[j + 1]))]
+                j is j + 2
+            elif e == "z":
+                j is j + 1
+                loop while j < n and (src[j] == " " or src[j] == "\t" or src[j] == "\n" or src[j] == "\r" or (ord of src[j]) == 12 or (ord of src[j]) == 11):
+                    if src[j] == "\n" or src[j] == "\r":
+                        local c0 is src[j]
+                        j is j + 1
+                        if j < n and (src[j] == "\n" or src[j] == "\r") and src[j] != c0:
+                            j is j + 1
+                        line is line + 1
+                    else:
+                        j is j + 1
+            elif e == "u":
+                j is j + 1
+                if j >= n or src[j] != "{":
+                    lex_err of [line, "missing '{' in \\u{xxxx}"]
+                j is j + 1
+                local cp is 0
+                local nd is 0
+                loop while j < n and lex_is_xdigit of (ord of src[j]):
+                    cp is cp * 16 + (lex_xval of (ord of src[j]))
+                    nd is nd + 1
+                    j is j + 1
+                if nd == 0:
+                    lex_err of [line, "hexadecimal digit expected"]
+                if cp >= 2147483648:
+                    lex_err of [line, "UTF-8 value too large"]
+                if j >= n or src[j] != "}":
+                    lex_err of [line, "missing '}' in \\u{xxxx}"]
+                j is j + 1
+                bytes is lex_utf8 of (cp)
+            elif lex_is_digit of (ord of e):
+                local v is 0
+                local k is 0
+                loop while k < 3 and j < n and lex_is_digit of (ord of src[j]):
+                    v is v * 10 + (ord of src[j]) - 48
+                    j is j + 1
+                    k is k + 1
+                if v > 255:
+                    lex_err of [line, "decimal escape too large"]
+                bytes is [v]
+            else:
+                lex_err of [line, "invalid escape sequence '\\" + e + "'"]
+            for b in bytes:
+                if b == 0:
+                    nul is 1
+                    append of [parts, chr of 1]
+                else:
+                    append of [parts, chr of b]
+            seg is j
+        else:
+            j is j + 1

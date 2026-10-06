@@ -1,0 +1,10 @@
+# EigenLua runtime library (skeleton).
+lr_st is {"asserts": 0}
+define lr_stderr(s) as:
+    local b is []
+    for i in range of (len of s):
+        append of [b, ord of s[i]]
+    write_bytes of ["/dev/stderr", b, 1]
+define lr_exit(code) as:
+    lr_stderr of ("EIGENLUA-ASSERTS:" + (str of lr_st.asserts) + "\n")
+    exit of code

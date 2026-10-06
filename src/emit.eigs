@@ -1,0 +1,4 @@
+# EigenLua emitter (stub): every chunk is reported unsupported until the
+# emitter lands, so the candidate never runs a program it cannot compile.
+define emit_program(ast, file, runtime) as:
+    throw of ["UNSUP", "chunk (no emitter yet)", 1]
