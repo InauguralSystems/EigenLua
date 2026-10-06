@@ -43,13 +43,10 @@ link_dir() {
   for e in "$SUITE"/*; do ln -s "$e" "$dir/" || die "cannot link $e"; done
 }
 RUN_RC=0
-run_at() {
+run_at() {  # the cd check is outside the subshell: every candidate rc is the candidate's
   local cwd=$1 sec=$2 cmd=$3 file=$4 out=$5 err=$6
-  (
-    cd "$cwd" || exit 99
-    : | timeout -k 2s "${sec}s" "$cmd" "$file" >"$out" 2>"$err"
-    exit $?
-  )
+  [[ -d $cwd && -x $cwd ]] || die "could not enter $cwd"
+  ( cd "$cwd" && : | timeout -k 2s "${sec}s" "$cmd" "$file" >"$out" 2>"$err" )
   RUN_RC=$?
 }
 assert_count() {
@@ -69,9 +66,9 @@ row_timeout() {
   printf '%s\n' "$t"
 }
 first_diff() {
-  awk '
+  awk -v REF="$1" '
     function q(s) { gsub(/\\/, "\\\\", s); if (length(s) > 60) s = substr(s, 1, 60); return s }
-    NR == FNR { r[NR] = $0; rn = NR; next }
+    BEGIN { while ((getline l < REF) > 0) r[++rn] = l }
     { c[FNR] = $0; cn = FNR
       if ($0 != r[FNR]) { printf "line %d ref=%s cand=%s", FNR, q(r[FNR]), q($0); found = 1; exit }
     }
@@ -82,7 +79,7 @@ first_diff() {
         printf "line %d ref=%s cand=%s", n, q(n in r ? r[n] : ""), q(n in c ? c[n] : "")
       } else printf "bytes differ"
     }
-  ' "$1" "$2"
+  ' "$2"
 }
 classify() {
   local rc=$1 err=$2
@@ -128,7 +125,6 @@ twice() {
   for k in 1 2; do
     t0=$(date +%s%N)
     run_at "$cwd" "$sec" "$cmd" "$file" "$pre.${k}o" "$pre.${k}e"
-    [[ $RUN_RC -eq 99 ]] && die "could not enter $cwd"
     printf -v "RC$k" '%s' "$RUN_RC"
     t=$(( ($(date +%s%N) - t0) / 1000000 )); (( t > MS )) && MS=$t
   done
@@ -290,21 +286,20 @@ if (( ${#d_sel[@]} > 0 )); then
     pre="$WORK/d-$name"
     twice "$DDIR" 30 "${REF%/*}/lua-seedA" "$DDIR/$name" "$pre"
     run_at "$DDIR" 30 "${REF%/*}/lua-seedB" "$DDIR/$name" "$pre.B" "$pre.Be"
+    RCB=$RUN_RC
     run_at "$DDIR" 30 "$REF" "$DDIR/$name" "$pre.exp" "$pre.expe"
-    if ref_signaled "$RC1" || ref_signaled "$RC2" || ref_signaled "$RUN_RC"; then
-      die "reference failed on D/$name rc=$RC1/$RC2/$RUN_RC"
-    fi
+    for r in "$RC1" "$RC2" "$RCB" "$RUN_RC"; do ref_signaled "$r" && die "reference failed on D/$name rc=$RC1/$RC2/$RCB/$RUN_RC"; done
     # >>> guard:nondet
-    if [[ $RC1 -ne $RC2 || $RC1 -ne $RUN_RC ]] || ! cmp -s "$pre.1o" "$pre.2o"; then
+    if [[ $RC1 -ne $RC2 ]] || ! cmp -s "$pre.1o" "$pre.2o"; then
       die "corpus defect: D/$name is nondeterministic"
     fi
     # <<< guard:nondet
     # >>> guard:unspecified
-    if ! cmp -s "$pre.1o" "$pre.B"; then
-      die "corpus defect: D/$name is UNSPECIFIED (stdout depends on the string hash seed)"
+    if [[ $RC1 -ne $RCB ]] || ! cmp -s "$pre.1o" "$pre.B"; then
+      die "corpus defect: D/$name is UNSPECIFIED (stdout or rc depends on the string hash seed)"
     fi
     # <<< guard:unspecified
-    cmp -s "$pre.1o" "$pre.exp" || die "corpus defect: D/$name differs between lua and lua-seedA"
+    [[ $RC1 -eq $RUN_RC ]] && cmp -s "$pre.1o" "$pre.exp" || die "corpus defect: D/$name differs between lua and lua-seedA"
     d_exp_rc[$name]=$RC1
     d_ms[$name]=$MS
   done
@@ -314,7 +309,6 @@ run_s() {
   local name=$1 k=$2 cmd=$3 sec=$4 dir="$WORK/s-$name-$2"
   link_dir "$dir"
   run_at "$dir" "$sec" "$cmd" "$name" "$dir.o" "$dir.e"
-  [[ $RUN_RC -eq 99 ]] && die "could not enter $dir"
   S_RC=$RUN_RC
   S_C=$(assert_count "$dir.e")
   progress "$dir.o"
@@ -383,7 +377,6 @@ grade_d() {
   sec=$(row_timeout "${d_ms[$name]}")
   run_at "$DDIR" "$sec" "$CAND" "$DDIR/$name" "$out" "$err"
   rc=$RUN_RC
-  [[ $rc -eq 99 ]] && die "could not enter $DDIR"
   special=$(classify "$rc" "$err")
   if [[ -n $special ]]; then emit D "$name" "$special" "rc=$rc"; return; fi
   # >>> guard:d-match

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Gut-the-guard table. For each row: copy the tree (cp -a, no .git, no .tmp),
+# Gut-the-guard table. For each row: copy the tree (cp -a, skipping .git -- a
+# file in a worktree, a directory in a clone -- and .tmp),
 # run the plant there from outside (must be OK), replace the guard line with
 # the gutted line (the anchor must match exactly one line, which gives
 # file:line), run the plant again (must be WRONG); a gutted ref-count.patch
@@ -22,8 +23,11 @@ off-by-one	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]
 assert-edges	tools/ref-count.patch	+  eigenlua_asserts++;	+  (void)0;
 no-count	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $pr == same ]]; then
 lying-count	tools/grade.sh	    cmp -s "$pre-ref1.o.p" "$pre-cand$k.o.p" || pr="differs($(first_diff "$pre-ref1.o.p" "$pre-cand$k.o.p"))"	    :
-unspecified-D	tools/grade.sh	    if ! cmp -s "$pre.1o" "$pre.B"; then	    if false; then
+unspecified-D	tools/grade.sh	    if [[ $RC1 -ne $RCB ]] || ! cmp -s "$pre.1o" "$pre.B"; then	    if false; then
+unspecified-rc	tools/grade.sh	    if [[ $RC1 -ne $RCB ]] || ! cmp -s "$pre.1o" "$pre.B"; then	    if ! cmp -s "$pre.1o" "$pre.B"; then
 ops-drop	tools/grade.sh	[[ $have == "$(tr ' ' '\n' <<<"$OPS" | grep . | LC_ALL=C sort -u | tr '\n' ' ')" ]] || die "ops_matrix.lua operator table [$have] != D.manifest operators: [$OPS]"	:
+rc99	tools/grade.sh	  ( cd "$cwd" && : | timeout -k 2s "${sec}s" "$cmd" "$file" >"$out" 2>"$err" )	  ( cd "$cwd" && : | timeout -k 2s "${sec}s" "$cmd" "$file" >"$out" 2>"$err" ); [[ $? -ne 99 ]] || die "could not enter $cwd"
+compat-ref	tools/build_ref.sh	    if math.pow ~= nil or pcall(function() return a <= a end) then os.exit(1) end' >/dev/null 2>&1	    if false then os.exit(1) end' >/dev/null 2>&1
 unstable-ref	tools/grade.sh	    if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_cu[$name]:-} && $lo -ne $hi ]]; then	    if false; then
 hang	tools/grade.sh	  if [[ $rc -eq 124 || $rc -eq 137 ]]; then printf 'HANG\n'; return; fi	  :
 crash	tools/grade.sh	  if [[ $rc -ge 128 ]]; then printf 'CRASH\n'; return; fi	  :
@@ -32,17 +36,16 @@ no-candidate	tools/grade.sh	if [[ ! -f $CAND || ! -x $CAND ]]; then	if false; th
 wrong-ref	tools/grade.sh	  if [[ ! $ver =~ $vre ]]; then	  if false; then
 orphan-file	tools/grade.sh	  [[ -n ${d_have[$base]:-} ]] || die "corpus file not in manifest: D/$base"	  :
 edited-test	tools/grade.sh	  [[ $got == "${expect[$rel]}" ]] || die "checksum mismatch: $rel"	  :
-nondet-D	tools/grade.sh	    if [[ $RC1 -ne $RC2 || $RC1 -ne $RUN_RC ]] || ! cmp -s "$pre.1o" "$pre.2o"; then	    if false; then
+nondet-D	tools/grade.sh	    if [[ $RC1 -ne $RC2 ]] || ! cmp -s "$pre.1o" "$pre.2o"; then	    if false; then
 EOF
 )
 copy_tree() {
   local dest=$1 e
   rm -rf "$dest" && mkdir -p "$dest" || return 1
   for e in "$ROOT"/* "$ROOT"/.[!.]*; do
-    [[ $(basename "$e") == .tmp ]] && continue
+    case $(basename "$e") in .tmp|.git) continue ;; esac
     cp -a "$e" "$dest/" || return 1
   done
-  rm -f "$dest/.git"
   [[ ! -e $dest/.git ]]
 }
 verdict() {  # verdict <tree> <plant>: the plant's OK/WRONG word, or a named failure

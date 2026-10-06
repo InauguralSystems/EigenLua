@@ -153,16 +153,12 @@ one_row() {  # one_row <plant> <candidate> <VERDICT> <summary field>
 do_crash() { one_row crash crash.sh CRASH crash; }
 do_unsupported() { one_row unsupported unsupported.sh UNSUPPORTED unsupported; }
 harness() {
-  local name=$1 token=$2 nsum err exp got
-  nsum=$(awk '/^SUMMARY /{c++} END{print c+0}' "$WORK/out.txt")
+  local nsum err got
+  nsum=$(grep -c '^SUMMARY ' "$WORK/out.txt")
   err=$(tr '\n' ' ' <"$WORK/err.txt")
-  exp="exit2:$token"
-  if [[ $GRADE_RC -eq 2 && $nsum -eq 0 && $err == *"$token"* ]]; then
-    got=$exp
-  else
-    got="rc=$GRADE_RC summary=$nsum ${err}"
-  fi
-  plant "$name" "$exp" "$got"
+  got="rc=$GRADE_RC summary=$nsum ${err}"
+  [[ $GRADE_RC -eq 2 && $nsum -eq 0 && $err == *"$2"* ]] && got="exit2:$2"
+  plant "$1" "exit2:$2" "$got"
 }
 do_no_candidate() {
   run_at_grade "$GRADE" --candidate "$PLANTS/missing-candidate" --ref "$REF" --tier D --only int_one_vs_one.lua
@@ -215,6 +211,27 @@ frac_plant() {  # <plant> <replacement for "floor=0.90 "> <harness token>
 }
 do_no_fraction() { frac_plant no-fraction "" "has no floor=0.N fraction"; }
 do_floor_zero() { frac_plant floor-zero "floor=0.00 " "must be in (0,1)"; }
+do_rc99() {
+  run_at_grade "$GRADE" --candidate "$PLANTS/rc99.sh" --ref "$REF" --tier all --only int_one_vs_one.lua,goto.lua
+  plant rc99 "goto.lua=FAIL int_one_vs_one.lua=DIVERGE summary=1 rc=1" \
+    "$(awk '/^ROW /{printf "%s=%s ", $3, $4}' "$WORK/out.txt")summary=$(grep -c '^SUMMARY' "$WORK/out.txt") rc=$GRADE_RC"
+}
+do_unspecified_rc() {
+  local dest
+  dest=$(stage "$WORK/unsprc")
+  printf '%s\n' '-- surface: plant, exit status from pairs order over string keys' 'local t = {}' \
+    'for _, k in ipairs{"alpha", "beta", "gamma", "delta", "eps", "zeta", "eta", "theta"} do t[k] = true end' \
+    'print("same stdout")' 'os.exit((next(t) == "alpha") and 3 or 4)' >"$dest/corpus/D/plant_rc.lua"
+  echo "plant_rc.lua unspecified-audit: ok" >>"$dest/corpus/D.manifest"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only plant_rc.lua
+  harness unspecified-rc "is UNSPECIFIED"
+}
+do_compat_ref() {
+  local c p
+  "$ROOT/tools/build_ref.sh" --check-not-compat "${REF%/*}/lua-compat" 2>/dev/null; c=$?
+  "$ROOT/tools/build_ref.sh" --check-not-compat "$REF" 2>/dev/null; p=$?
+  plant compat-ref "compat=1 pristine=0" "compat=$c pristine=$p"
+}
 dispatch() {
   local fn="do_${1//-/_}"
   if declare -F "$fn" >/dev/null; then "$fn"; else printf 'selftest: unknown plant %s\n' "$1" >&2; bad=1; fi
@@ -226,7 +243,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D ops-drop unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi
