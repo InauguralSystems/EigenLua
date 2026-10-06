@@ -47,6 +47,17 @@ A row passes when all of these hold:
 3. its **progress lines**, meaning the stdout lines that contain no digit, equal the reference's;
 4. its count equals the reference's.
 
+**The candidate's `assert` is checked before Tier S trusts it.** A Tier S pass means the file's assertions held only if
+the candidate's `assert` actually raises. A blind critic showed the gap: a candidate whose `assert` never raises, with
+`string.upper` broken as well, passed 18 of 23 rows. So before any S row, the grader runs `corpus/D/assert_semantics.lua`
+on the candidate and requires byte-identical output. The program checks that `assert`:
+- raises on `false` and `nil`;
+- does not raise on `0`, `""` or `{}`;
+- passes messages and non-string error values through;
+- returns all of its arguments.
+
+On a mismatch every S row is `FAIL assert-untrusted` (plant `toothless`).
+
 The candidate's count is self-reported, so it is never trusted alone:
 - a missing count fails (plant `no-count`);
 - a forged count with an early exit fails on the progress lines (plant `lying-count`);
@@ -59,8 +70,14 @@ The candidate's count is self-reported, so it is never trusted alone:
 - `nextvar.lua` asserts once per `_G` entry visited before `print`, and `next()` order follows the string hash seed.
   Over 40 runs it ranged from 9849 to 9934.
 
-For these rows, condition 4 is replaced by: count ≥ ⌊(minimum over 20 reference runs) / 2⌋. There is no upper bound.
-The progress lines still catch a late exit, and the floor catches an early one.
+For these rows, condition 4 is replaced by: count ≥ ⌊f × (minimum over 20 reference runs)⌋, where f is declared per
+row in `corpus/S.manifest`. A count-unspecified row with no declared f is a harness error. There is no upper bound:
+the progress lines catch a late exit, and the floor catches an early one.
+
+| row | f | measured over 1220 reference runs | what a candidate can skip |
+|---|---|---|---|
+| `math.lua` | 0.60 | counts come in steps of 10602 (one per repeat of a float-random loop), so the min-of-20 itself varies; a reference run fell below a 20-run floor about 2e-5 of the time at 0.60, and about 1.8e-3 at 0.77 | about 64% of a median run; about 22% of the smallest run |
+| `nextvar.lua` | 0.90 | the counts range from 9838 to 9942 (max/min = 0.9895), so a 0.90 floor never lands above a real run | about 10% |
 
 Randomness that IS specified is graded exactly. The 5.4 manual specifies xoshiro256**, its seeding, and its float
 and range mapping, so `rng_xoshiro.lua` in Tier D requires the candidate's `math.random` to be bit-exact.
@@ -78,7 +95,7 @@ and range mapping, so `rng_xoshiro.lua` in Tier D requires the candidate's `math
 
 These are small programs written for this repo. The candidate passes a row when its **stdout and exit status are
 byte-identical** to the reference's. Each program's header names the EigenScript surface it presses: integers vs
-floats, byte strings, scope and closures, errors, tables and metatables, coroutines, `goto`, varargs, multiple
+floats, byte strings, the string library (patterns, `gsub`, character classes, `%b`, frontier patterns, `utf8`, `format`), `assert` itself, scope and closures, errors, tables and metatables, coroutines, `goto`, varargs, multiple
 assignment and returns, and `math.random`.
 
 The corpus itself is checked on every run:
