@@ -1,10 +1,1722 @@
-# EigenLua runtime library (skeleton).
-lr_st is {"asserts": 0}
+# EigenLua runtime library, loaded by every compiled program.
+#
+# Value mapping (owner decision, 2026-10-06: direct mapping, no shims):
+#   nil -> null; true/false -> 1/0; number -> num (one IEEE double);
+#   string -> str; function -> fn; table -> dict
+#     {"id": n, "a": [...], "h": {...}, "o": {...}, "mt": table-or-null}
+#   a: the array part, keys 1..len(a); holes are null, the last element is
+#      never null, and key len(a)+1 is never in o, so len(a) is a border;
+#   h: string keys; o: every other key, encoded -> [key, value].
+# A Lua function takes one list of arguments and returns a list of results.
+# Errors are thrown as ["LUAERR", value]. The call-site stack lr_stk holds
+# the site id of every active call (0 = called from the runtime, "C"); the
+# site table maps an id to [line, desc_a, desc_b] for positions and messages.
+
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0}
+lr_stk is []
+lr_fnreg is []
+
+# ------------------------------------------------------------ process edges
+
 define lr_stderr(s) as:
     local b is []
     for i in range of (len of s):
         append of [b, ord of s[i]]
     write_bytes of ["/dev/stderr", b, 1]
+
 define lr_exit(code) as:
     lr_stderr of ("EIGENLUA-ASSERTS:" + (str of lr_st.asserts) + "\n")
     exit of code
+
+define lr_site_line(site) as:
+    return lr_st.sites[site][0]
+
+# The construct is not handled: say so and exit 3, never run on.
+define lr_unsup(what, site) as:
+    local line is lr_site_line of (site)
+    if line < 0:
+        line is lr_cur_line of (1)
+    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + what + " at " + lr_st.chunk + ":" + (str of line) + "\n")
+    lr_exit of 3
+
+# A value Lua would compute that one finite double cannot hold.
+define lr_nonfinite(site) as:
+    lr_unsup of ["non-finite number (inf/nan: EigenScript has none)", site]
+
+define lr_cur_line(level) as:
+    local i is len of lr_stk - level
+    if i < 0:
+        return -1
+    return lr_site_line of (lr_stk[i])
+
+# "chunk:line: " for the function `level` frames up (luaL_where).
+define lr_where(level) as:
+    local line is lr_cur_line of (level)
+    if line < 0:
+        return ""
+    return lr_st.chunk + ":" + (str of line) + ": "
+
+define lr_throw(v) as:
+    throw of ["LUAERR", v]
+
+define lr_rterr(site, msg) as:
+    local line is lr_site_line of (site)
+    if line < 0:
+        throw of ["LUAERR", (lr_where of (1)) + msg]
+    throw of ["LUAERR", lr_st.chunk + ":" + (str of line) + ": " + msg]
+
+define lr_argerr(n, fname, msg) as:
+    throw of ["LUAERR", (lr_where of (1)) + "bad argument #" + (str of n) + " to '" + fname + "' (" + msg + ")"]
+
+define lr_main(f, chunk, sites) as:
+    lr_st.chunk is chunk
+    lr_st.sites is sites
+    lr_init_lib of null
+    try:
+        lr_call of [f, [], 0]
+    catch e:
+        local v is lr_errobj of (e)
+        local msg is ""
+        if type of v == "str":
+            msg is v
+        elif type of v == "num":
+            msg is lr_tostr of (v)
+        else:
+            local h is lr_metafield of [v, "__tostring"]
+            if h != null and type of v == "dict":
+                msg is lr_tostr of (v)
+            else:
+                msg is "(error object is a " + (lr_type of (v)) + " value)"
+        lr_stderr of ("lua: " + msg + "\n")
+        lr_exit of 1
+    lr_exit of 0
+
+# The Lua value carried by a caught EigenScript error. Only a Lua error is a
+# Lua error: a call-depth overflow is unsupported (exit 3), and anything else
+# is a runtime defect that stops the program loudly (exit 4).
+define lr_errobj(e) as:
+    if type of e == "list" and len of e == 2 and e[0] == "LUAERR":
+        return e[1]
+    if type of e == "dict" and e.kind == "limit" and index_of of [e.message, "stack overflow"] >= 0:
+        # EigenScript's call depth (~5000 frames, ~2000 Lua calls) is far
+        # below Lua's; which program would overflow in Lua is unknowable here
+        lr_unsup of ["call depth beyond the EigenScript VM's limit (EigenScript gap)", 0]
+    lr_stderr of ("EIGENLUA-INTERNAL: runtime error: " + (str of e) + "\n")
+    lr_exit of 4
+
+# ------------------------------------------------------------ values
+
+define lr_type(v) as:
+    local t is type of v
+    if t == "num":
+        return "number"
+    if t == "str":
+        return "string"
+    if t == "dict":
+        return "table"
+    if t == "none":
+        return "nil"
+    if t == "fn" or t == "builtin":
+        return "function"
+    return "userdata"
+
+define lr_t(v) as:
+    if v == null:
+        return 0
+    if type of v == "num" and v == 0:
+        return 0
+    return 1
+
+define lr_not(v) as:
+    if v == null:
+        return 1
+    if type of v == "num" and v == 0:
+        return 1
+    return 0
+
+define lr_and(a, b) as:
+    if lr_t of (a):
+        return b
+    return a
+
+define lr_or(a, b) as:
+    if lr_t of (a):
+        return a
+    return b
+
+define lr_at(l, i) as:
+    if i < len of l:
+        return l[i]
+    return null
+
+define lr_isint(x) as:
+    return x == floor of x and x > -9223372036854775808.5 and x < 9223372036854775808
+
+# ------------------------------------------------------------ numbers <-> strings
+
+# Decimal digits of a non-negative integral double below 2^63, exactly.
+define lr_intdigits(x) as:
+    if x < 1e15:
+        return str of x
+    local b is f64_to_bytes of x
+    local e2 is (bit_and of [b[0], 127]) * 16 + (floor of (b[1] / 16)) - 1075
+    local m is (bit_and of [b[1], 15]) + 16
+    for k in range of 6:
+        m is m * 256 + b[k + 2]
+    if e2 < 0:
+        m is m / (pow of [2, 0 - e2])
+        e2 is 0
+    # m * 2^e2, e2 >= 0 here; base-1e7 limbs, least significant first
+    local limbs is []
+    loop while m > 0:
+        local q is floor of (m / 10000000)
+        local r is m - q * 10000000
+        if r < 0:
+            q is q - 1
+            r is r + 10000000
+        if r >= 10000000:
+            q is q + 1
+            r is r - 10000000
+        append of [limbs, r]
+        m is q
+    for k in range of e2:
+        local carry is 0
+        for j in range of (len of limbs):
+            local v is limbs[j] * 2 + carry
+            carry is 0
+            if v >= 10000000:
+                v is v - 10000000
+                carry is 1
+            limbs[j] is v
+        if carry:
+            append of [limbs, 1]
+    loop while len of limbs > 1 and limbs[len of limbs - 1] == 0:
+        list_truncate of [limbs, len of limbs - 1]
+    local s is str of limbs[len of limbs - 1]
+    local j is len of limbs - 2
+    loop while j >= 0:
+        local d is str of limbs[j]
+        loop while len of d < 7:
+            d is "0" + d
+        s is s + d
+        j is j - 1
+    return s
+
+define lr_pow10(p) as:
+    if p >= 0 and p <= 22:
+        return pow of [10, p]
+    if p < 0 and p >= -22:
+        return 1 / (pow of [10, 0 - p])
+    return pow of [10, p]
+
+# x * 10^p with as few roundings as the exponent allows.
+define lr_scale10(x, p) as:
+    if p >= 0:
+        if p <= 22:
+            return x * (pow of [10, p])
+        return x * (pow of [10, 22]) * (pow of [10, p - 22])
+    if p >= -22:
+        return x / (pow of [10, 0 - p])
+    return x / (pow of [10, 22]) / (pow of [10, (0 - p) - 22])
+
+# The P significant digits of ax > 0 and its decimal exponent: [digits, e].
+define lr_sigdigits(ax, P) as:
+    local e is floor of ((log of ax) / (log of 10))
+    if lr_scale10 of [1, e] > ax:
+        e is e - 1
+    if lr_scale10 of [1, e + 1] <= ax:
+        e is e + 1
+    local m is lr_round_even of (lr_scale10 of [ax, P - 1 - e])
+    if m >= lr_pow10 of (P):
+        e is e + 1
+        m is lr_round_even of (lr_scale10 of [ax, P - 1 - e])
+    local ds is str of m
+    loop while len of ds < P:
+        ds is "0" + ds
+    return [ds, e]
+
+define lr_round_even(v) as:
+    local f is floor of v
+    local d is v - f
+    if d > 0.5:
+        return f + 1
+    if d < 0.5:
+        return f
+    if f % 2 == 0:
+        return f
+    return f + 1
+
+define lr_strip0(s) as:
+    local n is len of s
+    loop while n > 0 and s[n - 1] == "0":
+        n is n - 1
+    return s[0:n]
+
+# C's %.<P>g for finite x.
+define lr_fmt_g(x, P) as:
+    if P == 0:
+        P is 1
+    if x == 0:
+        return "0"
+    local sg is ""
+    local ax is x
+    if x < 0:
+        sg is "-"
+        ax is 0 - x
+    local r is lr_sigdigits of [ax, P]
+    local ds is r[0]
+    local e is r[1]
+    if e < -4 or e >= P:
+        local frac is lr_strip0 of (ds[1:])
+        local mant is ds[0:1]
+        if len of frac > 0:
+            mant is mant + "." + frac
+        local es is str of (abs of e)
+        if len of es < 2:
+            es is "0" + es
+        if e < 0:
+            return sg + mant + "e-" + es
+        return sg + mant + "e+" + es
+    if e >= 0:
+        local ip is ds[0:e + 1]
+        local fp is lr_strip0 of (ds[e + 1:])
+        if len of fp > 0:
+            return sg + ip + "." + fp
+        return sg + ip
+    local z is ""
+    for k in range of ((0 - e) - 1):
+        z is z + "0"
+    return sg + "0." + z + (lr_strip0 of (ds))
+
+# Lua's number-to-string: integers (here: integral values below 2^63) in
+# full, everything else %.14g. One double cannot tell 1 from 1.0, so integral
+# floats print as integers: an EigenScript gap (gaps/no-float-subtype.eigs).
+define lr_numstr(x) as:
+    if lr_isint of (x):
+        if x < 0:
+            return "-" + (lr_intdigits of (0 - x))
+        return lr_intdigits of (x)
+    local g is lr_fmt_g of [x, 14]
+    if index_of of [g, "."] < 0 and index_of of [g, "e"] < 0:
+        return g + ".0"
+    return g
+
+define lr_isspace(c) as:
+    return c == " " or c == "\t" or c == "\n" or c == "\r" or (ord of c) == 11 or (ord of c) == 12
+
+define lr_hexval(c) as:
+    local o is ord of c
+    if o >= 48 and o <= 57:
+        return o - 48
+    if o >= 97 and o <= 102:
+        return o - 87
+    if o >= 65 and o <= 70:
+        return o - 55
+    return -1
+
+define lr_isdigit(c) as:
+    local o is ord of c
+    return o >= 48 and o <= 57
+
+# Lua's string->number conversion (lobject.c l_str2d / l_str2int), or null.
+define lr_str2num(s) as:
+    local n is len of s
+    local i is 0
+    loop while i < n and lr_isspace of (s[i]):
+        i is i + 1
+    loop while n > i and lr_isspace of (s[n - 1]):
+        n is n - 1
+    if i >= n:
+        return null
+    local neg is 0
+    if s[i] == "-":
+        neg is 1
+        i is i + 1
+    elif s[i] == "+":
+        i is i + 1
+    if i + 1 < n and s[i] == "0" and (s[i + 1] == "x" or s[i + 1] == "X"):
+        i is i + 2
+        local m is 0
+        local ex is 0
+        local any is 0
+        loop while i < n and lr_hexval of (s[i]) >= 0:
+            m is m * 16 + (lr_hexval of (s[i]))
+            any is 1
+            i is i + 1
+        if i < n and s[i] == ".":
+            i is i + 1
+            loop while i < n and lr_hexval of (s[i]) >= 0:
+                m is m * 16 + (lr_hexval of (s[i]))
+                ex is ex - 4
+                any is 1
+                i is i + 1
+        if any == 0:
+            return null
+        if i < n and (s[i] == "p" or s[i] == "P"):
+            i is i + 1
+            local es is 1
+            if i < n and (s[i] == "+" or s[i] == "-"):
+                if s[i] == "-":
+                    es is -1
+                i is i + 1
+            if i >= n or not (lr_isdigit of (s[i])):
+                return null
+            local ev is 0
+            loop while i < n and lr_isdigit of (s[i]):
+                ev is ev * 10 + (ord of s[i]) - 48
+                i is i + 1
+            ex is ex + es * ev
+        if i != n:
+            return null
+        local v is m
+        if ex != 0:
+            v is m * (pow of [2, ex])
+        if neg:
+            return 0 - v
+        return v
+    local st is i
+    local nd is 0
+    loop while i < n and lr_isdigit of (s[i]):
+        i is i + 1
+        nd is nd + 1
+    if i < n and s[i] == ".":
+        i is i + 1
+        loop while i < n and lr_isdigit of (s[i]):
+            i is i + 1
+            nd is nd + 1
+    if nd == 0:
+        return null
+    if i < n and (s[i] == "e" or s[i] == "E"):
+        i is i + 1
+        if i < n and (s[i] == "+" or s[i] == "-"):
+            i is i + 1
+        if i >= n or not (lr_isdigit of (s[i])):
+            return null
+        loop while i < n and lr_isdigit of (s[i]):
+            i is i + 1
+    if i != n:
+        return null
+    local text is s[st:n]
+    if text[0] == ".":
+        text is "0" + text
+    if text[len of text - 1] == ".":
+        text is text + "0"
+    local v is num of text
+    if v >= 1e308 or v <= -1e308:
+        lr_nonfinite of (0)
+    if neg:
+        return 0 - v
+    return v
+
+define lr_tostr(v) as:
+    local t is type of v
+    if t == "str":
+        return v
+    if t == "num":
+        return lr_numstr of (v)
+    if t == "none":
+        return "nil"
+    if t == "dict":
+        local h is lr_metafield of [v, "__tostring"]
+        if h != null:
+            local r is lr_call1 of [h, [v], 0]
+            if type of r != "str":
+                if type of r == "num":
+                    return lr_numstr of (r)
+                lr_throw of ((lr_where of (1)) + "'__tostring' must return a string")
+            return r
+        local nm is lr_metafield of [v, "__name"]
+        if type of nm == "str":
+            return nm + ": 0x" + (hex of [v.id, 8])
+        return "table: 0x" + (hex of [v.id, 8])
+    if t == "fn" or t == "builtin":
+        return "function: 0x" + (hex of [lr_fnid of (v), 8])
+    return "userdata"
+
+define lr_fnid(f) as:
+    local i is list_index_of of [lr_fnreg, f]
+    if i < 0:
+        append of [lr_fnreg, f]
+        i is len of lr_fnreg - 1
+    return i + 1
+
+# ------------------------------------------------------------ tables
+
+define lr_newtable as:
+    lr_st.nid is lr_st.nid + 1
+    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "mt": null}
+
+# Encoded key for the o part (numbers that are not array indices, tables,
+# functions).
+define lr_okey(k) as:
+    local t is type of k
+    if t == "num":
+        if k == 0:
+            return "n0"
+        return "n" + (str of k)
+    if t == "dict":
+        return "t" + (str of k.id)
+    return "f" + (str of (lr_fnid of (k)))
+
+define lr_rawget(t, k) as:
+    local tk is type of k
+    if tk == "str":
+        return t.h[k]
+    if tk == "none":
+        return null
+    if tk == "num":
+        local a is t.a
+        if k >= 1 and k <= len of a and k == floor of k:
+            return a[k - 1]
+    local p is t.o[lr_okey of (k)]
+    if p == null:
+        return null
+    return p[1]
+
+define lr_rawset(t, k, v, site) as:
+    local tk is type of k
+    if tk == "str":
+        if v == null:
+            if has_key of [t.h, k]:
+                dict_remove of [t.h, k]
+        else:
+            t.h[k] is v
+        return null
+    if tk == "none":
+        lr_rterr of [site, "table index is nil"]
+    if tk == "num":
+        local a is t.a
+        local n is len of a
+        if k == floor of k and k >= 1 and k <= n + 1:
+            if k <= n:
+                a[k - 1] is v
+                if v == null and k == n:
+                    local m is n - 1
+                    loop while m > 0 and a[m - 1] == null:
+                        m is m - 1
+                    list_truncate of [a, m]
+                return null
+            if v == null:
+                return null
+            append of [a, v]
+            # migrate the keys that now continue the sequence
+            local nk is lr_okey of (n + 2)
+            loop while has_key of [t.o, nk]:
+                append of [a, t.o[nk][1]]
+                dict_remove of [t.o, nk]
+                nk is lr_okey of (len of a + 1)
+            return null
+    local ek is lr_okey of (k)
+    if v == null:
+        if has_key of [t.o, ek]:
+            dict_remove of [t.o, ek]
+    else:
+        t.o[ek] is [k, v]
+    return null
+
+define lr_tnew(pos, kv, site) as:
+    local t is lr_newtable of null
+    local i is 0
+    loop while i < len of kv:
+        if kv[i] == null:
+            lr_rterr of [site, "table index is nil"]
+        lr_rawset of [t, kv[i], kv[i + 1], site]
+        i is i + 2
+    local j is 0
+    for v in pos:
+        lr_rawset of [t, j + 1, v, site]
+        j is j + 1
+    return t
+
+define lr_rawlen(t) as:
+    return len of t.a
+
+define lr_metatable(v) as:
+    local t is type of v
+    if t == "dict":
+        return v.mt
+    if t == "str":
+        return lr_strmt
+    return null
+
+define lr_metafield(v, name) as:
+    local mt is lr_metatable of (v)
+    if mt == null:
+        return null
+    return mt.h[name]
+
+# next(t, k) -> [key, value] or [null].
+define lr_next(t, k) as:
+    local a is t.a
+    local na is len of a
+    local i is 0
+    local phase is 0
+    if k == null:
+        i is 0
+    elif type of k == "num" and k >= 1 and k <= na and k == floor of k:
+        i is k
+    elif type of k == "str":
+        phase is 1
+    else:
+        phase is 2
+    if phase == 0:
+        loop while i < na:
+            if a[i] != null:
+                return [i + 1, a[i]]
+            i is i + 1
+        phase is 1
+        k is null
+    if phase == 1:
+        local hk is keys of t.h
+        local j is 0
+        if k != null:
+            j is (list_index_of of [hk, k]) + 1
+            if j == 0:
+                lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+        if j < len of hk:
+            return [hk[j], t.h[hk[j]]]
+        k is null
+    local ok is keys of t.o
+    local j2 is 0
+    if k != null:
+        j2 is (list_index_of of [ok, lr_okey of (k)]) + 1
+        if j2 == 0:
+            lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+    if j2 < len of ok:
+        local p is t.o[ok[j2]]
+        return [p[0], p[1]]
+    return [null]
+
+# ------------------------------------------------------------ index / call
+
+define lr_index(o, k, site) as:
+    local d is 0
+    loop while d < 2000:
+        local t is type of o
+        if t == "dict":
+            local v is lr_rawget of [o, k]
+            if v != null or o.mt == null:
+                if v == null and has_key of [o, "trap"] and type of k == "str" and has_key of [o.trap, k]:
+                    lr_unsup of [o.trap[k], site]
+                return v
+            local h is o.mt.h["__index"]
+            if h == null:
+                if has_key of [o, "trap"] and type of k == "str" and has_key of [o.trap, k]:
+                    lr_unsup of [o.trap[k], site]
+                return null
+            if type of h == "fn" or type of h == "builtin":
+                return lr_call1 of [h, [o, k], site]
+            o is h
+        elif t == "str":
+            o is lr_strlib
+        else:
+            local h2 is lr_metafield of [o, "__index"]
+            if h2 == null:
+                lr_idxerr of [o, k, site, d]
+            if type of h2 == "fn":
+                return lr_call1 of [h2, [o, k], site]
+            o is h2
+        d is d + 1
+    lr_rterr of [site, "'__index' chain too long; possible loop"]
+
+define lr_idxerr(o, k, site, depth) as:
+    local sd is lr_st.sites[site]
+    local desc is ""
+    if depth == 0 and sd[1] != "":
+        desc is " (" + sd[1] + ")"
+    elif depth == 0 and type of k == "str":
+        desc is " (field '" + k + "')"
+    lr_rterr of [site, "attempt to index a " + (lr_type of (o)) + " value" + desc]
+
+define lr_setindex(o, k, v, site) as:
+    local d is 0
+    loop while d < 2000:
+        if type of o == "dict":
+            if o.mt == null:
+                lr_rawset of [o, k, v, site]
+                return null
+            local h is o.mt.h["__newindex"]
+            if h == null or lr_rawget of [o, k] != null:
+                lr_rawset of [o, k, v, site]
+                return null
+            if type of h == "fn" or type of h == "builtin":
+                lr_call of [h, [o, k, v], site]
+                return null
+            o is h
+        else:
+            local h2 is lr_metafield of [o, "__newindex"]
+            if h2 == null:
+                lr_idxerr of [o, k, site, d]
+            if type of h2 == "fn":
+                lr_call of [h2, [o, k, v], site]
+                return null
+            o is h2
+        d is d + 1
+    lr_rterr of [site, "'__newindex' chain too long; possible loop"]
+
+define lr_gget(name, site) as:
+    return lr_index of [lr_G, name, site]
+
+define lr_gset(name, v, site) as:
+    lr_setindex of [lr_G, name, v, site]
+
+define lr_call(f, args, site) as:
+    local tf is type of f
+    if tf == "fn":
+        append of [lr_stk, site]
+        local r is f of (args)
+        list_truncate of [lr_stk, len of lr_stk - 1]
+        return r
+    local h is lr_metafield of [f, "__call"]
+    if h != null:
+        return lr_call of [h, concat of [[f], args], site]
+    local sd is lr_st.sites[site]
+    local desc is ""
+    if sd[1] != "":
+        desc is " (" + sd[1] + ")"
+    lr_rterr of [site, "attempt to call a " + (lr_type of (f)) + " value" + desc]
+
+define lr_call1(f, args, site) as:
+    local r is lr_call of [f, args, site]
+    if len of r > 0:
+        return r[0]
+    return null
+
+define lr_mcall(o, name, args, site) as:
+    local f is lr_index of [o, name, site]
+    return lr_call of [f, concat of [[o], args], site]
+
+define lr_mcall1(o, name, args, site) as:
+    local r is lr_mcall of [o, name, args, site]
+    if len of r > 0:
+        return r[0]
+    return null
+
+# ------------------------------------------------------------ arithmetic
+
+define lr_fin(r, site) as:
+    if r >= 1e308 or r <= -1e308:
+        lr_nonfinite of (site)
+    return r
+
+# Operand as a number for arithmetic (strings convert), else null.
+define lr_arnum(v) as:
+    local t is type of v
+    if t == "num":
+        return v
+    if t == "str":
+        return lr_str2num of (v)
+    return null
+
+define lr_arith_ev(name) as:
+    local m is {"+": "__add", "-": "__sub", "*": "__mul", "/": "__div", "%": "__mod", "//": "__idiv", "^": "__pow", "u-": "__unm", "&": "__band", "|": "__bor", "~": "__bxor", "<<": "__shl", ">>": "__shr", "u~": "__bnot"}
+    return m[name]
+
+# Slow path: metamethods, then the error naming the bad operand.
+define lr_arith_meta(op, a, b, site) as:
+    local ev is lr_arith_ev of (op)
+    local h is lr_metafield of [a, ev]
+    if h == null:
+        h is lr_metafield of [b, ev]
+    if h != null:
+        return lr_call1 of [h, [a, b], site]
+    local sd is lr_st.sites[site]
+    local bad is b
+    local desc is sd[2]
+    local isbit is op == "&" or op == "|" or op == "~" or op == "<<" or op == ">>" or op == "u~"
+    if isbit:
+        if type of a != "num" and (type of a != "str" or lr_str2num of (a) == null):
+            bad is a
+            desc is sd[1]
+        elif type of b == "num" or (type of b == "str" and lr_str2num of (b) != null):
+            lr_rterr of [site, "number has no integer representation"]
+    elif lr_arnum of (a) == null:
+        bad is a
+        desc is sd[1]
+    if desc != "":
+        desc is " (" + desc + ")"
+    if isbit:
+        lr_rterr of [site, "attempt to perform bitwise operation on a " + (lr_type of (bad)) + " value" + desc]
+    if type of a == "str" or type of b == "str":
+        # the string library's arithmetic metamethods (lstrlib.c trymt)
+        local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
+        lr_rterr of [site, "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'"]
+    lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_type of (bad)) + " value" + desc]
+
+define lr_arith(op, a, b, site) as:
+    local x is lr_arnum of (a)
+    local y is lr_arnum of (b)
+    if x == null or y == null or (type of a == "str" and lr_metafield of [b, lr_arith_ev of (op)] != null and type of b == "dict") or (type of b == "str" and type of a == "dict"):
+        return lr_arith_meta of [op, a, b, site]
+    return lr_arith_num of [op, x, y, site]
+
+define lr_arith_num(op, x, y, site) as:
+    if op == "+":
+        return lr_fin of [x + y, site]
+    if op == "-":
+        return lr_fin of [x - y, site]
+    if op == "*":
+        return lr_fin of [x * y, site]
+    if op == "/":
+        if y == 0:
+            lr_nonfinite of (site)
+        return lr_fin of [x / y, site]
+    if op == "%":
+        return lr_modnum of [x, y, site]
+    if op == "//":
+        return lr_idivnum of [x, y, site]
+    if op == "^":
+        return lr_pownum of [x, y, site]
+    throw of ["INTERNAL", "arith op " + op]
+
+define lr_add(a, b, site) as:
+    if type of a == "num" and type of b == "num":
+        local r is a + b
+        if r >= 1e308 or r <= -1e308:
+            lr_nonfinite of (site)
+        return r
+    return lr_arith of ["+", a, b, site]
+
+define lr_sub(a, b, site) as:
+    if type of a == "num" and type of b == "num":
+        local r is a - b
+        if r >= 1e308 or r <= -1e308:
+            lr_nonfinite of (site)
+        return r
+    return lr_arith of ["-", a, b, site]
+
+define lr_mul(a, b, site) as:
+    if type of a == "num" and type of b == "num":
+        local r is a * b
+        if r >= 1e308 or r <= -1e308:
+            lr_nonfinite of (site)
+        return r
+    return lr_arith of ["*", a, b, site]
+
+define lr_div(a, b, site) as:
+    return lr_arith of ["/", a, b, site]
+
+define lr_mod(a, b, site) as:
+    return lr_arith of ["%", a, b, site]
+
+define lr_idiv(a, b, site) as:
+    return lr_arith of ["//", a, b, site]
+
+define lr_pow(a, b, site) as:
+    return lr_arith of ["^", a, b, site]
+
+# Integral operands follow Lua's integer rules (one double cannot tell an
+# integer from an integral float; see lr_numstr), the rest float rules.
+define lr_modnum(x, y, site) as:
+    if y == 0:
+        if lr_isint of (x) and lr_isint of (y):
+            lr_rterr of [site, "attempt to perform 'n%0'"]
+        lr_nonfinite of (site)
+    local m is x % y
+    if m != 0 and (m < 0) != (y < 0):
+        m is m + y
+    return m
+
+define lr_idivnum(x, y, site) as:
+    if y == 0:
+        if lr_isint of (x) and lr_isint of (y):
+            lr_rterr of [site, "attempt to perform 'n//0'"]
+        lr_nonfinite of (site)
+    return lr_fin of [floor of (x / y), site]
+
+define lr_pownum(x, y, site) as:
+    if x == 0 and y < 0:
+        lr_nonfinite of (site)
+    if x < 0 and y != floor of y:
+        lr_nonfinite of (site)
+    return lr_fin of [pow of [x, y], site]
+
+define lr_unm(a, site) as:
+    if type of a == "num":
+        return 0 - a
+    local x is lr_arnum of (a)
+    if x != null and type of a == "str":
+        return 0 - x
+    local h is lr_metafield of [a, "__unm"]
+    if h != null:
+        return lr_call1 of [h, [a, a], site]
+    local sd is lr_st.sites[site]
+    local desc is ""
+    if sd[1] != "":
+        desc is " (" + sd[1] + ")"
+    lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_type of (a)) + " value" + desc]
+
+# ------------------------------------------------------------ bitwise
+
+define lr_toint(v) as:
+    local x is lr_arnum of (v)
+    if x == null:
+        return null
+    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+        return null
+    return x
+
+define lr_bitop(op, a, b, site) as:
+    local x is lr_toint of (a)
+    local y is lr_toint of (b)
+    if x == null or y == null:
+        return lr_arith_meta of [op, a, b, site]
+    if op == "&":
+        return x & y
+    if op == "|":
+        return x | y
+    if op == "~":
+        return x ^ y
+    if op == "<<":
+        return lr_shiftl of [x, y]
+    return lr_shiftl of [x, 0 - y]
+
+define lr_shiftl(x, n) as:
+    if n <= -64 or n >= 64:
+        return 0
+    if n >= 0:
+        return x << n
+    if x >= 0:
+        return x >> (0 - n)
+    # logical shift of a negative int64
+    local s is 0 - n
+    return (x >> s) & ((1 << (64 - s)) - 1)
+
+define lr_band(a, b, site) as:
+    return lr_bitop of ["&", a, b, site]
+
+define lr_bor(a, b, site) as:
+    return lr_bitop of ["|", a, b, site]
+
+define lr_bxor(a, b, site) as:
+    return lr_bitop of ["~", a, b, site]
+
+define lr_shl(a, b, site) as:
+    return lr_bitop of ["<<", a, b, site]
+
+define lr_shr(a, b, site) as:
+    return lr_bitop of [">>", a, b, site]
+
+define lr_bnot(a, site) as:
+    local x is lr_toint of (a)
+    if x == null:
+        return lr_arith_meta of ["u~", a, a, site]
+    return ~x
+
+# ------------------------------------------------------------ comparison
+
+define lr_eq(a, b, site) as:
+    local ta is type of a
+    if ta != type of b:
+        return 0
+    if ta == "dict":
+        if a.id == b.id:
+            return 1
+        local h is lr_metafield of [a, "__eq"]
+        if h == null:
+            h is lr_metafield of [b, "__eq"]
+        if h == null:
+            return 0
+        return lr_t of (lr_call1 of [h, [a, b], site])
+    if a == b:
+        return 1
+    return 0
+
+define lr_ne(a, b, site) as:
+    return 1 - (lr_eq of [a, b, site])
+
+define lr_cmperr(a, b, site) as:
+    local t1 is lr_type of (a)
+    local t2 is lr_type of (b)
+    if t1 == t2:
+        lr_rterr of [site, "attempt to compare two " + t1 + " values"]
+    lr_rterr of [site, "attempt to compare " + t1 + " with " + t2]
+
+define lr_lt(a, b, site) as:
+    local ta is type of a
+    local tb is type of b
+    if (ta == "num" and tb == "num") or (ta == "str" and tb == "str"):
+        if a < b:
+            return 1
+        return 0
+    local h is lr_metafield of [a, "__lt"]
+    if h == null:
+        h is lr_metafield of [b, "__lt"]
+    if h == null:
+        lr_cmperr of [a, b, site]
+    return lr_t of (lr_call1 of [h, [a, b], site])
+
+define lr_le(a, b, site) as:
+    local ta is type of a
+    local tb is type of b
+    if (ta == "num" and tb == "num") or (ta == "str" and tb == "str"):
+        if a <= b:
+            return 1
+        return 0
+    local h is lr_metafield of [a, "__le"]
+    if h == null:
+        h is lr_metafield of [b, "__le"]
+    if h == null:
+        lr_cmperr of [a, b, site]
+    return lr_t of (lr_call1 of [h, [a, b], site])
+
+define lr_gt(a, b, site) as:
+    return lr_lt of [b, a, site]
+
+define lr_ge(a, b, site) as:
+    return lr_le of [b, a, site]
+
+# ------------------------------------------------------------ concat / len
+
+define lr_concat(a, b, site) as:
+    local ta is type of a
+    local tb is type of b
+    if (ta == "str" or ta == "num") and (tb == "str" or tb == "num"):
+        local sa is a
+        local sb is b
+        if ta == "num":
+            sa is lr_numstr of (a)
+        if tb == "num":
+            sb is lr_numstr of (b)
+        return sa + sb
+    local h is lr_metafield of [a, "__concat"]
+    if h == null:
+        h is lr_metafield of [b, "__concat"]
+    if h != null:
+        return lr_call1 of [h, [a, b], site]
+    local sd is lr_st.sites[site]
+    local bad is a
+    local desc is sd[1]
+    if ta == "str" or ta == "num":
+        bad is b
+        desc is sd[2]
+    if desc != "":
+        desc is " (" + desc + ")"
+    lr_rterr of [site, "attempt to concatenate a " + (lr_type of (bad)) + " value" + desc]
+
+define lr_len(a, site) as:
+    local ta is type of a
+    if ta == "str":
+        return len of a
+    local h is lr_metafield of [a, "__len"]
+    if h != null:
+        return lr_call1 of [h, [a], site]
+    if ta == "dict":
+        return len of a.a
+    local sd is lr_st.sites[site]
+    local desc is ""
+    if sd[1] != "":
+        desc is " (" + sd[1] + ")"
+    lr_rterr of [site, "attempt to get length of a " + (lr_type of (a)) + " value" + desc]
+
+# ------------------------------------------------------------ numeric for
+
+# [initial, limit*sign, step, sign]; Lua 5.4's 'for' checks.
+define lr_forprep(a, b, c, site) as:
+    if type of a != "num":
+        lr_rterr of [site, "'for' initial value must be a number"]
+    if type of b != "num":
+        lr_rterr of [site, "'for' limit must be a number"]
+    if type of c != "num":
+        lr_rterr of [site, "'for' step must be a number"]
+    if c == 0:
+        lr_rterr of [site, "'for' step is zero"]
+    local lim is b
+    if lr_isint of (a) and lr_isint of (c):
+        if c > 0:
+            lim is floor of b
+        else:
+            lim is ceil of b
+    if c > 0:
+        return [a, lim, c, 1]
+    return [a, 0 - lim, c, -1]
+
+# ------------------------------------------------------------ library helpers
+
+define lr_arg(A, i) as:
+    if i < len of A:
+        return A[i]
+    return null
+
+define lr_checktable(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    if type of v != "dict":
+        lr_argerr of [i + 1, fname, "table expected, got " + (lr_typearg of [A, i])]
+    return v
+
+define lr_typearg(A, i) as:
+    if i >= len of A:
+        return "no value"
+    return lr_type of (A[i])
+
+define lr_checknum(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    local x is lr_arnum of (v)
+    if x == null:
+        lr_argerr of [i + 1, fname, "number expected, got " + (lr_typearg of [A, i])]
+    return x
+
+define lr_checkint(A, i, fname) as:
+    local x is lr_checknum of [A, i, fname]
+    if x != floor of x:
+        lr_argerr of [i + 1, fname, "number has no integer representation"]
+    return x
+
+define lr_optint(A, i, fname, d) as:
+    if lr_arg of [A, i] == null:
+        return d
+    return lr_checkint of [A, i, fname]
+
+define lr_checkstr(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    if type of v == "str":
+        return v
+    if type of v == "num":
+        return lr_numstr of (v)
+    lr_argerr of [i + 1, fname, "string expected, got " + (lr_typearg of [A, i])]
+
+# A library function that is not implemented: calling it exits 3.
+define lr_stub(name) as:
+    define stub(A) as:
+        lr_unsup of [name, 0]
+    return stub
+
+# ------------------------------------------------------------ base library
+
+define lr_b_print(A) as:
+    local parts is []
+    for v in A:
+        append of [parts, lr_tostr of (v)]
+    print of (join of [parts, "\t"])
+    return []
+
+define lr_b_type(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "type", "value expected"]
+    return [lr_type of (A[0])]
+
+define lr_b_tostring(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "tostring", "value expected"]
+    return [lr_tostr of (A[0])]
+
+define lr_b_tonumber(A) as:
+    local v is lr_arg of [A, 0]
+    local base is lr_arg of [A, 1]
+    if base == null:
+        if type of v == "num":
+            return [v]
+        if type of v == "str":
+            return [lr_str2num of (v)]
+        if len of A == 0:
+            lr_argerr of [1, "tonumber", "value expected"]
+        return [null]
+    local bs is lr_checkint of [A, 1, "tonumber"]
+    if type of v != "str":
+        lr_argerr of [1, "tonumber", "string expected, got " + (lr_typearg of [A, 0])]
+    if bs < 2 or bs > 36:
+        lr_argerr of [2, "tonumber", "base out of range"]
+    local s is str_lower of (trim of v)
+    local neg is 0
+    if len of s > 0 and s[0] == "-":
+        neg is 1
+        s is s[1:]
+    if len of s == 0:
+        return [null]
+    local acc is 0
+    for i in range of (len of s):
+        local d is lr_hexval of (s[i])
+        local o is ord of s[i]
+        if o >= 97 and o <= 122:
+            d is o - 87
+        if d < 0 or d >= bs:
+            return [null]
+        acc is acc * bs + d
+    if neg:
+        return [0 - acc]
+    return [acc]
+
+define lr_b_error(A) as:
+    local msg is lr_arg of [A, 0]
+    local level is lr_arg of [A, 1]
+    if level == null:
+        level is 1
+    if type of msg == "str" and level > 0:
+        msg is (lr_where of (level)) + msg
+    throw of ["LUAERR", msg]
+
+define lr_b_assert(A) as:
+    lr_st.asserts is lr_st.asserts + 1
+    if len of A == 0:
+        lr_argerr of [1, "assert", "value expected"]
+    if lr_t of (A[0]):
+        return A
+    local msg is "assertion failed!"
+    if len of A >= 2:
+        msg is A[1]
+    if type of msg == "str":
+        msg is (lr_where of (1)) + msg
+    throw of ["LUAERR", msg]
+
+define lr_b_pcall(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "pcall", "value expected"]
+    local depth is len of lr_stk
+    local r is null
+    try:
+        r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
+    catch e:
+        list_truncate of [lr_stk, depth]
+        return [0, lr_errobj of (e)]
+    return concat of [[1], r]
+
+define lr_b_xpcall(A) as:
+    local h is lr_arg of [A, 1]
+    local depth is len of lr_stk
+    local r is null
+    try:
+        r is lr_call of [lr_arg of [A, 0], list_slice of [A, 2, len of A], 0]
+    catch e:
+        local v is lr_errobj of (e)
+        list_truncate of [lr_stk, depth]
+        return [0, lr_call1 of [h, [v], 0]]
+    return concat of [[1], r]
+
+define lr_b_select(A) as:
+    local n is lr_arg of [A, 0]
+    if n == "#":
+        return [len of A - 1]
+    local i is lr_checkint of [A, 0, "select"]
+    if i < 0:
+        i is len of A + i
+        if i < 1:
+            lr_argerr of [1, "select", "index out of range"]
+        return list_slice of [A, i, len of A]
+    if i == 0:
+        lr_argerr of [1, "select", "index out of range"]
+    if i >= len of A:
+        return []
+    return list_slice of [A, i, len of A]
+
+define lr_b_rawget(A) as:
+    local t is lr_checktable of [A, 0, "rawget"]
+    return [lr_rawget of [t, lr_arg of [A, 1]]]
+
+define lr_b_rawset(A) as:
+    local t is lr_checktable of [A, 0, "rawset"]
+    lr_rawset of [t, lr_arg of [A, 1], lr_arg of [A, 2], 0]
+    return [t]
+
+define lr_b_rawequal(A) as:
+    local a is lr_arg of [A, 0]
+    local b is lr_arg of [A, 1]
+    if type of a != type of b:
+        return [0]
+    if type of a == "dict":
+        return [a.id == b.id]
+    return [a == b]
+
+define lr_b_rawlen(A) as:
+    local v is lr_arg of [A, 0]
+    if type of v == "dict":
+        return [len of v.a]
+    if type of v == "str":
+        return [len of v]
+    lr_argerr of [1, "rawlen", "table or string expected"]
+
+define lr_b_setmetatable(A) as:
+    local t is lr_checktable of [A, 0, "setmetatable"]
+    local mt is lr_arg of [A, 1]
+    if mt != null and type of mt != "dict":
+        lr_argerr of [2, "setmetatable", "nil or table expected"]
+    if t.mt != null and lr_rawget of [t.mt, "__metatable"] != null:
+        lr_throw of ((lr_where of (1)) + "cannot change a protected metatable")
+    for ev in ["__gc", "__mode", "__close"]:
+        if mt != null and lr_rawget of [mt, ev] != null:
+            lr_unsup of ["metatable field " + ev, 0]
+    t.mt is mt
+    return [t]
+
+define lr_b_getmetatable(A) as:
+    local mt is lr_metatable of (lr_arg of [A, 0])
+    if mt == null:
+        return [null]
+    local p is lr_rawget of [mt, "__metatable"]
+    if p != null:
+        return [p]
+    return [mt]
+
+define lr_b_next(A) as:
+    local t is lr_checktable of [A, 0, "next"]
+    return lr_next of [t, lr_arg of [A, 1]]
+
+# pairs: a snapshot iterator over the keys present at the start; a key whose
+# value became nil during the traversal is skipped (manual: assigning nil to
+# existing fields during traversal is allowed).
+define lr_b_pairs(A) as:
+    local t is lr_arg of [A, 0]
+    local h is lr_metafield of [t, "__pairs"]
+    if h != null:
+        local r is lr_call of [h, [t], 0]
+        return [lr_at of [r, 0], lr_at of [r, 1], lr_at of [r, 2]]
+    if type of t != "dict":
+        lr_argerr of [1, "pairs", "table expected, got " + (lr_typearg of [A, 0])]
+    local ks is []
+    for i in range of (len of t.a):
+        if t.a[i] != null:
+            append of [ks, i + 1]
+    for k in keys of t.h:
+        append of [ks, k]
+    for k in keys of t.o:
+        append of [ks, t.o[k][0]]
+    local st is {"i": 0}
+    define pairs_iter(B) as:
+        loop while st.i < len of ks:
+            local k is ks[st.i]
+            st.i is st.i + 1
+            local v is lr_rawget of [t, k]
+            if v != null:
+                return [k, v]
+        return [null]
+    return [pairs_iter, t, null]
+
+define lr_ipairs_iter(A) as:
+    local i is A[1] + 1
+    local v is lr_index of [A[0], i, 0]
+    if v == null:
+        return [null]
+    return [i, v]
+
+define lr_b_ipairs(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "ipairs", "table expected, got no value"]
+    return [lr_ipairs_iter, A[0], 0]
+
+define lr_b_collectgarbage(A) as:
+    local opt is lr_arg of [A, 0]
+    if opt == null or opt == "collect" or opt == "step" or opt == "incremental" or opt == "generational":
+        return [0]
+    if opt == "count":
+        return [0, 0]
+    if opt == "isrunning":
+        return [1]
+    lr_unsup of ["collectgarbage(\"" + (lr_tostr of (opt)) + "\")", 0]
+
+# ------------------------------------------------------------ string library
+
+define lr_strindex(i, n) as:
+    if i > 0:
+        return i
+    if i == 0:
+        return 1
+    if i < 0 - n:
+        return 1
+    return n + i + 1
+
+define lr_s_sub(A) as:
+    local s is lr_checkstr of [A, 0, "sub"]
+    local n is len of s
+    local i is lr_optint of [A, 1, "sub", 1]
+    local j is lr_optint of [A, 2, "sub", -1]
+    if i < 0:
+        i is n + i + 1
+        if i < 1:
+            i is 1
+    elif i == 0:
+        i is 1
+    if j < 0:
+        j is n + j + 1
+    elif j > n:
+        j is n
+    if i > j:
+        return [""]
+    return [s[i - 1:j]]
+
+define lr_s_len(A) as:
+    return [len of (lr_checkstr of [A, 0, "len"])]
+
+define lr_s_upper(A) as:
+    return [str_upper of (lr_checkstr of [A, 0, "upper"])]
+
+define lr_s_lower(A) as:
+    return [str_lower of (lr_checkstr of [A, 0, "lower"])]
+
+define lr_s_rep(A) as:
+    local s is lr_checkstr of [A, 0, "rep"]
+    local n is lr_checkint of [A, 1, "rep"]
+    local sep is lr_arg of [A, 2]
+    if n <= 0:
+        return [""]
+    local parts is []
+    for i in range of n:
+        append of [parts, s]
+    if sep == null:
+        return [join of [parts, ""]]
+    return [join of [parts, lr_checkstr of [A, 2, "rep"]]]
+
+define lr_s_reverse(A) as:
+    local s is lr_checkstr of [A, 0, "reverse"]
+    local parts is []
+    local i is len of s - 1
+    loop while i >= 0:
+        append of [parts, s[i]]
+        i is i - 1
+    return [join of [parts, ""]]
+
+define lr_s_byte(A) as:
+    local s is lr_checkstr of [A, 0, "byte"]
+    local n is len of s
+    local i is lr_optint of [A, 1, "byte", 1]
+    local j is lr_optint of [A, 2, "byte", i]
+    if i < 0:
+        i is n + i + 1
+        if i < 1:
+            i is 1
+    elif i == 0:
+        i is 1
+    if j < 0:
+        j is n + j + 1
+    elif j > n:
+        j is n
+    local out is []
+    local k is i
+    loop while k <= j:
+        append of [out, ord of s[k - 1]]
+        k is k + 1
+    return out
+
+define lr_s_char(A) as:
+    local parts is []
+    local i is 0
+    for v in A:
+        local c is lr_checkint of [A, i, "char"]
+        if c < 0 or c > 255:
+            lr_argerr of [i + 1, "char", "value out of range"]
+        if c == 0:
+            lr_unsup of ["string.char(0): a NUL byte (EigenScript strings are NUL-terminated)", 0]
+        append of [parts, chr of c]
+        i is i + 1
+    return [join of [parts, ""]]
+
+# string.format: %d %i %s %% and %c, with no flags, width or precision.
+# Any other conversion is unsupported (exit 3), never approximated.
+define lr_s_format(A) as:
+    local fmt is lr_checkstr of [A, 0, "format"]
+    local parts is []
+    local n is len of fmt
+    local i is 0
+    local seg is 0
+    local arg is 1
+    loop while i < n:
+        if fmt[i] == "%":
+            append of [parts, fmt[seg:i]]
+            if i + 1 >= n:
+                lr_throw of ((lr_where of (1)) + "invalid conversion '%' to 'format'")
+            local c is fmt[i + 1]
+            if c == "%":
+                append of [parts, "%"]
+            elif c == "d" or c == "i":
+                if arg >= len of A:
+                    lr_argerr of [arg + 1, "format", "number expected, got no value"]
+                local x is lr_arnum of (A[arg])
+                if x == null:
+                    lr_argerr of [arg + 1, "format", "number expected, got " + (lr_type of (A[arg]))]
+                if x != floor of x:
+                    lr_argerr of [arg + 1, "format", "number has no integer representation"]
+                append of [parts, lr_numstr of (x)]
+                arg is arg + 1
+            elif c == "s":
+                if arg >= len of A:
+                    lr_argerr of [arg + 1, "format", "no value"]
+                append of [parts, lr_tostr of (A[arg])]
+                arg is arg + 1
+            elif c == "c":
+                local cc is lr_checkint of [A, arg, "format"]
+                if cc == 0:
+                    lr_unsup of ["string.format('%c', 0): a NUL byte", 0]
+                append of [parts, chr of cc]
+                arg is arg + 1
+            else:
+                lr_unsup of ["string.format conversion '%" + c + "'", 0]
+            i is i + 2
+            seg is i
+        else:
+            i is i + 1
+    append of [parts, fmt[seg:n]]
+    return [join of [parts, ""]]
+
+# ------------------------------------------------------------ table library
+
+define lr_t_insert(A) as:
+    local t is lr_checktable of [A, 0, "insert"]
+    local n is (lr_len of [t, 0])
+    if len of A == 2:
+        lr_setindex of [t, n + 1, A[1], 0]
+        return []
+    if len of A != 3:
+        lr_throw of ((lr_where of (1)) + "wrong number of arguments to 'insert'")
+    local pos is lr_checkint of [A, 1, "insert"]
+    if pos < 1 or pos > n + 1:
+        lr_argerr of [2, "insert", "position out of bounds"]
+    local i is n
+    loop while i >= pos:
+        lr_setindex of [t, i + 1, lr_index of [t, i, 0], 0]
+        i is i - 1
+    lr_setindex of [t, pos, A[2], 0]
+    return []
+
+define lr_t_remove(A) as:
+    local t is lr_checktable of [A, 0, "remove"]
+    local n is (lr_len of [t, 0])
+    if len of A < 2:
+        if n == 0:
+            return [null]
+        local v is lr_index of [t, n, 0]
+        lr_setindex of [t, n, null, 0]
+        return [v]
+    local pos is lr_checkint of [A, 1, "remove"]
+    if n + 1 == pos:
+        local v2 is lr_index of [t, pos, 0]
+        lr_setindex of [t, pos, null, 0]
+        return [v2]
+    if n == 0 and pos == 0:
+        return [lr_index of [t, pos, 0]]
+    if pos < 1 or pos > n + 1:
+        lr_argerr of [2, "remove", "position out of bounds"]
+    local v3 is lr_index of [t, pos, 0]
+    local i is pos
+    loop while i < n:
+        lr_setindex of [t, i, lr_index of [t, i + 1, 0], 0]
+        i is i + 1
+    lr_setindex of [t, n, null, 0]
+    return [v3]
+
+define lr_t_concat(A) as:
+    local t is lr_checktable of [A, 0, "concat"]
+    local sep is ""
+    if lr_arg of [A, 1] != null:
+        sep is lr_checkstr of [A, 1, "concat"]
+    local i is lr_optint of [A, 2, "concat", 1]
+    local j is 0
+    if lr_arg of [A, 3] == null:
+        j is lr_len of [t, 0]
+    else:
+        j is lr_checkint of [A, 3, "concat"]
+    local parts is []
+    local k is i
+    loop while k <= j:
+        local v is lr_index of [t, k, 0]
+        if type of v == "str":
+            append of [parts, v]
+        elif type of v == "num":
+            append of [parts, lr_numstr of (v)]
+        else:
+            lr_throw of ((lr_where of (1)) + "invalid value (at index " + (str of k) + ") in table for 'concat'")
+        k is k + 1
+    return [join of [parts, sep]]
+
+define lr_t_pack(A) as:
+    local t is lr_tnew of [A, [], 0]
+    lr_rawset of [t, "n", len of A, 0]
+    return [t]
+
+define lr_t_unpack(A) as:
+    local t is lr_arg of [A, 0]
+    local i is lr_optint of [A, 1, "unpack", 1]
+    local j is 0
+    if lr_arg of [A, 2] == null:
+        j is lr_len of [t, 0]
+    else:
+        j is lr_checkint of [A, 2, "unpack"]
+    if j - i >= 10000000:
+        lr_throw of ((lr_where of (1)) + "too many results to unpack")
+    local out is []
+    local k is i
+    loop while k <= j:
+        append of [out, lr_index of [t, k, 0]]
+        k is k + 1
+    return out
+
+# table.sort: merge sort (stable, which Lua's is not required to be; the
+# order of equal elements is unspecified, so any order is conforming).
+define lr_t_sort(A) as:
+    local t is lr_checktable of [A, 0, "sort"]
+    local cmp is lr_arg of [A, 1]
+    local n is lr_len of [t, 0]
+    local xs is []
+    for i in range of n:
+        append of [xs, lr_index of [t, i + 1, 0]]
+    local sorted is lr_msort of [xs, cmp]
+    for i in range of n:
+        lr_setindex of [t, i + 1, sorted[i], 0]
+    return []
+
+define lr_less(a, b, cmp) as:
+    if cmp == null:
+        return lr_lt of [a, b, 0]
+    return lr_t of (lr_call1 of [cmp, [a, b], 0])
+
+define lr_msort(xs, cmp) as:
+    local n is len of xs
+    if n <= 1:
+        return xs
+    local mid is floor of (n / 2)
+    local l is lr_msort of [list_slice of [xs, 0, mid], cmp]
+    local r is lr_msort of [list_slice of [xs, mid, n], cmp]
+    local out is []
+    local i is 0
+    local j is 0
+    loop while i < len of l and j < len of r:
+        if lr_less of [r[j], l[i], cmp]:
+            append of [out, r[j]]
+            j is j + 1
+        else:
+            append of [out, l[i]]
+            i is i + 1
+    loop while i < len of l:
+        append of [out, l[i]]
+        i is i + 1
+    loop while j < len of r:
+        append of [out, r[j]]
+        j is j + 1
+    return out
+
+# ------------------------------------------------------------ math library
+
+define lr_m_floor(A) as:
+    local x is lr_checknum of [A, 0, "floor"]
+    return [floor of x]
+
+define lr_m_ceil(A) as:
+    local x is lr_checknum of [A, 0, "ceil"]
+    return [ceil of x]
+
+define lr_m_abs(A) as:
+    local x is lr_checknum of [A, 0, "abs"]
+    return [abs of x]
+
+define lr_m_sqrt(A) as:
+    local x is lr_checknum of [A, 0, "sqrt"]
+    if x < 0:
+        lr_nonfinite of (0)
+    return [sqrt of x]
+
+define lr_m_max(A) as:
+    local m is lr_checknum of [A, 0, "max"]
+    local i is 1
+    loop while i < len of A:
+        local x is lr_checknum of [A, i, "max"]
+        if x > m:
+            m is x
+        i is i + 1
+    return [m]
+
+define lr_m_min(A) as:
+    local m is lr_checknum of [A, 0, "min"]
+    local i is 1
+    loop while i < len of A:
+        local x is lr_checknum of [A, i, "min"]
+        if x < m:
+            m is x
+        i is i + 1
+    return [m]
+
+# math.type: one double cannot tell an integer from an integral float, so
+# every integral value answers "integer" (EigenScript gap).
+define lr_m_type(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "type", "value expected"]
+    local x is A[0]
+    if type of x != "num":
+        return [null]
+    if lr_isint of (x):
+        return ["integer"]
+    return ["float"]
+
+define lr_m_tointeger(A) as:
+    local x is lr_arg of [A, 0]
+    if type of x == "num" and lr_isint of (x):
+        return [x]
+    return [null]
+
+define lr_m_fmod(A) as:
+    local a is lr_checknum of [A, 0, "fmod"]
+    local b is lr_checknum of [A, 1, "fmod"]
+    if b == 0:
+        if lr_isint of (a) and lr_isint of (b):
+            lr_argerr of [2, "fmod", "zero"]
+        lr_nonfinite of (0)
+    return [a % b]
+
+# ------------------------------------------------------------ io / os
+
+define lr_io_write(A) as:
+    local i is 0
+    for v in A:
+        if type of v == "str":
+            write of v
+        elif type of v == "num":
+            write of (lr_numstr of (v))
+        else:
+            lr_argerr of [i + 1, "write", "string expected, got " + (lr_type of (v))]
+        i is i + 1
+    return []
+
+define lr_os_exit(A) as:
+    local c is lr_arg of [A, 0]
+    if c == null:
+        c is 0
+    lr_exit of c
+
+# ------------------------------------------------------------ globals
+
+define lr_lib(fns, stubs, trap) as:
+    local t is lr_newtable of null
+    for k in keys of fns:
+        lr_rawset of [t, k, fns[k], 0]
+    for k in keys of stubs:
+        lr_rawset of [t, k, lr_stub of (stubs[k]), 0]
+    if len of trap > 0:
+        t.trap is trap
+    return t
+
+define lr_stubs(prefix, names) as:
+    local d is {}
+    for nm in split of [names, " "]:
+        d[nm] is prefix + nm
+    return d
+
+define lr_init_lib as:
+    null
+
+lr_G is lr_newtable of null
+lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format}, lr_stubs of ["string.", "dump find gmatch gsub match pack packsize unpack"], {}]
+lr_strmt is lr_newtable of null
+lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
+lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort}, lr_stubs of ["table.", "move"], {}]
+lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod}, lr_stubs of ["math.", "cos deg exp log modf rad random randomseed sin tan ult acos asin atan"], {"huge": "math.huge (inf: EigenScript has no non-finite numbers)"}]
+lr_rawset of [lr_mathlib, "pi", pi of null, 0]
+lr_rawset of [lr_mathlib, "maxinteger", 9223372036854775807, 0]
+lr_rawset of [lr_mathlib, "mininteger", -9223372036854775808, 0]
+lr_iolib is lr_lib of [{"write": lr_io_write}, lr_stubs of ["io.", "close flush input lines open output popen read tmpfile type"], {"stdin": "io.stdin", "stdout": "io.stdout", "stderr": "io.stderr"}]
+lr_oslib is lr_lib of [{"exit": lr_os_exit}, lr_stubs of ["os.", "clock date difftime execute getenv remove rename setlocale time tmpname"], {}]
+lr_colib is lr_lib of [{}, lr_stubs of ["coroutine.", "close create isyieldable resume running status wrap yield"], {}]
+lr_utf8lib is lr_lib of [{}, lr_stubs of ["utf8.", "char codepoint codes len offset"], {"charpattern": "utf8.charpattern (contains a NUL byte)"}]
+lr_dbglib is lr_lib of [{}, lr_stubs of ["debug.", "debug gethook getinfo getlocal getmetatable getregistry getupvalue getuservalue sethook setlocal setmetatable setupvalue setuservalue traceback upvalueid upvaluejoin setcstacklimit"], {}]
+lr_pkglib is lr_lib of [{}, lr_stubs of ["package.", "loadlib searchpath"], {"config": "package.config", "cpath": "package.cpath", "loaded": "package.loaded", "path": "package.path", "preload": "package.preload", "searchers": "package.searchers"}]
+lr_basefns is {"print": lr_b_print, "type": lr_b_type, "tostring": lr_b_tostring, "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
+for k in keys of lr_basefns:
+    lr_rawset of [lr_G, k, lr_basefns[k], 0]
+for k in ["dofile", "load", "loadfile", "require", "warn"]:
+    lr_rawset of [lr_G, k, lr_stub of (k), 0]
+lr_rawset of [lr_G, "_G", lr_G, 0]
+lr_rawset of [lr_G, "_VERSION", "Lua 5.4", 0]
+lr_rawset of [lr_G, "string", lr_strlib, 0]
+lr_rawset of [lr_G, "table", lr_tablib, 0]
+lr_rawset of [lr_G, "math", lr_mathlib, 0]
+lr_rawset of [lr_G, "io", lr_iolib, 0]
+lr_rawset of [lr_G, "os", lr_oslib, 0]
+lr_rawset of [lr_G, "coroutine", lr_colib, 0]
+lr_rawset of [lr_G, "utf8", lr_utf8lib, 0]
+lr_rawset of [lr_G, "debug", lr_dbglib, 0]
+lr_rawset of [lr_G, "package", lr_pkglib, 0]
