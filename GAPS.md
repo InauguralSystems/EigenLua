@@ -58,6 +58,19 @@ on the candidate and requires byte-identical output. The program checks that `as
 
 On a mismatch every S row is `FAIL assert-untrusted` (plant `toothless`).
 
+The probe alone is not enough. A second critic showed that a front end compiling DIRECT calls `assert(c, m)` into an
+inline intrinsic that never raises passed a probe that used `assert` only as a value. So both of these hold:
+- The probe also makes direct calls on failing values: in closures, loops, nested functions, and `assert(f())` where
+  `f` returns nothing.
+- **Every graded row has a negative control.** The candidate runs on that exact file with `assert(false);` put in
+  front of line 1, with no newline, so line numbers do not move. It must exit non-zero with `assertion failed!`, or
+  the row is `FAIL assert-untrusted(control)` (plant `callsite-toothless`). The reference must fail the control too.
+  The control costs about 1 s per full grade.
+
+**Declared residual:** a front end whose `assert` is correct on line 1 and in every probe shape, but toothless at some
+other call site, would pass. That needs a compiler that treats identical call sites differently by position. It is
+not covered.
+
 The candidate's count is self-reported, so it is never trusted alone:
 - a missing count fails (plant `no-count`);
 - a forged count with an early exit fails on the progress lines (plant `lying-count`);
@@ -71,13 +84,19 @@ The candidate's count is self-reported, so it is never trusted alone:
   Over 40 runs it ranged from 9849 to 9934.
 
 For these rows, condition 4 is replaced by: count ≥ ⌊f × (minimum over 20 reference runs)⌋, where f is declared per
-row in `corpus/S.manifest`. A count-unspecified row with no declared f is a harness error. There is no upper bound:
+row in `corpus/S.manifest`. A count-unspecified row with no declared f, or with an f outside the open interval (0, 1), is a harness error. There is no upper bound:
 the progress lines catch a late exit, and the floor catches an early one.
 
 | row | f | measured over 1220 reference runs | what a candidate can skip |
 |---|---|---|---|
 | `math.lua` | 0.60 | counts come in steps of 10602 (one per repeat of a float-random loop), so the min-of-20 itself varies; a reference run fell below a 20-run floor about 2e-5 of the time at 0.60, and about 1.8e-3 at 0.77 | about 64% of a median run; about 22% of the smallest run |
 | `nextvar.lua` | 0.90 | the counts range from 9838 to 9942 (max/min = 0.9895), so a 0.90 floor never lands above a real run | about 10% |
+
+**Number printing is graded on purpose.** The manual leaves number-to-string formatting to the implementation, but
+every program prints numbers, and a guest that prints them differently from `lua` is useless in practice. Tier D's
+`num_print.lua` therefore pins PUC-Rio's rule: `%.14g`, with `.0` appended to integral floats. It also covers
+`inf`/`-inf`/`-0.0`, `2^53`, `2^63` and `math.pi`. The sign of NaN is NOT graded, since C prints `nan` or `-nan`;
+NaN is checked only through `0/0 ~= 0/0`.
 
 Randomness that IS specified is graded exactly. The 5.4 manual specifies xoshiro256**, its seeding, and its float
 and range mapping, so `rng_xoshiro.lua` in Tier D requires the candidate's `math.random` to be bit-exact.
@@ -111,7 +130,8 @@ The Lua 5.4 manual leaves these to the implementation:
 - `pairs`/`next` order;
 - the border `#t` returns when a table has holes (§3.4.7);
 - `tostring` of tables, functions and threads;
-- number formatting beyond `%.14g` and `string.format`.
+- number formatting, which this repo nevertheless grades against PUC-Rio's `%.14g` on purpose (see Tier S);
+- the sign of NaN.
 
 A Tier D program must not print any of these. It sorts keys, takes `#t` only of sequences, or checks that the result
 IS a valid border and prints that boolean. A divergence that traces to unspecified behavior is fixed in the corpus.
