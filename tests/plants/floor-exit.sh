@@ -5,7 +5,7 @@
 # count-unspecified floor can catch it.
 set -u
 ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
-"$ROOT/.ref/bin/lua" "$1" 2>/dev/null
+"$ROOT/.ref/bin/lua" "$1"
 rc=$?
 "$ROOT/tests/plants/early-exit.sh" "$1" 2>&1 >/dev/null | grep 'EIGENLUA-ASSERTS:' >&2
 exit "$rc"
