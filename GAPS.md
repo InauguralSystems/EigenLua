@@ -21,7 +21,16 @@ publishes:
 | `lua-5.4.9.tar.gz` | `2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6` |
 | `lua-5.4.9-tests.tar.gz` | `7d971845f545ffc09fbb3128a86b2c6524161c70d0fdf0154a16e8c00c343fca` |
 
-`tools/build_ref.sh` builds four binaries from that one tarball:
+**The reference is pure Lua 5.4, as its manual defines it.** 5.4.9's own `src/Makefile` hard-codes `-DLUA_COMPAT_5_3`.
+That turns on `LUA_COMPAT_MATHLIB` (`math.pow` and friends) and `LUA_COMPAT_LT_LE` (`__lt` standing in for a missing
+`__le`), both removed by manual §8.1. `/code-review` caught that the first reference builds had it.
+- `tools/build_ref.sh` strips the flag and then checks every built binary: `math.pow == nil`, and `<=` with only
+  `__lt` raises. The build stops otherwise (plant `compat-ref`).
+- Re-measured without the flag, only `meta_lt.lua`'s reference output changed. It now requires the 5.4 rule.
+- A hand-supplied `--ref` is not re-checked by `grade.sh`. Run `tools/build_ref.sh --check-not-compat <bin>` on it
+  first.
+
+`tools/build_ref.sh` builds these binaries from that one tarball, all without the compat flag (plus test-only `lua-toothless` and `lua-compat` for plants):
 
 | binary | difference | used for |
 |---|---|---|
