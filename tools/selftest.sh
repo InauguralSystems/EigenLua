@@ -12,7 +12,7 @@ WORK="$ROOT/.tmp/selftest-$$"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 bad=0
-ns=$(awk '$1=="include" || $1=="band" {c++} END{print c+0}' "$ROOT/corpus/S.manifest")
+ns=$(awk '$1=="include" || $1=="count-unspecified" {c++} END{print c+0}' "$ROOT/corpus/S.manifest")
 nd=$(awk 'NF && $1 !~ /^#/{c++} END{print c+0}' "$ROOT/corpus/D.manifest")
 plant() {
   local st=OK
@@ -67,7 +67,7 @@ do_silent() {
   sn=$(awk -F, '{print NF}' <<<"$sonly")
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier S --only "$sonly"
   local sbad
-  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $0 !~ /cand=none rc=0/) {c++} END{print c+0}' "$WORK/out.txt")
+  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $0 !~ / rc=0 count=none /) {c++} END{print c+0}' "$WORK/out.txt")
   [[ $GRADE_RC -eq 1 && $(row_n) -eq $sn && $sbad -eq 0 ]] && sok=1
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier D
   local dbad
@@ -79,22 +79,26 @@ do_silent() {
   plant silent "$exp" "$got"
 }
 do_early_exit() {
-  run_at_grade "$GRADE" --candidate "$PLANTS/early-exit.sh" --ref "$REF" --tier S --only goto.lua,nextvar.lua
-  local exp="goto.lua=FAIL nextvar.lua=FAIL-band rc=1" got
-  got=$(awk -v rc="$GRADE_RC" '/^ROW S / {
-      v = $3 "=" $4; if ($0 ~ / band=\[/) v = v "-band"
-      if (!match($0, / (ref|band)=\[?[0-9]+/)) v = v "-noref"
-      lo = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", lo)
-      if (!match($0, / cand=[0-9]+ rc=0/)) v = v "-nocount"
-      c = substr($0, RSTART, RLENGTH); sub(/ rc=0/, "", c); gsub(/[^0-9]/, "", c)
-      if (!(c + 0 > 0 && c + 0 < lo + 0)) v = v "-notpartway"
-      s = s (s == "" ? "" : " ") v }
-    END { print s " rc=" rc }' "$WORK/out.txt")
-  plant early-exit "$exp" "$got"
+  run_at_grade "$GRADE" --candidate "$PLANTS/early-exit.sh" --ref "$REF" --tier S --only goto.lua
+  local got
+  got=$(awk -v rc="$GRADE_RC" '/^ROW S / { match($0, / count=[0-9]+/); c = substr($0, RSTART + 7, RLENGTH - 7)
+      match($0, / ref=[0-9]+/); r = substr($0, RSTART + 5, RLENGTH - 5)
+      printf "%s=%s%s ", $3, $4, (c + 0 > 0 && c + 0 < r + 0) ? "-partway" : "-count?" } END { printf "rc=%s", rc }' "$WORK/out.txt")
+  plant early-exit "goto.lua=FAIL-partway rc=1" "$got"
+}
+do_floor_exit() {
+  run_at_grade "$GRADE" --candidate "$PLANTS/floor-exit.sh" --ref "$REF" --tier S --only math.lua,nextvar.lua
+  plant floor-exit "math.lua=FAIL-progress=same nextvar.lua=FAIL-progress=same rc=1" \
+    "$(awk '/^ROW S /{printf "%s=%s-%s ", $3, $4, $NF}' "$WORK/out.txt")rc=$GRADE_RC"
+}
+do_count_unspec_canary() {
+  run_at_grade "$GRADE" --candidate "$COUNT" --ref "$REF" --tier S --only math.lua,nextvar.lua --repeat 20
+  plant count-unspec-canary "math.lua=PASS nextvar.lua=PASS rc=0" \
+    "$(awk '/^ROW S /{printf "%s=%s ", $3, $4}' "$WORK/out.txt")rc=$GRADE_RC"
 }
 do_off_by_one() {
-  run_at_grade "$GRADE" --candidate "$PLANTS/off-by-one.sh" --ref "$REF" --tier S --only api.lua,goto.lua
-  plant off-by-one "api.lua=FAIL goto.lua=FAIL rc=1" "$(awk '/^ROW S /{printf "%s=%s ", $3, $4}' "$WORK/out.txt")rc=$GRADE_RC"
+  run_at_grade "$GRADE" --candidate "$PLANTS/off-by-one.sh" --ref "$REF" --tier S --only goto.lua,literals.lua
+  plant off-by-one "goto.lua=FAIL literals.lua=FAIL rc=1" "$(awk '/^ROW S /{printf "%s=%s ", $3, $4}' "$WORK/out.txt")rc=$GRADE_RC"
 }
 do_assert_edges() {
   local d="$WORK/edges" r1 r2 n c
@@ -110,15 +114,15 @@ do_assert_edges() {
   plant assert-edges "count=calls stdout=same" "$got"
 }
 do_no_count() {
-  run_at_grade "$GRADE" --candidate "$REF" --ref "$REF" --tier S --only api.lua,goto.lua
+  run_at_grade "$GRADE" --candidate "$REF" --ref "$REF" --tier S --only goto.lua,literals.lua
   local got
-  got="$(awk '/^ROW S /{printf "%s=%s%s ", $3, $4, ($0 ~ / cand=none /) ? "-none" : ""}' "$WORK/out.txt")rc=$GRADE_RC"
-  plant no-count "api.lua=FAIL-none goto.lua=FAIL-none rc=1" "$got"
+  got="$(awk '/^ROW S /{printf "%s=%s%s ", $3, $4, ($0 ~ / count=none /) ? "-none" : ""}' "$WORK/out.txt")rc=$GRADE_RC"
+  plant no-count "goto.lua=FAIL-none literals.lua=FAIL-none rc=1" "$got"
 }
 do_lying_count() {
   run_at_grade "$GRADE" --candidate "$PLANTS/lying-count.sh" --ref "$REF" --tier S --only goto.lua
   local got
-  got=$(awk -v rc="$GRADE_RC" '/^ROW S / { match($0, / cand=[0-9]+/); c = substr($0, RSTART + 6, RLENGTH - 6)
+  got=$(awk -v rc="$GRADE_RC" '/^ROW S / { match($0, / count=[0-9]+/); c = substr($0, RSTART + 7, RLENGTH - 7)
       match($0, / ref=[0-9]+/); r = substr($0, RSTART + 5, RLENGTH - 5)
       printf "%s=%s count=%s %s ", $3, $4, (c != "" && c == r ? "ref" : c "/" r), ($0 ~ / progress=differs/) ? "progress=differs" : "progress=?" }
     END { printf "rc=%s", rc }' "$WORK/out.txt")
@@ -217,13 +221,6 @@ do_unstable_ref() {
   FLAKY_STATE="$WORK/flaky.n" run_at_grade "$GRADE" --candidate "$COUNT" --ref "$d/lua" --tier S --only goto.lua
   plant unstable-ref "goto.lua=UNSTABLE rc=1" "$(awk '/^ROW /{print $3 "=" $4}' "$WORK/out.txt") rc=$GRADE_RC"
 }
-do_stale_band() {
-  local dest
-  dest=$(stage "$WORK/stale")
-  sed -i 's/^include goto\.lua$/band goto.lua plant: a deterministic row declared band/' "$dest/corpus/S.manifest"
-  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier S --only goto.lua
-  harness stale-band "declared band but"
-}
 dispatch() {
   local fn="do_${1//-/_}"
   if declare -F "$fn" >/dev/null; then "$fn"; else printf 'selftest: unknown plant %s\n' "$1" >&2; bad=1; fi
@@ -235,7 +232,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit off-by-one assert-edges no-count lying-count unspecified-D unstable-ref stale-band hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Grade a candidate against PUC-Rio Lua 5.4.9.
 # tools/grade.sh --candidate <cmd> [--tier S|D|all] [--ref <path>] [--only a,b]
+#                [--repeat K]   (each S candidate run K times; all must pass)
 # Candidate argv is exactly: <cmd> <file>, run with LUA_INIT and LUA_INIT_5_4
 # unset. --ref names the pristine reference; lua-count, lua-seedA and
 # lua-seedB must sit next to it (tools/build_ref.sh builds all four).
@@ -8,11 +9,14 @@
 # fresh directory whose entries link to the suite. Count protocol: at exit the
 # candidate ends exactly one stderr line with `EIGENLUA-ASSERTS:<n>`, n = calls of
 # its assert builtin (lua-count does this in C, tools/ref-count.patch). A row
-# passes iff rc 0, one count line, the count equals the reference's (2 runs
-# must agree, else UNSTABLE) or for a manifest `band` row lies in [min,max] of
-# 5 runs, AND the stdout lines containing no digit equal the reference's (the
-# progress cross-check on a self-reported count; a row whose reference prints
-# no such line has no cross-check, shown as progress=0).
+# passes iff rc 0, one numeric count line, the stdout lines containing no digit
+# equal the reference's (progress cross-check on a self-reported count), and:
+#  include: count == reference count (2 reference runs must agree, else
+#    UNSTABLE);
+#  count-unspecified: count >= floor = min of 20 reference runs / 2, no upper
+#    bound. These rows' counts follow behaviour the manual leaves unspecified,
+#    so a count that is a little off (off-by-one plant) is NOT caught here;
+#    only a large shortfall (floor-exit plant) or a progress difference is.
 # Tier D: stdout and rc byte-identical to the reference. Each program must
 # print the same under the pristine build twice and under lua-seedA and
 # lua-seedB (different string hash seeds), or it is a corpus defect (exit 2).
@@ -132,15 +136,17 @@ CAND=""
 TIER=all
 REF="$ROOT/.ref/bin/lua"
 ONLY=""
+REPEAT=1
 while [[ $# -gt 0 ]]; do
   case $1 in
-    --candidate|--tier|--ref|--only)
+    --candidate|--tier|--ref|--only|--repeat)
       [[ $# -ge 2 ]] || die "missing value for $1"
       case $1 in
         --candidate) CAND=$2 ;;
         --tier) TIER=$2 ;;
         --ref) REF=$2 ;;
         --only) ONLY=$2 ;;
+        --repeat) REPEAT=$2 ;;
       esac
       shift 2
       ;;
@@ -150,6 +156,10 @@ done
 case $TIER in
   S|D|all) ;;
   *) die "bad tier: $TIER" ;;
+esac
+case $REPEAT in
+  [1-9]|[1-9][0-9]) ;;
+  *) die "bad --repeat: $REPEAT" ;;
 esac
 [[ -n $CAND ]] || die "missing --candidate"
 if [[ $CAND != /* && -e $CAND ]]; then CAND=$PWD/$CAND; fi
@@ -175,20 +185,20 @@ DDIR="$ROOT/corpus/D"
 SMAN="$ROOT/corpus/S.manifest"
 DMAN="$ROOT/corpus/D.manifest"
 [[ -f $SMAN && -f $DMAN ]] || die "missing manifest"
-declare -A s_status=() d_have=() s_band=()
+declare -A s_status=() d_have=() s_cu=()
 declare -a s_include=() d_names=()
 while read -r status name reason; do
   [[ -z ${status:-} || ${status:0:1} == '#' ]] && continue
-  [[ $status =~ ^(include|exclude|band)$ ]] || die "bad S manifest status: $status"
+  [[ $status =~ ^(include|exclude|count-unspecified)$ ]] || die "bad S manifest status: $status"
   [[ -n ${s_status[$name]:-} ]] && die "duplicate S row: $name"
   s_status[$name]=$status
   [[ -f $SUITE/$name ]] || die "manifest row has no file: $name"
   if [[ $status == include ]]; then [[ -z ${reason:-} ]]; else [[ -n ${reason:-} ]]; fi || die "bad reason field for $status row: $name"
-  [[ $status == band ]] && s_band[$name]=1
+  [[ $status == count-unspecified ]] && s_cu[$name]=1
   [[ $status == exclude ]] || s_include+=("$name")
 done <"$SMAN"
-[[ ${#s_include[@]} -eq 27 ]] || die "include count ${#s_include[@]} != 27"
-for need in heavy.lua attrib.lua big.lua main.lua; do
+[[ ${#s_include[@]} -eq 23 ]] || die "graded S count ${#s_include[@]} != 23"
+for need in heavy.lua attrib.lua big.lua main.lua files.lua api.lua code.lua bwcoercion.lua tracegc.lua; do
   [[ ${s_status[$need]:-} == exclude ]] || die "$need must be excluded"
 done
 [[ -f $SUITE/all.lua ]] || die "all.lua missing"
@@ -322,7 +332,7 @@ run_s() {
 if (( ${#s_sel[@]} > 0 )); then
   for name in "${s_sel[@]}"; do
     nref=2
-    [[ -n ${s_band[$name]:-} ]] && nref=5
+    [[ -n ${s_cu[$name]:-} ]] && nref=20
     lo='' hi='' rcs='' MS=0 prog=same
     for ((k = 1; k <= nref; k++)); do
       t0=$(date +%s%N)
@@ -338,13 +348,15 @@ if (( ${#s_sel[@]} > 0 )); then
     done
     s_ms[$name]=$MS
     # >>> guard:stable
-    if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_band[$name]:-} && $lo -ne $hi ]]; then
+    if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_cu[$name]:-} && $lo -ne $hi ]]; then
       s_why[$name]="reference over $nref runs: rc$rcs, asserts in [$lo,$hi], progress $prog"
-    elif [[ -n ${s_band[$name]:-} && $lo -eq $hi ]]; then
-      die "S/$name is declared band but $nref reference runs all counted $lo"
     fi
     # <<< guard:stable
     s_lo[$name]=$lo s_hi[$name]=$hi
+    if [[ -n ${s_cu[$name]:-} ]]; then
+      floor=$(( lo / 2 ))
+      s_lo[$name]=$floor s_hi[$name]=-1
+    fi
   done
 fi
 grade_d() {
@@ -375,33 +387,35 @@ grade_d() {
   # <<< guard:d-diverge
 }
 grade_s() {
-  local name=$1 rc sec special c lo hi band=''
+  local name=$1 rc sec special c lo hi k np pr pre="$WORK/s-$name" tag
   if [[ -n ${s_why[$name]:-} ]]; then
     emit S "$name" UNSTABLE "${s_why[$name]}"
     return
   fi
   lo=${s_lo[$name]} hi=${s_hi[$name]}
-  [[ -n ${s_band[$name]:-} ]] && band=" band=[$lo,$hi]"
   sec=$(row_timeout "${s_ms[$name]}")
-  run_s "$name" cand "$CAND" "$sec"
-  rc=$S_RC c=$S_C
-  special=$(classify "$rc" "$WORK/s-$name-cand.e")
-  if [[ -n $special ]]; then emit S "$name" "$special" "rc=$rc"; return; fi
-  local np pr=same pre="$WORK/s-$name"
   np=$(wc -l <"$pre-ref1.o.p")
-  # >>> guard:progress
-  cmp -s "$pre-ref1.o.p" "$pre-cand.o.p" || pr="differs($(first_diff "$pre-ref1.o.p" "$pre-cand.o.p"))"
-  # <<< guard:progress
-  # >>> guard:s-pass
-  if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && c <= hi )); then
-    emit S "$name" PASS "asserts=$c progress=$np$band"
+  for ((k = 1; k <= REPEAT; k++)); do
+    run_s "$name" "cand$k" "$CAND" "$sec"
+    rc=$S_RC c=$S_C pr=same
+    tag="count=$c"
+    [[ -n ${s_cu[$name]:-} ]] && tag="class=count-unspecified floor=$lo count=$c"
+    (( REPEAT > 1 )) && tag="$tag run=$k/$REPEAT"
+    special=$(classify "$rc" "$pre-cand$k.e")
+    if [[ -n $special ]]; then emit S "$name" "$special" "rc=$rc $tag"; return; fi
+    # >>> guard:progress
+    cmp -s "$pre-ref1.o.p" "$pre-cand$k.o.p" || pr="differs($(first_diff "$pre-ref1.o.p" "$pre-cand$k.o.p"))"
+    # <<< guard:progress
+    # >>> guard:s-pass
+    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then
+      continue
+    fi
+    # <<< guard:s-pass
+    [[ -n ${s_cu[$name]:-} ]] || tag="$tag ref=$lo"
+    emit S "$name" FAIL "rc=$rc $tag progress=$pr"
     return
-  fi
-  # <<< guard:s-pass
-  # >>> guard:s-fail
-  [[ -n $band ]] || band=" ref=$lo"
-  emit S "$name" FAIL "asserts cand=$c rc=$rc$band progress=$pr"
-  # <<< guard:s-fail
+  done
+  emit S "$name" PASS "$tag progress=$np"
 }
 for name in "${s_sel[@]}"; do grade_s "$name"; done
 for name in "${d_sel[@]}"; do grade_d "$name"; done

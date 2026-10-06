@@ -1,22 +1,22 @@
-# Tier S rows. include = graded by exact assert count. band = graded by the
-# [min,max] count of 5 reference runs, with the reason the count cannot be made
-# deterministic. exclude = not graded, with a reason.
-# all.lua is the driver and is not a row. 27 graded rows (include + band).
-include api.lua
+# Tier S rows. include = graded by exact assert count. count-unspecified =
+# graded by count >= min of 20 reference runs / 2, with the measured reason the
+# count is unspecified. exclude = not graded, with a reason.
+# all.lua is the driver and is not a row. 23 graded rows.
+exclude api.lua near-vacuous: returns at line 6 when the internal T test library is absent (standard build), 0 assertions run
 exclude attrib.lua fails standalone under the reference: needs all.lua setup or a C module
 exclude big.lua fails standalone under the reference: needs all.lua setup or a C module
 include bitwise.lua
-include bwcoercion.lua
+exclude bwcoercion.lua near-vacuous: a string-coercion helper loaded by bitwise.lua (require "bwcoercion"), 0 standalone assertions
 include calls.lua
 include closure.lua
-include code.lua
+exclude code.lua near-vacuous: returns at line 6 when the internal T test library is absent (standard build), 0 assertions run
 include constructs.lua
 include coroutine.lua
 include cstack.lua
 include db.lua
 include errors.lua
 include events.lua
-exclude files.lua fails standalone under the reference: stdin seek at line 84 does not fail when stdin is seekable
+exclude files.lua with stdin a regular file (empty, or two fixed lines) it fails at files.lua:84, where io.stdin:seek("set", 1000) succeeds; it passes only with a pipe on stdin, and then its io.popen children each print a count line
 include gc.lua
 include gengc.lua
 include goto.lua
@@ -24,13 +24,13 @@ exclude heavy.lua stress test, over 120 s
 include literals.lua
 include locals.lua
 exclude main.lua fails standalone under the reference: needs the lua driver or a C module
-band math.lua line 845 calls math.randomseed() with no argument, which seeds from time and an address; the statistics loops after it (doagain) then run a seed-dependent number of rounds
-band nextvar.lua find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
+count-unspecified math.lua line 845 calls math.randomseed() with no argument, which seeds from time and an address; the statistics loops after it (doagain) then run a seed-dependent number of rounds
+count-unspecified nextvar.lua find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
 include pm.lua
 include sort.lua
 include strings.lua
 include tpack.lua
-include tracegc.lua
+exclude tracegc.lua near-vacuous: a GC-trace helper module required by cstack.lua and all.lua, 0 assertions and no progress lines
 include utf8.lua
 include vararg.lua
 include verybig.lua
