@@ -15,7 +15,9 @@ early-exit	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]
 floor-exit	tools/grade.sh	      floor=$(( lo * 10#${s_cu[$name]} / 100 ))	      floor=0
 count-unspec-canary	tools/grade.sh	      floor=$(( lo * 10#${s_cu[$name]} / 100 ))	      floor=$hi
 no-fraction	tools/grade.sh	    [[ $reason =~ ^floor=0\.([0-9][0-9]?)\ +[^\ ] ]] || die "count-unspecified row has no floor=0.N fraction: $name"	    :
+floor-zero	tools/grade.sh	    (( 10#${s_cu[$name]} > 0 )) || die "count-unspecified floor must be in (0,1): $name"	    :
 toothless	tools/grade.sh	  if [[ $RUN_RC -eq $prc ]] && cmp -s "$WORK/probe.ref" "$WORK/probe.cand"; then	  if true; then
+callsite-toothless	tools/grade.sh	  if ! run_ctl "$name" "$CAND" cand; then emit S "$name" FAIL "assert-untrusted(control) rc=$RUN_RC"; return; fi	  if false; then
 off-by-one	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]]; then
 assert-edges	tools/ref-count.patch	+  eigenlua_asserts++;	+  (void)0;
 no-count	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $pr == same ]]; then

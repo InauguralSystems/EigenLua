@@ -22,6 +22,7 @@ meta_lt.lua unspecified-audit: ok
 meta_newindex.lua unspecified-audit: ok
 multi_assign.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
+num_print.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok

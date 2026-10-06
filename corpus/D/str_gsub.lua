@@ -12,3 +12,8 @@ print(string.gsub("$name $ver $none", "%$(%w+)", t))
 print(string.gsub("aaa", "a", "b", 2))
 print(string.gsub("aaa", "a", "b", 0))
 print(select("#", string.gsub("x", "x", "y")))
+-- subject over 64 bytes
+local long = string.rep("one two three ", 6)
+print(#long, string.gsub(long, "t(%a+)", "T%1"))
+print(string.gsub(long, "%a+", function(w) return #w end))
+print(string.gsub(long, "o", "0", 7))

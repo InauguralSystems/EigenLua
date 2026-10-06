@@ -7,7 +7,9 @@
 # lua-seedA and lua-seedB next to it.
 # Tier S is gated by the assert-trust probe: corpus/D/assert_semantics.lua run
 # on the candidate must match the reference's stdout and rc byte for byte, or
-# every S row is `FAIL assert-untrusted` (SUMMARY assert=untrusted).
+# every S row is `FAIL assert-untrusted` (SUMMARY assert=untrusted). Per row, the
+# file with `assert(false);` before line 1 (no newline) must exit non-zero with
+# "assertion failed!" on stderr, or the row is FAIL assert-untrusted(control).
 # An S program is the UNMODIFIED suite file, run as `<cmd> <name>` in a fresh
 # directory linking to the suite. At exit the candidate ends exactly one stderr
 # line with `EIGENLUA-ASSERTS:<n>`, n = calls of its assert builtin (lua-count:
@@ -196,6 +198,7 @@ while read -r status name reason; do
   if [[ $status == count-unspecified ]]; then
     [[ $reason =~ ^floor=0\.([0-9][0-9]?)\ +[^\ ] ]] || die "count-unspecified row has no floor=0.N fraction: $name"
     s_cu[$name]=${BASH_REMATCH[1]}0 s_cu[$name]=${s_cu[$name]:0:2}
+    (( 10#${s_cu[$name]} > 0 )) || die "count-unspecified floor must be in (0,1): $name"
   fi
   [[ $status == exclude ]] || s_include+=("$name")
 done <"$SMAN"
@@ -258,39 +261,18 @@ in_list() {
   for x in "$@"; do [[ $x == "$n" ]] && return 0; done
   return 1
 }
-declare -a ONLY_NAMES=() s_sel=() d_sel=()
-if [[ -n $ONLY ]]; then
-  IFS=',' read -r -a ONLY_NAMES <<<"$ONLY"
-  declare -a cleaned=()
-  for n in "${ONLY_NAMES[@]}"; do
-    [[ -n $n ]] && cleaned+=("$n")
-  done
-  ONLY_NAMES=("${cleaned[@]}")
-  (( ${#ONLY_NAMES[@]} > 0 )) || die "zero rows examined"
-  for n in "${ONLY_NAMES[@]}"; do
-    case $TIER in
-      S) in_list "$n" "${s_all[@]}" || die "--only is not an S row: $n" ;;
-      D) in_list "$n" "${d_all[@]}" || die "--only is not a D row: $n" ;;
-      all)
-        in_list "$n" "${s_all[@]}" || in_list "$n" "${d_all[@]}" || die "--only is not a row: $n"
-        ;;
-    esac
-  done
-fi
-pick() {
-  local -n _src=$1 _dst=$2
-  _dst=()
-  if [[ -z $ONLY ]]; then
-    _dst=("${_src[@]}")
-    return
-  fi
-  local n
-  for n in "${_src[@]}"; do
-    in_list "$n" "${ONLY_NAMES[@]}" && _dst+=("$n")
-  done
-}
-[[ $TIER != D ]] && pick s_all s_sel
-[[ $TIER != S ]] && pick d_all d_sel
+declare -a s_sel=() d_sel=() want=()
+IFS=',' read -r -a want <<<"$ONLY"
+for n in "${want[@]}"; do
+  [[ -z $n ]] && continue
+  ok=0
+  [[ $TIER != D ]] && in_list "$n" "${s_all[@]}" && ok=1
+  [[ $TIER != S ]] && in_list "$n" "${d_all[@]}" && ok=1
+  (( ok )) || die "--only is not a tier $TIER row: $n"
+done
+sel() { local n; for n in "${@:2}"; do [[ -z $ONLY || ",$ONLY," == *",$n,"* ]] && eval "$1+=(\"\$n\")"; done; }
+[[ $TIER != D ]] && sel s_sel "${s_all[@]}"
+[[ $TIER != S ]] && sel d_sel "${d_all[@]}"
 if (( ${#s_sel[@]} + ${#d_sel[@]} == 0 )); then die "zero rows examined"; fi
 mkdir -p "$ROOT/.tmp"
 WORK=$(mktemp -d "$ROOT/.tmp/grade-XXXXXX")
@@ -331,6 +313,15 @@ run_s() {
   S_C=$(assert_count "$dir.e")
   progress "$dir.o"
 }
+run_ctl() {  # <name> <cmd> <tag>: the row with `assert(false);` before line 1 must fail
+  local dir="$WORK/c-$1-$3"
+  [[ $(head -c 1 "$SUITE/$1") != '#' ]] || die "S/$1 starts with '#'; the control prefix would break it"
+  link_dir "$dir"
+  rm -f "$dir/$1"
+  { printf 'assert(false);'; cat "$SUITE/$1"; } >"$dir/$1"
+  run_at "$dir" 30 "$2" "$1" "$dir.o" "$dir.e"
+  [[ $RUN_RC -ne 0 ]] && grep -q 'assertion failed!' "$dir.e"
+}
 PROBE="$DDIR/assert_semantics.lua" TRUST=n/a TRUST_WHY=''
 if (( ${#s_sel[@]} > 0 )); then
   [[ -n ${d_have[assert_semantics.lua]:-} ]] || die "assert probe missing from D: $PROBE"
@@ -364,6 +355,7 @@ if (( ${#s_sel[@]} > 0 )) && [[ $TRUST == trusted ]]; then
       [[ -z $hi ]] || (( S_C > hi )) && hi=$S_C
     done
     s_ms[$name]=$MS
+    run_ctl "$name" "$REF_COUNT" ref || die "reference does not fail the assert(false) control on S/$name"
     # >>> guard:stable
     if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_cu[$name]:-} && $lo -ne $hi ]]; then
       s_why[$name]="reference over $nref runs: rc$rcs, asserts in [$lo,$hi], progress $prog"
@@ -413,6 +405,9 @@ grade_s() {
   lo=${s_lo[$name]} hi=${s_hi[$name]}
   sec=$(row_timeout "${s_ms[$name]}")
   np=$(wc -l <"$pre-ref1.o.p")
+  # >>> guard:control
+  if ! run_ctl "$name" "$CAND" cand; then emit S "$name" FAIL "assert-untrusted(control) rc=$RUN_RC"; return; fi
+  # <<< guard:control
   for ((k = 1; k <= REPEAT; k++)); do
     run_s "$name" "cand$k" "$CAND" "$sec"
     rc=$S_RC c=$S_C pr=same

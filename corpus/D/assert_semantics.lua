@@ -32,3 +32,19 @@ ok, v = pcall(assert, e)
 print("table", ok, rawequal(v, e))
 print("count", select("#", assert(1, 2, 3)), assert(1, 2, 3))
 show("trailing", pcall(assert, 1, nil, nil))
+-- DIRECT call sites (a front end may compile `assert(...)` differently from
+-- assert used as a value); positions are printed only as "ends with".
+local function direct(label, fn)
+  local ok, e = pcall(fn)
+  print(label, ok, type(e), type(e) == "string" and (e:match("assertion failed!$") or e:match("m$")) or "-")
+end
+local function none() end
+local t = {}
+direct("d-false", function() assert(false) end)
+direct("d-nil+m", function() assert(nil, "m") end)
+direct("d-noresult", function() assert(none()) end)
+direct("d-compare", function() assert(0 == 1) end)
+direct("d-missing", function() assert(t.missing) end)
+direct("d-loop", function() for i = 1, 3 do assert(i < 3) end end)
+direct("d-nested", function() local function inner() return assert(false, "m") end inner() end)
+direct("d-true", function() assert(1 == 1, "never") end)

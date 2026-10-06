@@ -16,8 +16,7 @@ ns=$(awk '$1=="include" || $1=="count-unspecified" {c++} END{print c+0}' "$ROOT/
 nd=$(awk 'NF && $1 !~ /^#/{c++} END{print c+0}' "$ROOT/corpus/D.manifest")
 plant() {
   local st=OK
-  [[ $2 == "$3" ]] || st=WRONG
-  [[ $st == OK ]] || bad=1
+  [[ $2 == "$3" ]] || { st=WRONG; bad=1; }
   printf 'PLANT %s expected=%s got=%s %s\n' "$1" "$2" "$3" "$st"
 }
 run_at_grade() {
@@ -27,13 +26,9 @@ run_at_grade() {
   GRADE_RC=$?
 }
 stage() {
-  local dest=$1
-  rm -rf "$dest"
-  mkdir -p "$dest/tools"
-  cp -a "$ROOT/corpus" "$dest/corpus"
-  cp -a "$GRADE" "$dest/tools/grade.sh"
-  chmod +x "$dest/tools/grade.sh"
-  printf '%s\n' "$dest"
+  rm -rf "$1" && mkdir -p "$1/tools" && cp -a "$ROOT/corpus" "$1/corpus" && cp -a "$GRADE" "$1/tools/grade.sh"
+  chmod +x "$1/tools/grade.sh"
+  printf '%s\n' "$1"
 }
 summary_line() { awk '/^SUMMARY /{s=$0} END{print s}' "$WORK/out.txt"; }
 row_bad() { awk -v w="$1" '/^ROW / && $4!=w {c++} END{print c+0}' "$WORK/out.txt"; }
@@ -93,6 +88,13 @@ do_toothless() {
   untr=$(awk '/^ROW S / && $4 == "FAIL" && $5 == "assert-untrusted" {c++} END{print c+0}' "$WORK/out.txt")
   plant toothless "S=0/$ns untrusted=$ns assert=untrusted rc=1" \
     "$(summary_line | grep -o 'S=[0-9]*/[0-9]*') untrusted=$untr $(summary_line | grep -o 'assert=[a-z/]*') rc=$GRADE_RC"
+}
+do_callsite_toothless() {
+  run_at_grade "$GRADE" --candidate "$PLANTS/callsite-toothless.sh" --ref "$REF" --tier S
+  local n
+  n=$(awk '/^ROW S / && $4 == "FAIL" && $5 == "assert-untrusted(control)" {c++} END{print c+0}' "$WORK/out.txt")
+  plant callsite-toothless "S=0/$ns control=$ns assert=trusted rc=1" \
+    "$(summary_line | grep -o 'S=[0-9]*/[0-9]*') control=$n $(summary_line | grep -o 'assert=[a-z/]*') rc=$GRADE_RC"
 }
 do_off_by_one() {
   run_at_grade "$GRADE" --candidate "$PLANTS/off-by-one.sh" --ref "$REF" --tier S --only goto.lua,literals.lua
@@ -219,13 +221,15 @@ do_unstable_ref() {
   FLAKY_STATE="$WORK/flaky.n" run_at_grade "$GRADE" --candidate "$COUNT" --ref "$d/lua" --tier S --only goto.lua
   plant unstable-ref "goto.lua=UNSTABLE rc=1" "$(awk '/^ROW /{print $3 "=" $4}' "$WORK/out.txt") rc=$GRADE_RC"
 }
-do_no_fraction() {
+frac_plant() {  # <plant> <replacement for "floor=0.90 "> <harness token>
   local dest
-  dest=$(stage "$WORK/nofrac")
-  sed -i 's/^count-unspecified nextvar.lua floor=0\.90 /count-unspecified nextvar.lua /' "$dest/corpus/S.manifest"
+  dest=$(stage "$WORK/$1")
+  sed -i "s/^count-unspecified nextvar.lua floor=0\.90 /count-unspecified nextvar.lua $2/" "$dest/corpus/S.manifest"
   run_at_grade "$dest/tools/grade.sh" --candidate "$COUNT" --ref "$REF" --tier S --only goto.lua
-  harness no-fraction "has no floor=0.N fraction"
+  harness "$1" "$3"
 }
+do_no_fraction() { frac_plant no-fraction "" "has no floor=0.N fraction"; }
+do_floor_zero() { frac_plant floor-zero "floor=0.00 " "must be in (0,1)"; }
 dispatch() {
   local fn="do_${1//-/_}"
   if declare -F "$fn" >/dev/null; then "$fn"; else printf 'selftest: unknown plant %s\n' "$1" >&2; bad=1; fi
@@ -237,7 +241,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi

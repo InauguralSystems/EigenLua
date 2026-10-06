@@ -21,3 +21,9 @@ print(table.concat(nums, " "))
 local pos = {}
 for p in string.gmatch("aXbXc", "()X") do pos[#pos + 1] = p end
 print(table.concat(pos, " "))
+-- subject over 64 bytes
+local long = string.rep("abcdefghij", 9) .. "NEEDLE" .. string.rep("z", 20)
+print(#long, string.find(long, "NEEDLE", 1, true))
+print(string.find(long, "N(%u+)E", 80))
+print(string.find(long, "z+$"))
+print(string.find(long, "j", 85, true), string.find(long, "j", -30, true))
