@@ -1,0 +1,845 @@
+# EigenLua emitter: Lua AST -> EigenScript source.
+#
+# Two passes. The resolver binds every Name to a local variable record (or to
+# _ENV, a global) and marks the locals that an inner function captures. The
+# emitter then writes one EigenScript program:
+#   - every Lua function becomes a top-level factory F<id>(U) whose body binds
+#     the function's upvalue cells from U and defines f<id>(A); creating a
+#     closure is `F<id> of ([cells])`, so each closure gets the cells live at
+#     its creation (fresh per loop iteration);
+#   - a captured local is a cell, a one-element list `c<id>`; any other local
+#     is a plain EigenScript local `v<id>`; every name is unique, so Lua block
+#     scoping and shadowing cannot meet EigenScript's outward-mutable `is`;
+#   - a Lua function takes one list A of arguments and returns a list of
+#     results; every operation that can fail or dispatch a metamethod is a
+#     runtime call carrying a site id, and the site table maps the id to the
+#     Lua line and the variable descriptions Lua puts in its messages.
+# A construct the emitter does not handle raises ["UNSUP", what, line].
+
+define em_unsup(what, line) as:
+    throw of ["UNSUP", what, line]
+
+# ---------------------------------------------------------------- resolver
+
+define rs_new_var(R, name, fn, attr) as:
+    R.G.vid is R.G.vid + 1
+    return {"id": R.G.vid, "name": name, "fn": fn, "cap": 0, "attr": attr}
+
+define rs_declare(R, v) as:
+    local sc is R.scopes[len of R.scopes - 1]
+    sc[v.name] is v
+
+define rs_push(R) as:
+    append of [R.scopes, {}]
+
+define rs_pop(R) as:
+    list_truncate of [R.scopes, len of R.scopes - 1]
+
+define rs_lookup(R, name) as:
+    local i is len of R.scopes - 1
+    loop while i >= 0:
+        local sc is R.scopes[i]
+        local v is sc[name]
+        if v != null:
+            return v
+        i is i - 1
+    return null
+
+# Mark v captured and thread it through every function from fn up to v.fn.
+define rs_capture(R, v, fn) as:
+    v.cap is 1
+    local g is fn
+    loop while g != null and g.id != v.fn.id:
+        local key is str of v.id
+        if not (has_key of [g.freeidx, key]):
+            g.freeidx[key] is len of g.free
+            append of [g.free, v]
+        g is g.parent
+
+define rs_func(R, fn, parent) as:
+    R.G.fid is R.G.fid + 1
+    fn.id is R.G.fid
+    fn.parent is parent
+    fn.free is []
+    fn.freeidx is {}
+    local saved is R.fn
+    R.fn is fn
+    rs_push of (R)
+    local pv is []
+    for p in fn.params:
+        local v is rs_new_var of [R, p, fn, ""]
+        rs_declare of [R, v]
+        append of [pv, v]
+    fn.pvars is pv
+    rs_block of [R, fn.body]
+    rs_pop of (R)
+    R.fn is saved
+
+define rs_block(R, stats) as:
+    rs_push of (R)
+    for s in stats:
+        rs_stat of [R, s]
+    rs_pop of (R)
+
+define rs_stat(R, s) as:
+    local k is s.k
+    if k == "Local":
+        for e in s.exprs:
+            rs_expr of [R, e]
+        local vs is []
+        local i is 0
+        for nm in s.names:
+            local at is s.attribs[i]
+            if at == "close":
+                em_unsup of ["local <close> attribute", s.line]
+            local v is rs_new_var of [R, nm, R.fn, at]
+            append of [vs, v]
+            i is i + 1
+        for v in vs:
+            if v.name == "_ENV":
+                em_unsup of ["local named _ENV", s.line]
+            rs_declare of [R, v]
+        s.vars is vs
+    elif k == "LocalFunction":
+        local v is rs_new_var of [R, s.name, R.fn, ""]
+        if s.name == "_ENV":
+            em_unsup of ["local named _ENV", s.line]
+        rs_declare of [R, v]
+        s.var is v
+        rs_func of [R, s.func, R.fn]
+    elif k == "Assign":
+        for t in s.targets:
+            rs_expr of [R, t]
+            if t.k == "Name" and t.var != null and t.var.attr != "":
+                throw of ["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"]
+        for e in s.exprs:
+            rs_expr of [R, e]
+    elif k == "CallStat":
+        rs_expr of [R, s.e]
+    elif k == "Do":
+        rs_block of [R, s.body]
+    elif k == "While":
+        rs_expr of [R, s.cond]
+        rs_block of [R, s.body]
+    elif k == "Repeat":
+        # the condition sees the body's locals
+        rs_push of (R)
+        for b in s.body:
+            rs_stat of [R, b]
+        rs_expr of [R, s.cond]
+        rs_pop of (R)
+    elif k == "If":
+        for c in s.conds:
+            rs_expr of [R, c]
+        for b in s.blocks:
+            rs_block of [R, b]
+        if s["else"] != null:
+            rs_block of [R, s["else"]]
+    elif k == "NumFor":
+        rs_expr of [R, s.a]
+        rs_expr of [R, s.b]
+        if s.c != null:
+            rs_expr of [R, s.c]
+        rs_push of (R)
+        local v is rs_new_var of [R, s.var, R.fn, ""]
+        rs_declare of [R, v]
+        s.v is v
+        rs_block of [R, s.body]
+        rs_pop of (R)
+    elif k == "GenFor":
+        for e in s.exprs:
+            rs_expr of [R, e]
+        rs_push of (R)
+        local vs is []
+        for nm in s.names:
+            local v is rs_new_var of [R, nm, R.fn, ""]
+            rs_declare of [R, v]
+            append of [vs, v]
+        s.vars is vs
+        rs_block of [R, s.body]
+        rs_pop of (R)
+    elif k == "Return":
+        for e in s.exprs:
+            rs_expr of [R, e]
+    elif k == "Break":
+        null
+    elif k == "Goto":
+        em_unsup of ["goto", s.line]
+    elif k == "Label":
+        em_unsup of ["label (goto target)", s.line]
+    else:
+        throw of ["INTERNAL", "unknown statement " + k]
+
+define rs_expr(R, e) as:
+    local k is e.k
+    if k == "Name":
+        local v is rs_lookup of [R, e.n]
+        e.var is v
+        if v != null and v.fn.id != R.fn.id:
+            rs_capture of [R, v, R.fn]
+        if v == null and e.n == "_ENV":
+            em_unsup of ["_ENV", e.line]
+    elif k == "Index":
+        rs_expr of [R, e.o]
+        rs_expr of [R, e.key]
+    elif k == "Call":
+        rs_expr of [R, e.f]
+        for a in e.args:
+            rs_expr of [R, a]
+    elif k == "MCall":
+        rs_expr of [R, e.o]
+        for a in e.args:
+            rs_expr of [R, a]
+    elif k == "Paren":
+        rs_expr of [R, e.e]
+    elif k == "Bin":
+        rs_expr of [R, e.a]
+        rs_expr of [R, e.b]
+    elif k == "Un":
+        rs_expr of [R, e.a]
+    elif k == "Table":
+        for it in e.items:
+            if it.t == "kv":
+                rs_expr of [R, it.key]
+            rs_expr of [R, it.e]
+    elif k == "Func":
+        rs_func of [R, e, R.fn]
+
+# ---------------------------------------------------------------- emitter
+
+define em_line(E, text) as:
+    append of [E.out, E.ind + text]
+
+define em_indent(E) as:
+    E.ind is E.ind + "    "
+
+define em_dedent(E) as:
+    E.ind is E.ind[4:]
+
+define em_tmp(E) as:
+    E.G.tmp is E.G.tmp + 1
+    return "t" + (str of E.G.tmp)
+
+# A site is [line, descriptor_a, descriptor_b]; its id indexes the table.
+define em_site(E, line, da, db) as:
+    append of [E.G.sites, [line, da, db]]
+    return str of (len of E.G.sites - 1)
+
+# Lua's variable description for an operand, as in its error messages.
+define em_desc(E, e) as:
+    if e.k == "Name":
+        if e.var == null:
+            return "global '" + e.n + "'"
+        if e.var.fn.id != E.fn.id:
+            return "upvalue '" + e.n + "'"
+        return "local '" + e.n + "'"
+    if e.k == "Index" and e.key.k == "Str":
+        return "field '" + e.key.v + "'"
+    if e.k == "Str":
+        return "constant '" + e.v + "'"
+    return ""
+
+define em_var_ref(v) as:
+    if v.cap:
+        return "c" + (str of v.id) + "[0]"
+    return "v" + (str of v.id)
+
+define em_strlit(s) as:
+    local parts is ["\""]
+    local n is len of s
+    local seg is 0
+    local i is 0
+    loop while i < n:
+        local c is s[i]
+        if c == "\\" or c == "\"" or c == "\n":
+            append of [parts, s[seg:i]]
+            if c == "\n":
+                append of [parts, "\\n"]
+            else:
+                append of [parts, "\\" + c]
+            seg is i + 1
+        i is i + 1
+    append of [parts, s[seg:n]]
+    append of [parts, "\""]
+    return join of [parts, ""]
+
+define em_numlit(E, v) as:
+    local s is str of v
+    if (num of s) == v and index_of of [s, "e"] < 0 and index_of of [s, "n"] < 0:
+        if v < 0:
+            return "(" + s + ")"
+        return s
+    if (num of s) == v and index_of of [s, "n"] < 0:
+        return "(num of \"" + s + "\")"
+    local b is f64_to_bytes of v
+    local bs is []
+    for x in b:
+        append of [bs, str of x]
+    return "(f64_from_bytes of ([" + (join of [bs, ", "]) + "]))"
+
+define em_is_multi(e) as:
+    return e.k == "Call" or e.k == "MCall" or e.k == "Vararg"
+
+# Pure code: reading it later gives the same value as reading it now,
+# whatever statements run in between.
+define em_pure(e) as:
+    local k is e.k
+    if k == "Nil" or k == "True" or k == "False" or k == "Num" or k == "Str":
+        return 1
+    if k == "Name" and e.var != null and e.var.cap == 0:
+        return 1
+    return 0
+
+# Compile operands left to right. When a later operand hoists statements, an
+# earlier impure operand is pinned into a temp at its own position, so Lua's
+# left-to-right order of evaluation survives the hoisting.
+define em_operands(E, exprs) as:
+    local codes is []
+    local pos is []
+    local pures is []
+    for e in exprs:
+        local c is em_expr of [E, e]
+        append of [codes, c]
+        append of [pos, len of E.out]
+        append of [pures, (em_pure of (e)) or (em_is_tmp of (c))]
+    local n is len of codes
+    local i is n - 2
+    loop while i >= 0:
+        if pures[i] == 0 and pos[i] < len of E.out and pos[i] < pos[n - 1]:
+            local t is em_tmp of (E)
+            list_insert_at of [E.out, pos[i], E.ind + "local " + t + " is " + codes[i]]
+            codes[i] is t
+        i is i - 1
+    return codes
+
+define em_is_tmp(c) as:
+    if len of c < 2 or c[0] != "t":
+        return 0
+    local i is 1
+    loop while i < len of c:
+        local ch is ord of c[i]
+        if ch < 48 or ch > 57:
+            return 0
+        i is i + 1
+    return 1
+
+# Expression list -> code for a list of all its values (last one expanded).
+define em_explist(E, exprs) as:
+    local n is len of exprs
+    if n == 0:
+        return "[]"
+    local last is exprs[n - 1]
+    if not (em_is_multi of (last)):
+        local codes is em_operands of [E, exprs]
+        return em_listlit of (codes)
+    local front is list_slice of [exprs, 0, n - 1]
+    local all is em_operands_multi of [E, front, last]
+    local codes2 is all[0]
+    local tail is all[1]
+    if len of codes2 == 0:
+        return tail
+    return "(concat of [" + (em_listlit of (codes2)) + ", " + tail + "])"
+
+# Operands front (single values) then the multi-valued last expression.
+define em_operands_multi(E, front, last) as:
+    local codes is []
+    local pos is []
+    local pures is []
+    for e in front:
+        local c is em_expr of [E, e]
+        append of [codes, c]
+        append of [pos, len of E.out]
+        append of [pures, (em_pure of (e)) or (em_is_tmp of (c))]
+    local tail is em_multi of [E, last]
+    local n is len of codes
+    local i is n - 1
+    loop while i >= 0:
+        if pures[i] == 0 and pos[i] < len of E.out:
+            local t is em_tmp of (E)
+            list_insert_at of [E.out, pos[i], E.ind + "local " + t + " is " + codes[i]]
+            codes[i] is t
+        i is i - 1
+    return [codes, tail]
+
+# A list literal; EigenScript caps a literal at 1024 elements.
+define em_listlit(codes) as:
+    local n is len of codes
+    if n <= 512:
+        return "[" + (join of [codes, ", "]) + "]"
+    local chunks is []
+    local i is 0
+    loop while i < n:
+        local j is min of [i + 512, n]
+        append of [chunks, "[" + (join of [list_slice of [codes, i, j], ", "]) + "]"]
+        i is j
+    local acc is chunks[0]
+    local k is 1
+    loop while k < len of chunks:
+        acc is "(concat of [" + acc + ", " + chunks[k] + "])"
+        k is k + 1
+    return acc
+
+# Multi-valued expression -> code for the list of its values.
+define em_multi(E, e) as:
+    if e.k == "Vararg":
+        return "V"
+    if e.k == "Call" or e.k == "MCall":
+        return em_call of [E, e, 1]
+    return "[" + (em_expr of [E, e]) + "]"
+
+# Call -> a temp holding the list of results (want_list) or its first value.
+define em_call(E, e, want_list) as:
+    local t is em_tmp of (E)
+    local fnname is "lr_call1"
+    if want_list:
+        fnname is "lr_call"
+    if e.k == "MCall":
+        local site is em_site of [E, e.line, "method '" + e.m + "'", ""]
+        local oc is em_expr of [E, e.o]
+        local opos is len of E.out
+        local args is em_explist of [E, e.args]
+        if not (em_pure of (e.o)) and not (em_is_tmp of (oc)) and opos < len of E.out:
+            local t0 is em_tmp of (E)
+            list_insert_at of [E.out, opos, E.ind + "local " + t0 + " is " + oc]
+            oc is t0
+        local mn is "lr_mcall1"
+        if want_list:
+            mn is "lr_mcall"
+        em_line of [E, "local " + t + " is " + mn + " of [" + oc + ", " + (em_strlit of (e.m)) + ", " + args + ", " + site + "]"]
+        return t
+    local site is em_site of [E, e.line, em_desc of [E, e.f], ""]
+    local fc is em_expr of [E, e.f]
+    local fpos is len of E.out
+    local args is em_explist of [E, e.args]
+    if not (em_pure of (e.f)) and not (em_is_tmp of (fc)) and fpos < len of E.out:
+        local t0 is em_tmp of (E)
+        list_insert_at of [E.out, fpos, E.ind + "local " + t0 + " is " + fc]
+        fc is t0
+    em_line of [E, "local " + t + " is " + fnname + " of [" + fc + ", " + args + ", " + site + "]"]
+    return t
+
+define em_binop_fn(op) as:
+    local m is {"+": "lr_add", "-": "lr_sub", "*": "lr_mul", "/": "lr_div", "%": "lr_mod", "//": "lr_idiv", "^": "lr_pow", "..": "lr_concat", "==": "lr_eq", "~=": "lr_ne", "<": "lr_lt", "<=": "lr_le", ">": "lr_gt", ">=": "lr_ge", "&": "lr_band", "|": "lr_bor", "~": "lr_bxor", "<<": "lr_shl", ">>": "lr_shr"}
+    return m[op]
+
+# Single-valued expression -> EigenScript expression code (may hoist).
+define em_expr(E, e) as:
+    local k is e.k
+    if k == "Nil":
+        return "null"
+    if k == "True":
+        return "1"
+    if k == "False":
+        return "0"
+    if k == "Num":
+        return em_numlit of [E, e.v]
+    if k == "Str":
+        if e.z:
+            local site is em_site of [E, e.line, "", ""]
+            return "(lr_unsup of [\"string with an embedded NUL byte\", " + site + "])"
+        return em_strlit of (e.v)
+    if k == "Vararg":
+        return "(lr_at of [V, 0])"
+    if k == "Name":
+        if e.var != null:
+            return em_var_ref of (e.var)
+        local site is em_site of [E, e.line, "global '" + e.n + "'", ""]
+        return "(lr_gget of [" + (em_strlit of (e.n)) + ", " + site + "])"
+    if k == "Paren":
+        return em_expr of [E, e.e]
+    if k == "Index":
+        local site is em_site of [E, e.line, em_desc of [E, e.o], em_desc of [E, e]]
+        local cs is em_operands of [E, [e.o, e.key]]
+        return "(lr_index of [" + cs[0] + ", " + cs[1] + ", " + site + "])"
+    if k == "Call" or k == "MCall":
+        return em_call of [E, e, 0]
+    if k == "Func":
+        return em_closure of [E, e]
+    if k == "Table":
+        return em_table of [E, e]
+    if k == "Un":
+        local site is em_site of [E, e.line, em_desc of [E, e.a], ""]
+        local a is em_expr of [E, e.a]
+        if e.op == "not":
+            return "(lr_not of (" + a + "))"
+        if e.op == "-":
+            return "(lr_unm of [" + a + ", " + site + "])"
+        if e.op == "#":
+            return "(lr_len of [" + a + ", " + site + "])"
+        return "(lr_bnot of [" + a + ", " + site + "])"
+    if k == "Bin":
+        if e.op == "and" or e.op == "or":
+            return em_andor of [E, e]
+        local site is em_site of [E, e.line, em_desc of [E, e.a], em_desc of [E, e.b]]
+        local cs is em_operands of [E, [e.a, e.b]]
+        return "(" + (em_binop_fn of (e.op)) + " of [" + cs[0] + ", " + cs[1] + ", " + site + "])"
+    throw of ["INTERNAL", "unknown expression " + k]
+
+# Truth test of e as EigenScript code that is 1 or 0.
+define em_cond(E, e) as:
+    if e.k == "Bin" and (e.op == "==" or e.op == "~=" or e.op == "<" or e.op == "<=" or e.op == ">" or e.op == ">="):
+        return em_expr of [E, e]
+    if e.k == "Un" and e.op == "not":
+        return em_expr of [E, e]
+    if e.k == "True":
+        return "1"
+    if e.k == "False" or e.k == "Nil":
+        return "0"
+    return "(lr_t of (" + (em_expr of [E, e]) + "))"
+
+define em_andor(E, e) as:
+    local a is em_expr of [E, e.a]
+    if em_pure of (e.b):
+        local b0 is em_expr of [E, e.b]
+        if e.op == "and":
+            return "(lr_and of [" + a + ", " + b0 + "])"
+        return "(lr_or of [" + a + ", " + b0 + "])"
+    local t is em_tmp of (E)
+    em_line of [E, "local " + t + " is " + a]
+    if e.op == "and":
+        em_line of [E, "if lr_t of (" + t + "):"]
+    else:
+        em_line of [E, "if not (lr_t of (" + t + ")):"]
+    em_indent of (E)
+    local b is em_expr of [E, e.b]
+    em_line of [E, t + " is " + b]
+    em_dedent of (E)
+    return t
+
+define em_table(E, e) as:
+    local site is em_site of [E, e.line, "", ""]
+    local items is e.items
+    local n is len of items
+    if n == 0:
+        return "(lr_tnew of [[], [], " + site + "])"
+    # every field in source order; a trailing positional multi expands
+    local exprs is []
+    local kinds is []
+    local i is 0
+    for it in items:
+        if it.t == "kv":
+            append of [exprs, it.key]
+            append of [kinds, "k"]
+            append of [exprs, it.e]
+            append of [kinds, "v"]
+        else:
+            append of [exprs, it.e]
+            append of [kinds, "p"]
+    local lastpos is items[n - 1].t == "pos" and em_is_multi of (items[n - 1].e)
+    local codes is []
+    local tail is ""
+    if lastpos:
+        local r is em_operands_multi of [E, list_slice of [exprs, 0, len of exprs - 1], exprs[len of exprs - 1]]
+        codes is r[0]
+        tail is r[1]
+    else:
+        codes is em_operands of [E, exprs]
+    local pos is []
+    local kv is []
+    i is 0
+    loop while i < len of codes:
+        if kinds[i] == "p":
+            append of [pos, codes[i]]
+        else:
+            append of [kv, codes[i]]
+        i is i + 1
+    local pl is em_listlit of (pos)
+    if lastpos:
+        pl is "(concat of [" + pl + ", " + tail + "])"
+    return "(lr_tnew of [" + pl + ", " + (em_listlit of (kv)) + ", " + site + "])"
+
+define em_closure(E, fn) as:
+    em_function of [E.G, fn]
+    local cells is []
+    for v in fn.free:
+        append of [cells, "c" + (str of v.id)]
+    return "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
+
+# Emit the factory for fn into G.funcs.
+define em_function(G, fn) as:
+    local E is {"G": G, "out": [], "ind": "", "fn": fn}
+    local id is str of fn.id
+    em_line of [E, "define F" + id + "(U) as:"]
+    em_indent of (E)
+    local i is 0
+    for v in fn.free:
+        em_line of [E, "local c" + (str of v.id) + " is U[" + (str of i) + "]"]
+        i is i + 1
+    em_line of [E, "define f" + id + "(A) as:"]
+    em_indent of (E)
+    local np is len of fn.pvars
+    i is 0
+    for v in fn.pvars:
+        local val is "lr_at of [A, " + (str of i) + "]"
+        if v.cap:
+            em_line of [E, "local c" + (str of v.id) + " is [" + val + "]"]
+        else:
+            em_line of [E, "local v" + (str of v.id) + " is " + val]
+        i is i + 1
+    if fn.vararg:
+        em_line of [E, "local V is list_slice of [A, " + (str of np) + ", len of A]"]
+    em_block of [E, fn.body]
+    em_line of [E, "return []"]
+    em_dedent of (E)
+    em_line of [E, "return f" + id]
+    append of [G.funcs, join of [E.out, "\n"]]
+
+define em_block(E, stats) as:
+    for s in stats:
+        em_stat of [E, s]
+
+# Declare a local v with value code.
+define em_declare(E, v, code) as:
+    if v.cap:
+        em_line of [E, "local c" + (str of v.id) + " is [" + code + "]"]
+    else:
+        em_line of [E, "local v" + (str of v.id) + " is " + code]
+
+# Adjust an expression list to exactly n single values (codes), evaluating
+# every expression once, in order.
+define em_adjust(E, exprs, n) as:
+    local m is len of exprs
+    local out is []
+    if m == 0:
+        for i in range of n:
+            append of [out, "null"]
+        return out
+    local last is exprs[m - 1]
+    if m < n and em_is_multi of (last):
+        local r is em_operands_multi of [E, list_slice of [exprs, 0, m - 1], last]
+        local codes is r[0]
+        local lt is em_tmp of (E)
+        em_line of [E, "local " + lt + " is " + r[1]]
+        for c in codes:
+            append of [out, c]
+        local j is 0
+        loop while len of out < n:
+            append of [out, "(lr_at of [" + lt + ", " + (str of j) + "])"]
+            j is j + 1
+        return out
+    local codes is em_operands of [E, exprs]
+    local i is 0
+    for c in codes:
+        if i < n:
+            append of [out, c]
+        else:
+            # surplus expressions are evaluated for their effects
+            em_line of [E, c]
+        i is i + 1
+    loop while len of out < n:
+        append of [out, "null"]
+    return out
+
+# Pin every non-temp code into a temp so later statements cannot change it.
+define em_pin(E, codes) as:
+    local out is []
+    for c in codes:
+        if em_is_tmp of (c) or c == "null" or c == "0" or c == "1":
+            append of [out, c]
+        else:
+            local t is em_tmp of (E)
+            em_line of [E, "local " + t + " is " + c]
+            append of [out, t]
+    return out
+
+define em_assign_to(E, target, code, site_line) as:
+    if target.k == "Name":
+        if target.var != null:
+            em_line of [E, (em_var_ref of (target.var)) + " is " + code]
+        else:
+            local site is em_site of [E, site_line, "", ""]
+            em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+        return null
+    throw of ["INTERNAL", "assign target"]
+
+define em_stat(E, s) as:
+    local k is s.k
+    if k == "Local":
+        local vals is em_adjust of [E, s.exprs, len of s.vars]
+        if len of s.vars > 1:
+            vals is em_pin of [E, vals]
+        local i is 0
+        for v in s.vars:
+            em_declare of [E, v, vals[i]]
+            i is i + 1
+    elif k == "LocalFunction":
+        local v is s.var
+        if v.cap:
+            em_line of [E, "local c" + (str of v.id) + " is [null]"]
+            local fc is em_closure of [E, s.func]
+            em_line of [E, "c" + (str of v.id) + "[0] is " + fc]
+        else:
+            local fc is em_closure of [E, s.func]
+            em_line of [E, "local v" + (str of v.id) + " is " + fc]
+    elif k == "Assign":
+        em_assign of [E, s]
+    elif k == "CallStat":
+        em_call of [E, s.e, 1]
+    elif k == "Do":
+        em_block of [E, s.body]
+    elif k == "While":
+        local mark is len of E.out
+        local c is em_cond of [E, s.cond]
+        if len of E.out == mark:
+            em_line of [E, "loop while " + c + ":"]
+            em_indent of (E)
+        else:
+            # the condition hoisted statements: they re-run each iteration
+            local hoisted is list_slice of [E.out, mark, len of E.out]
+            list_truncate of [E.out, mark]
+            em_line of [E, "loop while 1:"]
+            for h in hoisted:
+                append of [E.out, "    " + h]
+            em_indent of (E)
+            em_line of [E, "if not (" + c + "):"]
+            em_line of [E, "    break"]
+        em_block of [E, s.body]
+        em_line of [E, "null"]
+        em_dedent of (E)
+    elif k == "Repeat":
+        em_line of [E, "loop while 1:"]
+        em_indent of (E)
+        em_block of [E, s.body]
+        local c is em_cond of [E, s.cond]
+        em_line of [E, "if " + c + ":"]
+        em_line of [E, "    break"]
+        em_dedent of (E)
+    elif k == "If":
+        em_if of [E, s, 0]
+    elif k == "NumFor":
+        em_numfor of [E, s]
+    elif k == "GenFor":
+        em_genfor of [E, s]
+    elif k == "Return":
+        local n is len of s.exprs
+        if n == 1 and em_is_multi of (s.exprs[0]):
+            em_line of [E, "return " + (em_multi of [E, s.exprs[0]])]
+        else:
+            em_line of [E, "return " + (em_explist of [E, s.exprs])]
+    elif k == "Break":
+        em_line of [E, "break"]
+    else:
+        em_unsup of [k, s.line]
+
+define em_if(E, s, i) as:
+    local c is em_cond of [E, s.conds[i]]
+    em_line of [E, "if " + c + ":"]
+    em_indent of (E)
+    em_block of [E, s.blocks[i]]
+    em_line of [E, "null"]
+    em_dedent of (E)
+    if i + 1 < len of s.conds:
+        em_line of [E, "else:"]
+        em_indent of (E)
+        em_if of [E, s, i + 1]
+        em_dedent of (E)
+    elif s["else"] != null:
+        em_line of [E, "else:"]
+        em_indent of (E)
+        em_block of [E, s["else"]]
+        em_line of [E, "null"]
+        em_dedent of (E)
+
+define em_assign(E, s) as:
+    local targets is s.targets
+    local nt is len of targets
+    if nt == 1 and len of s.exprs == 1:
+        local tg is targets[0]
+        if tg.k == "Name":
+            local c is em_expr of [E, s.exprs[0]]
+            em_assign_to of [E, tg, c, s.line]
+            return null
+        local site is em_site of [E, tg.line, em_desc of [E, tg.o], ""]
+        local cs is em_operands of [E, [tg.o, tg.key, s.exprs[0]]]
+        em_line of [E, "lr_setindex of [" + cs[0] + ", " + cs[1] + ", " + cs[2] + ", " + site + "]"]
+        return null
+    # general case: evaluate target prefixes and keys, then all values, then
+    # assign right to left (as PUC-Rio does)
+    local tcodes is []
+    for tg in targets:
+        if tg.k == "Index":
+            local cs is em_operands of [E, [tg.o, tg.key]]
+            append of [tcodes, em_pin of [E, cs]]
+        else:
+            append of [tcodes, null]
+    local vals is em_pin of [E, em_adjust of [E, s.exprs, nt]]
+    local i is nt - 1
+    loop while i >= 0:
+        local tg is targets[i]
+        if tg.k == "Name":
+            em_assign_to of [E, tg, vals[i], s.line]
+        else:
+            local site is em_site of [E, tg.line, em_desc of [E, tg.o], ""]
+            em_line of [E, "lr_setindex of [" + tcodes[i][0] + ", " + tcodes[i][1] + ", " + vals[i] + ", " + site + "]"]
+        i is i - 1
+    return null
+
+define em_numfor(E, s) as:
+    local site is em_site of [E, s.line, "", ""]
+    local c3 is "1"
+    local cs is []
+    if s.c != null:
+        cs is em_operands of [E, [s.a, s.b, s.c]]
+        c3 is cs[2]
+    else:
+        cs is em_operands of [E, [s.a, s.b]]
+    local tp is em_tmp of (E)
+    em_line of [E, "local " + tp + " is lr_forprep of [" + cs[0] + ", " + cs[1] + ", " + c3 + ", " + site + "]"]
+    local ti is em_tmp of (E)
+    local ts is em_tmp of (E)
+    local tl is em_tmp of (E)
+    local st is em_tmp of (E)
+    em_line of [E, "local " + ti + " is " + tp + "[0]"]
+    em_line of [E, "local " + tl + " is " + tp + "[1]"]
+    em_line of [E, "local " + st + " is " + tp + "[2]"]
+    em_line of [E, "local " + ts + " is " + tp + "[3]"]
+    em_line of [E, "loop while " + ti + " * " + ts + " <= " + tl + ":"]
+    em_indent of (E)
+    em_declare of [E, s.v, ti]
+    em_line of [E, ti + " is " + ti + " + " + st]
+    em_block of [E, s.body]
+    em_line of [E, "null"]
+    em_dedent of (E)
+
+define em_genfor(E, s) as:
+    local site is em_site of [E, s.eline, "", ""]
+    local vals is em_pin of [E, em_adjust of [E, s.exprs, 3]]
+    local tf is vals[0]
+    local tst is vals[1]
+    local tc is em_tmp of (E)
+    em_line of [E, "local " + tc + " is " + vals[2]]
+    em_line of [E, "loop while 1:"]
+    em_indent of (E)
+    local tr is em_tmp of (E)
+    em_line of [E, "local " + tr + " is lr_call of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
+    local i is 0
+    local t0 is em_tmp of (E)
+    em_line of [E, "local " + t0 + " is lr_at of [" + tr + ", 0]"]
+    em_line of [E, "if " + t0 + " == null:"]
+    em_line of [E, "    break"]
+    em_line of [E, tc + " is " + t0]
+    for v in s.vars:
+        if i == 0:
+            em_declare of [E, v, t0]
+        else:
+            em_declare of [E, v, "lr_at of [" + tr + ", " + (str of i) + "]"]
+        i is i + 1
+    em_block of [E, s.body]
+    em_line of [E, "null"]
+    em_dedent of (E)
+
+define emit_program(ast, file, runtime) as:
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local R is {"G": G, "scopes": [], "fn": null}
+    rs_func of [R, ast, null]
+    em_function of [G, ast]
+    local out is []
+    append of [out, "load_file of " + (em_strlit of (runtime))]
+    append of [out, "S is []"]
+    for st in G.sites:
+        append of [out, "append of [S, [" + (str of st[0]) + ", " + (em_strlit of (st[1])) + ", " + (em_strlit of (st[2])) + "]]"]
+    for f in G.funcs:
+        append of [out, f]
+    append of [out, "unobserved:"]
+    append of [out, "    lr_main of [F" + (str of ast.id) + " of ([]), " + (em_strlit of (file)) + ", S]"]
+    return (join of [out, "\n"]) + "\n"

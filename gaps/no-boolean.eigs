@@ -1,0 +1,13 @@
+# EigenScript gap: no boolean type (EigenScript#1286 row "Booleans folded into
+# another type": a boolean type, or numbers-as-truth documented as permanent).
+# Lua:      print(1 == 1, type(1 == 1), 0 == false) -> true  boolean  false
+#           and 0 is truthy, false is not.
+# Expected: a comparison yields a value distinct from the number 1, with its
+#           own type, so false and 0 (and true and 1) can be told apart.
+# Actual v0.44.0:  1 / num / 1 / 1   (false and 0 are the same value)
+# Rows: assert-trust probe (all 23 S rows), err_nonstr, meta_eq, meta_lt,
+#       str_case_rev_sub, tbl_*, int_* (D).
+print of (1 == 1)
+print of (type of (1 == 1))
+print of ((1 == 2) == 0)
+print of ((1 == 1) == 1)

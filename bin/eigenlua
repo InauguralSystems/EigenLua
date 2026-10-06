@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# eigenlua <prog.lua>: compile Lua 5.4 to EigenScript (src/compile.eigs), then
+# run it on the EigenScript VM. Exit status is the program's; the runtime
+# prints EIGENLUA-ASSERTS:<n> on stderr at exit. Unsupported constructs exit 3
+# with EIGENLUA-UNSUPPORTED: <construct> at <file>:<line>.
+# The VM is $EIGENSCRIPT, else .tmp/eigenscript-linux-x86_64, and must be 0.44.0.
+set -u
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+ES=${EIGENSCRIPT:-$ROOT/.tmp/eigenscript-linux-x86_64}
+[[ $# -eq 1 ]] || { echo "usage: eigenlua <prog.lua>" >&2; exit 2; }
+[[ -x $ES ]] || { echo "eigenlua: EigenScript VM not found: $ES" >&2; exit 2; }
+[[ $("$ES" --version 2>&1) == 0.44.0 ]] || { echo "eigenlua: $ES is not EigenScript 0.44.0" >&2; exit 2; }
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/eigenlua.XXXXXX") || exit 2
+trap 'rm -rf "$tmp"' EXIT
+"$ES" "$ROOT/src/compile.eigs" "$1" "$tmp/prog.eigs" "$ROOT/src/runtime.eigs" || exit $?
+"$ES" "$tmp/prog.eigs"

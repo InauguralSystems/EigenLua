@@ -1,0 +1,489 @@
+# EigenLua parser: tokens -> AST for the full Lua 5.4 grammar (manual 9).
+# Nodes are dicts keyed by "k". A syntax error raises ["SYNTAX", line, msg]
+# with Lua's wording where it is cheap to match.
+
+define ps_new(tk) as:
+    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "i": 0, "va": [1], "loops": [0]}
+
+define ps_t(P) as:
+    return P.t[P.i]
+
+define ps_line(P) as:
+    return P.l[P.i]
+
+define ps_near(P) as:
+    local t is P.t[P.i]
+    if t == "eof":
+        return "<eof>"
+    return P.v[P.i]
+
+define ps_err(P, msg) as:
+    if P.t[P.i] == "eof":
+        throw of ["SYNTAX", P.l[P.i], msg + " near <eof>"]
+    throw of ["SYNTAX", P.l[P.i], msg + " near '" + (ps_near of (P)) + "'"]
+
+define ps_next(P) as:
+    P.i is P.i + 1
+
+define ps_check(P, t) as:
+    if P.t[P.i] != t:
+        ps_err of [P, (ps_tokname of (t)) + " expected"]
+
+define ps_tokname(t) as:
+    if t == "name":
+        return "<name>"
+    return "'" + t + "'"
+
+define ps_expect(P, t) as:
+    ps_check of [P, t]
+    P.i is P.i + 1
+
+# Expect a closing token, naming the opener when it is on another line.
+define ps_match(P, what, who, line) as:
+    if P.t[P.i] != what:
+        if line == P.l[P.i]:
+            ps_err of [P, "'" + what + "' expected"]
+        ps_err of [P, "'" + what + "' expected (to close '" + who + "' at line " + (str of line) + ")"]
+    P.i is P.i + 1
+
+define ps_name(P) as:
+    ps_check of [P, "name"]
+    local v is P.v[P.i]
+    P.i is P.i + 1
+    return v
+
+define ps_block_follow(P, with_until) as:
+    local t is P.t[P.i]
+    if t == "else" or t == "elseif" or t == "end" or t == "eof":
+        return 1
+    if t == "until":
+        return with_until
+    return 0
+
+define lua_parse(tk) as:
+    local P is ps_new of (tk)
+    local body is ps_block of (P)
+    ps_check of [P, "eof"]
+    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
+
+define ps_block(P) as:
+    local stats is []
+    loop while 1:
+        local t is P.t[P.i]
+        if t == "return":
+            append of [stats, ps_retstat of (P)]
+            return stats
+        if ps_block_follow of [P, 1]:
+            return stats
+        local s is ps_statement of (P)
+        if s != null:
+            append of [stats, s]
+    return stats
+
+define ps_retstat(P) as:
+    local line is P.l[P.i]
+    ps_next of (P)
+    local exprs is []
+    local t is P.t[P.i]
+    if not (ps_block_follow of [P, 1]) and t != ";":
+        exprs is ps_explist of (P)
+    if P.t[P.i] == ";":
+        ps_next of (P)
+    if not (ps_block_follow of [P, 1]):
+        ps_err of [P, "'<eof>' expected"]
+    return {"k": "Return", "exprs": exprs, "line": line}
+
+define ps_statement(P) as:
+    local line is P.l[P.i]
+    local t is P.t[P.i]
+    if t == ";":
+        ps_next of (P)
+        return null
+    if t == "if":
+        return ps_if of (P)
+    if t == "while":
+        ps_next of (P)
+        local cond is ps_expr of (P)
+        ps_expect of [P, "do"]
+        local body is ps_loop_block of (P)
+        ps_match of [P, "end", "while", line]
+        return {"k": "While", "cond": cond, "body": body, "line": line}
+    if t == "do":
+        ps_next of (P)
+        local body is ps_block of (P)
+        ps_match of [P, "end", "do", line]
+        return {"k": "Do", "body": body, "line": line}
+    if t == "for":
+        return ps_for of (P)
+    if t == "repeat":
+        ps_next of (P)
+        local body is ps_loop_block_until of (P)
+        ps_match of [P, "until", "repeat", line]
+        local cond is ps_expr of (P)
+        return {"k": "Repeat", "body": body, "cond": cond, "line": line}
+    if t == "function":
+        ps_next of (P)
+        local nline is P.l[P.i]
+        local nm is ps_name of (P)
+        local target is {"k": "Name", "n": nm, "line": nline}
+        local fullname is nm
+        local is_method is 0
+        loop while P.t[P.i] == ".":
+            ps_next of (P)
+            local kl is P.l[P.i]
+            local key is ps_name of (P)
+            fullname is fullname + "." + key
+            target is {"k": "Index", "o": target, "key": {"k": "Str", "v": key, "z": 0}, "line": kl}
+        if P.t[P.i] == ":":
+            ps_next of (P)
+            local kl is P.l[P.i]
+            local key is ps_name of (P)
+            fullname is fullname + ":" + key
+            target is {"k": "Index", "o": target, "key": {"k": "Str", "v": key, "z": 0}, "line": kl}
+            is_method is 1
+        local fn is ps_body of [P, is_method, line]
+        fn.name is fullname
+        return {"k": "Assign", "targets": [target], "exprs": [fn], "line": line, "fstat": 1}
+    if t == "local":
+        ps_next of (P)
+        if P.t[P.i] == "function":
+            ps_next of (P)
+            local nm is ps_name of (P)
+            local fn is ps_body of [P, 0, line]
+            fn.name is nm
+            return {"k": "LocalFunction", "name": nm, "func": fn, "line": line}
+        local names is []
+        local attribs is []
+        local go is 1
+        loop while go:
+            append of [names, ps_name of (P)]
+            local at is ""
+            if P.t[P.i] == "<":
+                ps_next of (P)
+                at is ps_name of (P)
+                if at != "const" and at != "close":
+                    throw of ["SYNTAX", P.l[P.i], "unknown attribute '" + at + "'"]
+                ps_expect of [P, ">"]
+            append of [attribs, at]
+            go is 0
+            if P.t[P.i] == ",":
+                ps_next of (P)
+                go is 1
+        local nclose is 0
+        for a in attribs:
+            if a == "close":
+                nclose is nclose + 1
+        if nclose > 1:
+            ps_err of [P, "multiple to-be-closed variables in local list"]
+        local exprs is []
+        if P.t[P.i] == "=":
+            ps_next of (P)
+            exprs is ps_explist of (P)
+        return {"k": "Local", "names": names, "attribs": attribs, "exprs": exprs, "line": line}
+    if t == "::":
+        ps_next of (P)
+        local nm is ps_name of (P)
+        ps_expect of [P, "::"]
+        return {"k": "Label", "name": nm, "line": line}
+    if t == "return":
+        return ps_retstat of (P)
+    if t == "break":
+        ps_next of (P)
+        local lp is P.loops
+        if lp[len of lp - 1] == 0:
+            throw of ["SYNTAX", line, "break outside loop at line " + (str of line)]
+        return {"k": "Break", "line": line}
+    if t == "goto":
+        ps_next of (P)
+        local nm is ps_name of (P)
+        return {"k": "Goto", "name": nm, "line": line}
+    return ps_exprstat of (P)
+
+define ps_loop_block(P) as:
+    append of [P.loops, 1]
+    local b is ps_block of (P)
+    list_truncate of [P.loops, len of P.loops - 1]
+    return b
+
+define ps_loop_block_until(P) as:
+    return ps_loop_block of (P)
+
+define ps_if(P) as:
+    local line is P.l[P.i]
+    ps_next of (P)
+    local conds is []
+    local blocks is []
+    append of [conds, ps_expr of (P)]
+    ps_expect of [P, "then"]
+    append of [blocks, ps_block of (P)]
+    local els is null
+    loop while P.t[P.i] == "elseif":
+        ps_next of (P)
+        append of [conds, ps_expr of (P)]
+        ps_expect of [P, "then"]
+        append of [blocks, ps_block of (P)]
+    if P.t[P.i] == "else":
+        ps_next of (P)
+        els is ps_block of (P)
+    ps_match of [P, "end", "if", line]
+    return {"k": "If", "conds": conds, "blocks": blocks, "else": els, "line": line}
+
+define ps_for(P) as:
+    local line is P.l[P.i]
+    ps_next of (P)
+    local n1 is ps_name of (P)
+    if P.t[P.i] == "=":
+        ps_next of (P)
+        local a is ps_expr of (P)
+        ps_expect of [P, ","]
+        local b is ps_expr of (P)
+        local c is null
+        if P.t[P.i] == ",":
+            ps_next of (P)
+            c is ps_expr of (P)
+        ps_expect of [P, "do"]
+        local body is ps_loop_block of (P)
+        ps_match of [P, "end", "for", line]
+        return {"k": "NumFor", "var": n1, "a": a, "b": b, "c": c, "body": body, "line": line}
+    if P.t[P.i] == "," or P.t[P.i] == "in":
+        local names is [n1]
+        loop while P.t[P.i] == ",":
+            ps_next of (P)
+            append of [names, ps_name of (P)]
+        ps_expect of [P, "in"]
+        local eline is P.l[P.i]
+        local exprs is ps_explist of (P)
+        ps_expect of [P, "do"]
+        local body is ps_loop_block of (P)
+        ps_match of [P, "end", "for", line]
+        return {"k": "GenFor", "names": names, "exprs": exprs, "body": body, "line": line, "eline": eline}
+    ps_err of [P, "'=' or 'in' expected"]
+
+# funcbody: '(' [parlist] ')' block end. is_method prepends "self".
+define ps_body(P, is_method, line) as:
+    local params is []
+    if is_method:
+        append of [params, "self"]
+    local vararg is 0
+    ps_expect of [P, "("]
+    if P.t[P.i] != ")":
+        local go is 1
+        loop while go:
+            if P.t[P.i] == "...":
+                ps_next of (P)
+                vararg is 1
+                go is 0
+            elif P.t[P.i] == "name":
+                append of [params, ps_name of (P)]
+                go is 0
+                if P.t[P.i] == ",":
+                    ps_next of (P)
+                    go is 1
+            else:
+                ps_err of [P, "<name> expected"]
+    ps_expect of [P, ")"]
+    append of [P.va, vararg]
+    append of [P.loops, 0]
+    local body is ps_block of (P)
+    list_truncate of [P.va, len of P.va - 1]
+    list_truncate of [P.loops, len of P.loops - 1]
+    local endline is P.l[P.i]
+    ps_match of [P, "end", "function", line]
+    return {"k": "Func", "params": params, "vararg": vararg, "body": body, "line": line, "endline": endline, "name": ""}
+
+define ps_explist(P) as:
+    local es is [ps_expr of (P)]
+    loop while P.t[P.i] == ",":
+        ps_next of (P)
+        append of [es, ps_expr of (P)]
+    return es
+
+define ps_exprstat(P) as:
+    local line is P.l[P.i]
+    local e is ps_suffixedexp of (P)
+    if P.t[P.i] == "=" or P.t[P.i] == ",":
+        local targets is [e]
+        loop while P.t[P.i] == ",":
+            ps_next of (P)
+            append of [targets, ps_suffixedexp of (P)]
+        for tg in targets:
+            if tg.k != "Name" and tg.k != "Index":
+                ps_err of [P, "syntax error"]
+        ps_expect of [P, "="]
+        local exprs is ps_explist of (P)
+        return {"k": "Assign", "targets": targets, "exprs": exprs, "line": line}
+    if e.k != "Call" and e.k != "MCall":
+        ps_err of [P, "syntax error"]
+    return {"k": "CallStat", "e": e, "line": line}
+
+define ps_primaryexp(P) as:
+    local line is P.l[P.i]
+    local t is P.t[P.i]
+    if t == "name":
+        local nm is P.v[P.i]
+        ps_next of (P)
+        return {"k": "Name", "n": nm, "line": line}
+    if t == "(":
+        ps_next of (P)
+        local e is ps_expr of (P)
+        ps_match of [P, ")", "(", line]
+        return {"k": "Paren", "e": e, "line": line}
+    ps_err of [P, "unexpected symbol"]
+
+define ps_suffixedexp(P) as:
+    local e is ps_primaryexp of (P)
+    loop while 1:
+        local t is P.t[P.i]
+        local line is P.l[P.i]
+        if t == ".":
+            ps_next of (P)
+            local kl is P.l[P.i]
+            local key is ps_name of (P)
+            e is {"k": "Index", "o": e, "key": {"k": "Str", "v": key, "z": 0}, "line": kl}
+        elif t == "[":
+            ps_next of (P)
+            local key is ps_expr of (P)
+            ps_expect of [P, "]"]
+            e is {"k": "Index", "o": e, "key": key, "line": line}
+        elif t == ":":
+            ps_next of (P)
+            local m is ps_name of (P)
+            local args is ps_args of (P)
+            e is {"k": "MCall", "o": e, "m": m, "args": args, "line": line}
+        elif t == "(" or t == "string" or t == "{":
+            local args is ps_args of (P)
+            e is {"k": "Call", "f": e, "args": args, "line": line}
+        else:
+            return e
+    return e
+
+define ps_args(P) as:
+    local t is P.t[P.i]
+    local line is P.l[P.i]
+    if t == "string":
+        local s is {"k": "Str", "v": P.v[P.i], "z": P.z[P.i], "line": line}
+        ps_next of (P)
+        return [s]
+    if t == "{":
+        return [ps_table of (P)]
+    if t == "(":
+        ps_next of (P)
+        local args is []
+        if P.t[P.i] != ")":
+            args is ps_explist of (P)
+        ps_match of [P, ")", "(", line]
+        return args
+    ps_err of [P, "function arguments expected"]
+
+define ps_table(P) as:
+    local line is P.l[P.i]
+    ps_expect of [P, "{"]
+    local items is []
+    loop while P.t[P.i] != "}":
+        if P.t[P.i] == "name" and P.t[P.i + 1] == "=":
+            local kl is P.l[P.i]
+            local key is ps_name of (P)
+            ps_next of (P)
+            local v is ps_expr of (P)
+            append of [items, {"t": "kv", "key": {"k": "Str", "v": key, "z": 0, "line": kl}, "e": v}]
+        elif P.t[P.i] == "[":
+            ps_next of (P)
+            local key is ps_expr of (P)
+            ps_expect of [P, "]"]
+            ps_expect of [P, "="]
+            local v is ps_expr of (P)
+            append of [items, {"t": "kv", "key": key, "e": v}]
+        else:
+            append of [items, {"t": "pos", "e": ps_expr of (P)}]
+        if P.t[P.i] == "," or P.t[P.i] == ";":
+            ps_next of (P)
+        elif P.t[P.i] != "}":
+            ps_match of [P, "}", "{", line]
+    ps_match of [P, "}", "{", line]
+    return {"k": "Table", "items": items, "line": line}
+
+define ps_simpleexp(P) as:
+    local t is P.t[P.i]
+    local line is P.l[P.i]
+    if t == "number":
+        local v is P.v[P.i]
+        local fl is P.fl[P.i]
+        ps_next of (P)
+        return {"k": "Num", "v": v, "fl": fl, "line": line}
+    if t == "string":
+        local v is P.v[P.i]
+        local z is P.z[P.i]
+        ps_next of (P)
+        return {"k": "Str", "v": v, "z": z, "line": line}
+    if t == "nil":
+        ps_next of (P)
+        return {"k": "Nil", "line": line}
+    if t == "true":
+        ps_next of (P)
+        return {"k": "True", "line": line}
+    if t == "false":
+        ps_next of (P)
+        return {"k": "False", "line": line}
+    if t == "...":
+        if P.va[len of P.va - 1] == 0:
+            ps_err of [P, "cannot use '...' outside a vararg function"]
+        ps_next of (P)
+        return {"k": "Vararg", "line": line}
+    if t == "{":
+        return ps_table of (P)
+    if t == "function":
+        ps_next of (P)
+        return ps_body of [P, 0, line]
+    return ps_suffixedexp of (P)
+
+# Binary priorities from lparser.c: [left, right].
+define ps_binprio(t) as:
+    if t == "or":
+        return [1, 1]
+    if t == "and":
+        return [2, 2]
+    if t == "<" or t == ">" or t == "<=" or t == ">=" or t == "~=" or t == "==":
+        return [3, 3]
+    if t == "|":
+        return [4, 4]
+    if t == "~":
+        return [5, 5]
+    if t == "&":
+        return [6, 6]
+    if t == "<<" or t == ">>":
+        return [7, 7]
+    if t == "..":
+        return [9, 8]
+    if t == "+" or t == "-":
+        return [10, 10]
+    if t == "*" or t == "/" or t == "//" or t == "%":
+        return [11, 11]
+    if t == "^":
+        return [14, 13]
+    return null
+
+define ps_expr(P) as:
+    return ps_subexpr of [P, 0]
+
+define ps_subexpr(P, limit) as:
+    local t is P.t[P.i]
+    local line is P.l[P.i]
+    local e is null
+    if t == "not" or t == "-" or t == "#" or t == "~":
+        ps_next of (P)
+        local a is ps_subexpr of [P, 12]
+        e is {"k": "Un", "op": t, "a": a, "line": line}
+    else:
+        e is ps_simpleexp of (P)
+    loop while 1:
+        local op is P.t[P.i]
+        local pr is ps_binprio of (op)
+        if pr == null:
+            return e
+        if pr[0] <= limit:
+            return e
+        local oline is P.l[P.i]
+        ps_next of (P)
+        local b is ps_subexpr of [P, pr[1]]
+        e is {"k": "Bin", "op": op, "a": e, "b": b, "line": oline}
+    return e

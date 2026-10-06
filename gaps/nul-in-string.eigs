@@ -1,0 +1,13 @@
+# EigenScript gap: strings are NUL-terminated, so a string cannot hold byte 0
+# (EigenScript#1286 row "The string model": bytes vs text decided).
+# Lua:      #"a\0b" -> 3, string.char(0) -> a 1-byte string
+# Expected: byte strings that hold any byte, as Lua's do (len 3 below).
+# Actual v0.44.0:  str_from_bytes stops at the NUL (len 1), and chr of 0
+#           raises.
+# Rows: str_embedded_nul, str_len, str_byte_char_sub_rep (D).
+s is str_from_bytes of [97, 0, 98]
+print of (len of s)
+try:
+    print of (len of (chr of 0))
+catch e:
+    print of e.message

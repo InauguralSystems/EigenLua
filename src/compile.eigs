@@ -1,0 +1,56 @@
+# EigenLua driver.
+#   eigenscript compile.eigs <prog.lua> <out.eigs> <runtime.eigs>   compile
+#   eigenscript compile.eigs --parse-only <prog.lua>                 parse only
+# Exit 0 on success. A Lua syntax error prints "lua: <file>:<line>: <msg>" on
+# stderr and exits 1, as lua does. A construct the front end does not handle
+# prints "EIGENLUA-UNSUPPORTED: <construct> at <file>:<line>" and exits 3.
+# Any other failure inside the compiler is an internal error, exit 4.
+load_file of "lex.eigs"
+load_file of "parse.eigs"
+load_file of "emit.eigs"
+
+define drv_stderr(s) as:
+    local t is s + "\n"
+    local b is []
+    for i in range of (len of t):
+        append of [b, ord of t[i]]
+    write_bytes of ["/dev/stderr", b, 1]
+
+define drv_main(argv) as:
+    local parse_only is 0
+    local file is ""
+    if len of argv >= 2 and argv[0] == "--parse-only":
+        parse_only is 1
+        file is argv[1]
+    elif len of argv == 3:
+        file is argv[0]
+    else:
+        drv_stderr of "usage: compile.eigs <prog.lua> <out.eigs> <runtime.eigs> | --parse-only <prog.lua>"
+        return 2
+    if not (file_exists of file):
+        drv_stderr of ("lua: cannot open " + file)
+        return 1
+    local src is read_text of file
+    local ast is null
+    try:
+        local tk is lua_lex of (src)
+        ast is lua_parse of (tk)
+        if parse_only:
+            print of ("parsed " + file)
+            return 0
+        local out is emit_program of [ast, file, argv[2]]
+        write_text of [argv[1], out]
+    catch e:
+        if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
+            drv_stderr of ("lua: " + file + ":" + (str of e[1]) + ": " + e[2])
+            return 1
+        if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
+            drv_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + file + ":" + (str of e[2]))
+            return 3
+        drv_stderr of ("EIGENLUA-INTERNAL: compiler error: " + (str of e))
+        return 4
+    return 0
+
+unobserved:
+    rc is drv_main of (args of null)
+exit of rc

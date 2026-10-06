@@ -1,0 +1,14 @@
+# EigenScript gap: the VM's call depth (~5000 frames) is far below Lua's
+# (about 200000 Lua levels; LUAI_MAXSTACK = 1e6 slots), so recursion Lua
+# completes raises "call stack overflow" here. Not a #1286 row; a VM limit.
+# Lua: d(n) = n == 0 and 0 or 1 + d(n - 1); print(d(10000)) -> 10000
+# Expected: 10000 (or a depth limit at least Lua's).
+# Actual v0.44.0:  {"kind": "limit", "message": "call stack overflow", ...}
+define d(n) as:
+    if n == 0:
+        return 0
+    return 1 + (d of (n - 1))
+try:
+    print of (d of 10000)
+catch e:
+    print of e
