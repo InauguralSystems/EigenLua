@@ -67,7 +67,7 @@ do_silent() {
   sn=$(awk -F, '{print NF}' <<<"$sonly")
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier S --only "$sonly"
   local sbad
-  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $0 !~ / rc=0 count=none /) {c++} END{print c+0}' "$WORK/out.txt")
+  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $5 != "assert-untrusted") {c++} END{print c+0}' "$WORK/out.txt")
   [[ $GRADE_RC -eq 1 && $(row_n) -eq $sn && $sbad -eq 0 ]] && sok=1
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier D
   local dbad
