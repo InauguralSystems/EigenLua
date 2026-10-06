@@ -18,6 +18,8 @@ define ps_near(P) as:
     return P.v[P.i]
 
 define ps_err(P, msg) as:
+    if P.t[P.i] == "eof":
+        throw of ["SYNTAX", P.l[P.i], msg + " near <eof>"]
     throw of ["SYNTAX", P.l[P.i], msg + " near '" + (ps_near of (P)) + "'"]
 
 define ps_next(P) as:
@@ -25,7 +27,12 @@ define ps_next(P) as:
 
 define ps_check(P, t) as:
     if P.t[P.i] != t:
-        ps_err of [P, "'" + t + "' expected"]
+        ps_err of [P, (ps_tokname of (t)) + " expected"]
+
+define ps_tokname(t) as:
+    if t == "name":
+        return "<name>"
+    return "'" + t + "'"
 
 define ps_expect(P, t) as:
     ps_check of [P, t]
@@ -184,7 +191,7 @@ define ps_statement(P) as:
         ps_next of (P)
         local lp is P.loops
         if lp[len of lp - 1] == 0:
-            throw of ["SYNTAX", line, "break outside a loop at line " + (str of line) + " near '" + (ps_near of (P)) + "'"]
+            throw of ["SYNTAX", line, "break outside loop at line " + (str of line)]
         return {"k": "Break", "line": line}
     if t == "goto":
         ps_next of (P)
