@@ -3,8 +3,13 @@
 EigenLua compiles **Lua 5.4** source onto EigenScript. A front end turns `prog.lua` into EigenScript, which then
 runs on the real VM (and, later, the AOT). It is rung 1 of the guest-language ladder (hq
 `proposals/guest-language-ladder.md`). Its purpose is to press EigenScript's own semantics: integers, strings,
-scope and closures, errors, tables, coroutines. Every divergence from reference Lua is either a **front-end bug**
-(fixed here) or an **EigenScript gap** (filed upstream and never worked around).
+scope and closures, errors, tables, coroutines.
+
+Every ledger entry is exactly one of:
+- a **front-end bug**, fixed here;
+- an **EigenScript gap**, filed upstream and never worked around;
+- **unspecified** behavior, fixed in the corpus;
+- **out of scope**, listed below and never graded.
 
 ## The oracle
 
@@ -16,44 +21,107 @@ publishes:
 | `lua-5.4.9.tar.gz` | `2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6` |
 | `lua-5.4.9-tests.tar.gz` | `7d971845f545ffc09fbb3128a86b2c6524161c70d0fdf0154a16e8c00c343fca` |
 
-The grader compares a **candidate** command (`<candidate> prog.lua`, same calling convention as `lua prog.lua`)
-against the reference on two tiers.
+`tools/build_ref.sh` builds four binaries from that one tarball:
+
+| binary | difference | used for |
+|---|---|---|
+| `lua` | pristine | Tier D reference |
+| `lua-count` | `tools/ref-count.patch`: `luaB_assert` increments a C counter; `atexit` prints `EIGENLUA-ASSERTS:<n>` on stderr | Tier S reference, and the canary |
+| `lua-seedA`, `lua-seedB` | `luai_makeseed` fixed to two different constants | hash-layout check on the Tier D corpus |
+
+The grader runs a **candidate** as `<candidate> prog.lua` and nothing else. Both arms run on the same machine, OS and
+libc in the same grader invocation, so float printing (`%.14g`, `nan`/`-nan`, `inf`) is compared like for like.
+Reproducing `%.14g` exactly is the front end's job.
 
 ### Tier S: the official test suite
 
-The official suite is assert-based, and its stdout carries timings, random seeds and temporary paths. Those differ
-run to run even under the reference (measured on 2026-10-05: `files`, `main`, `math` and `sort` vary), so stdout is
-**not** compared here. Each row passes when both of these hold:
+Both arms receive the **unmodified** suite file. The candidate reports how many times its `assert` builtin was
+called by printing `EIGENLUA-ASSERTS:<n>` on stderr at exit; the front end counts in its runtime, in native code.
+The counters on both arms are invisible to the `debug` library by construction. Native functions fire no line
+hooks, which is why `db.lua` passes.
 
-1. the candidate exits 0, **and**
-2. the candidate executed the same number of `assert` calls as the reference. This is a conserved quantity: a
-   candidate that skips work, or exits 0 early, executes fewer.
+The suite's stdout carries timings, seeds and paths that vary run to run, so stdout is not compared byte for byte.
+A row passes when all of these hold:
+1. the candidate exits 0;
+2. it prints exactly one numeric count line;
+3. its **progress lines**, meaning the stdout lines that contain no digit, equal the reference's;
+4. its count equals the reference's.
 
-Population, measured standalone under the reference with `-e "_U=true"` on 2026-10-05: 27 files exit 0.
-- `heavy.lua` is excluded; it is a stress test and takes over 120 s.
-- `attrib.lua`, `big.lua` and `main.lua` exit non-zero standalone because they need `all.lua`'s setup or a C module.
-  Each is listed with that reason, never silently dropped.
-- `all.lua`, the driver, is not a row.
+The candidate's count is self-reported, so it is never trusted alone:
+- a missing count fails (plant `no-count`);
+- a forged count with an early exit fails on the progress lines (plant `lying-count`);
+- an off-by-one count fails on the count (plant `off-by-one`).
+
+**Class `count-unspecified`.** Some files execute a number of asserts that the manual does not determine. Measured
+2026-10-05:
+- `math.lua` calls `math.randomseed()` with no argument (line 845), which seeds from the clock. Over 40 reference runs
+  the count ranged from 46823 to 131654.
+- `nextvar.lua` asserts once per `_G` entry visited before `print`, and `next()` order follows the string hash seed.
+  Over 40 runs it ranged from 9849 to 9934.
+
+For these rows, condition 4 is replaced by: count ≥ ⌊(minimum over 20 reference runs) / 2⌋. There is no upper bound.
+The progress lines still catch a late exit, and the floor catches an early one.
+
+Randomness that IS specified is graded exactly. The 5.4 manual specifies xoshiro256**, its seeding, and its float
+and range mapping, so `rng_xoshiro.lua` in Tier D requires the candidate's `math.random` to be bit-exact.
+
+**Population: 23 graded rows** (21 exact plus 2 `count-unspecified`). Every exclusion has a reason in `corpus/S.manifest`, and none is silently dropped.
+- `heavy.lua`: a stress test, over 120 s.
+- `attrib.lua`, `big.lua`, `main.lua`: they fail standalone and need `all.lua`'s setup or a C module.
+- `api.lua`, `code.lua`: they run no assertions without the internal `T` test library.
+- `bwcoercion.lua`, `tracegc.lua`: helpers with no standalone assertions.
+- `files.lua`: excluded. With a regular file on stdin it fails at `files.lua:84`, because `io.stdin:seek` succeeds;
+  with a pipe, its `io.popen` children each report their own count. `io.popen` is out of scope, see below.
+- `all.lua` is the driver, not a row.
 
 ### Tier D: the differential corpus
 
-These are small programs written for this repo. Each one is deterministic under the reference: it is run twice and
-compared byte for byte, and a nondeterministic program is a corpus defect. The candidate passes a row when its
-**stdout and exit status are byte-identical** to the reference's. Each program's header comment names the
-EigenScript surface it presses:
+These are small programs written for this repo. The candidate passes a row when its **stdout and exit status are
+byte-identical** to the reference's. Each program's header names the EigenScript surface it presses: integers vs
+floats, byte strings, scope and closures, errors, tables and metatables, coroutines, `goto`, varargs, multiple
+assignment and returns, and `math.random`.
 
-- integers vs floats: `math.maxinteger`, values past 2^53, `//` and `%` on negatives, integer overflow wraparound,
-  and `1` vs `1.0` printing;
-- strings as byte arrays, including embedded `\0` and bytes ≥ 0x80, with `#`, `string.byte`/`char`/`sub`/`rep` and
-  `string.format`;
-- `local` block scope, closures capturing upvalues (including a loop-variable capture per iteration), and shadowing;
-- `pcall`/`error`, error values that are not strings, `error` levels, and `xpcall` with a handler;
-- tables: the `#` border, `nil` holes, integer vs float keys (`t[1]` and `t[1.0]` are the same key), `next`/`pairs`
-  over insertion and deletion, and metatables (`__index`, `__newindex`, `__eq`, `__lt`, `__call`, `__concat`,
-  `__len`);
-- coroutines: `resume`/`yield` passing values both ways, `status`, `wrap`, and an error inside a coroutine;
-- `goto`, varargs (`...`, `select('#', ...)`, `table.pack`/`unpack`), multiple assignment, and multiple returns
-  truncated or expanded by position.
+The corpus itself is checked on every run:
+- **Deterministic:** every program runs twice under `lua-seedA` with identical output.
+- **Layout-independent:** every program runs under `lua-seedB` with output identical to `lua-seedA`. A difference
+  means the program prints string-key traversal order, so it is UNSPECIFIED: a corpus defect, exit 2.
+- **Audited by hand for what the seed cannot see** (one `unspecified-audit` line per program in `corpus/D.manifest`):
+  which border `#t` returns when a table has holes, and the order of numeric keys in the hash part.
+
+### Unspecified behavior is a ledger class, not a gap
+
+The Lua 5.4 manual leaves these to the implementation:
+- `pairs`/`next` order;
+- the border `#t` returns when a table has holes (§3.4.7);
+- `tostring` of tables, functions and threads;
+- number formatting beyond `%.14g` and `string.format`.
+
+A Tier D program must not print any of these. It sorts keys, takes `#t` only of sequences, or checks that the result
+IS a valid border and prints that boolean. A divergence that traces to unspecified behavior is fixed in the corpus.
+
+### Front-end decision, day one: source positions are output
+
+`error("x")` raises `prog.lua:12: x`, and runtime errors carry the same `chunkname:line:` prefix. A program that
+prints a caught message exposes it on stdout. **The front end preserves the chunk name and the original Lua line
+numbers through compilation**:
+- for `error` at levels 1 and 2;
+- for runtime errors (arithmetic on nil, calling or indexing a nil value);
+- in `assert` messages.
+
+Runtime-error wording follows PUC-Rio's where the program can observe it. Where the wording depends on debug names
+the front end cannot know, the row is reclassified with that reason, never faked.
+
+### Out of scope (never graded, never a ledger failure)
+
+- `string.dump` and loading binary chunks;
+- the C API and C modules;
+- most of `debug` (hooks, `getinfo` beyond `currentline`/`short_src`, `getlocal`/`setlocal`, `upvalueid`/`upvaluejoin`,
+  `getregistry`);
+- `collectgarbage` counts and step results;
+- the values of `os.time`, `os.clock`, `os.date` and `os.getenv`;
+- `io` beyond `print`, `io.write` and stdin reads, including `io.popen`.
+
+A Tier S row that fails only inside an out-of-scope region is listed with that reason rather than counted as a gap.
 
 ### Tiers × arms
 
@@ -64,7 +132,7 @@ EigenScript surface it presses:
 
 ## Exit criteria (this bar does not need to be reachable today)
 
-- Tier S: 27/27 on the VM arm, then on the AOT arm.
+- Tier S: every included row passes on the VM arm, then on the AOT arm.
 - Tier D: every row matches on both arms.
 - Every divergence row is classified in the ledger below. Every EigenScript gap has an upstream issue number, and
   every row it touches on EigenScript#1286 has a written measurement.
