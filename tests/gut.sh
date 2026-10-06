@@ -12,8 +12,9 @@ canary	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] &&
 perturb	tools/grade.sh	  if cmp -s "$exp" "$out" && [[ $rc -eq ${d_exp_rc[$name]} ]]; then	  if true; then
 silent	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 ]]; then
 early-exit	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ ]]; then
-floor-exit	tools/grade.sh	      floor=$(( lo / 2 ))	      floor=0
-count-unspec-canary	tools/grade.sh	      floor=$(( lo / 2 ))	      floor=$hi
+floor-exit	tools/grade.sh	      floor=$(( lo * 60 / 100 ))	      floor=0
+count-unspec-canary	tools/grade.sh	      floor=$(( lo * 60 / 100 ))	      floor=$hi
+toothless	tools/grade.sh	  if [[ $RUN_RC -eq $prc ]] && cmp -s "$WORK/probe.ref" "$WORK/probe.cand"; then	  if true; then
 off-by-one	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]]; then
 assert-edges	tools/ref-count.patch	+  eigenlua_asserts++;	+  (void)0;
 no-count	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $pr == same ]]; then

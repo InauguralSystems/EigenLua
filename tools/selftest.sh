@@ -43,7 +43,7 @@ do_canary() {
   t0=$(date +%s)
   run_at_grade "$GRADE" --candidate "$COUNT" --ref "$REF" --tier all
   t1=$(date +%s)
-  exp="SUMMARY S=${ns}/${ns} D=${nd}/${nd} fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=$((ns + nd)) rc=0"
+  exp="SUMMARY S=${ns}/${ns} D=${nd}/${nd} fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=$((ns + nd)) assert=trusted rc=0"
   sum=$(summary_line)
   got="$sum rc=$GRADE_RC"
   plant canary "$exp" "$got"
@@ -95,6 +95,13 @@ do_count_unspec_canary() {
   run_at_grade "$GRADE" --candidate "$COUNT" --ref "$REF" --tier S --only math.lua,nextvar.lua --repeat 20
   plant count-unspec-canary "math.lua=PASS nextvar.lua=PASS rc=0" \
     "$(awk '/^ROW S /{printf "%s=%s ", $3, $4}' "$WORK/out.txt")rc=$GRADE_RC"
+}
+do_toothless() {
+  run_at_grade "$GRADE" --candidate "${REF%/*}/lua-toothless" --ref "$REF" --tier S
+  local untr
+  untr=$(awk '/^ROW S / && $4 == "FAIL" && $5 == "assert-untrusted" {c++} END{print c+0}' "$WORK/out.txt")
+  plant toothless "S=0/$ns untrusted=$ns assert=untrusted rc=1" \
+    "$(summary_line | grep -o 'S=[0-9]*/[0-9]*') untrusted=$untr $(summary_line | grep -o 'assert=[a-z/]*') rc=$GRADE_RC"
 }
 do_off_by_one() {
   run_at_grade "$GRADE" --candidate "$PLANTS/off-by-one.sh" --ref "$REF" --tier S --only goto.lua,literals.lua
@@ -232,7 +239,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi

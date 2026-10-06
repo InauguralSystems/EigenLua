@@ -2,27 +2,30 @@
 # Grade a candidate against PUC-Rio Lua 5.4.9.
 # tools/grade.sh --candidate <cmd> [--tier S|D|all] [--ref <path>] [--only a,b]
 #                [--repeat K]   (each S candidate run K times; all must pass)
-# Candidate argv is exactly: <cmd> <file>, run with LUA_INIT and LUA_INIT_5_4
-# unset. --ref names the pristine reference; lua-count, lua-seedA and
-# lua-seedB must sit next to it (tools/build_ref.sh builds all four).
-# Tier S: the program is the UNMODIFIED suite file, run as `<cmd> <name>` in a
-# fresh directory whose entries link to the suite. Count protocol: at exit the
-# candidate ends exactly one stderr line with `EIGENLUA-ASSERTS:<n>`, n = calls of
-# its assert builtin (lua-count does this in C, tools/ref-count.patch). A row
-# passes iff rc 0, one numeric count line, the stdout lines containing no digit
-# equal the reference's (progress cross-check on a self-reported count), and:
+# Candidate argv is exactly: <cmd> <file>, LUA_INIT and LUA_INIT_5_4 unset.
+# --ref names the pristine reference; tools/build_ref.sh puts lua-count,
+# lua-seedA and lua-seedB next to it.
+# Tier S is gated by the assert-trust probe: corpus/D/assert_semantics.lua run
+# on the candidate must match the reference's stdout and rc byte for byte, or
+# every S row is `FAIL assert-untrusted` (SUMMARY assert=untrusted).
+# An S program is the UNMODIFIED suite file, run as `<cmd> <name>` in a fresh
+# directory linking to the suite. At exit the candidate ends exactly one stderr
+# line with `EIGENLUA-ASSERTS:<n>`, n = calls of its assert builtin (lua-count:
+# tools/ref-count.patch). A row passes iff rc 0, one numeric count, the stdout
+# lines with no digit equal the reference's (progress cross-check), and:
 #  include: count == reference count (2 reference runs must agree, else
 #    UNSTABLE);
-#  count-unspecified: count >= floor = min of 20 reference runs / 2, no upper
-#    bound. These rows' counts follow behaviour the manual leaves unspecified,
-#    so a count that is a little off (off-by-one plant) is NOT caught here;
-#    only a large shortfall (floor-exit plant) or a progress difference is.
+#  count-unspecified: count >= floor = 60% of the min of 20 reference runs, no
+#    upper bound. math.lua counts come in quanta of 10602 (its float loop
+#    repeats); over 1220 runs the lowest mode (36.2k, 0.6%) sits at 53-77% of
+#    a min-of-20, so 60% keeps the reference above the floor (resampled
+#    P(run < floor) = 2e-5). Counts follow unspecified behaviour, so a count a
+#    little off (off-by-one plant) is NOT caught; a large shortfall is.
 # Tier D: stdout and rc byte-identical to the reference. Each program must
-# print the same under the pristine build twice and under lua-seedA and
-# lua-seedB (different string hash seeds), or it is a corpus defect (exit 2).
-# Residuals: tier D ignores stderr. A nonzero reference exit is not a harness
-# error. UNSTABLE is a row verdict and is not a SUMMARY field. --selftest
-# execs tools/selftest.sh. Membership is the files on disk, both ways.
+# print the same under lua-seedA twice, lua-seedB and the pristine build, or
+# it is a corpus defect (exit 2). Residuals: tier D ignores stderr; a nonzero
+# reference exit is not a harness error; UNSTABLE is a row verdict only.
+# --selftest execs tools/selftest.sh. Membership is the files on disk, both ways.
 set -u
 set -o pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -329,7 +332,22 @@ run_s() {
   S_C=$(assert_count "$dir.e")
   progress "$dir.o"
 }
+PROBE="$DDIR/assert_semantics.lua" TRUST=n/a TRUST_WHY=''
 if (( ${#s_sel[@]} > 0 )); then
+  [[ -n ${d_have[assert_semantics.lua]:-} ]] || die "assert probe missing from D: $PROBE"
+  run_at "$DDIR" 30 "$REF" "$PROBE" "$WORK/probe.ref" "$WORK/probe.refe"
+  prc=$RUN_RC
+  [[ $prc -eq 0 && -s $WORK/probe.ref ]] || die "reference failed the assert probe rc=$prc"
+  run_at "$DDIR" 30 "$CAND" "$PROBE" "$WORK/probe.cand" "$WORK/probe.cande"
+  # >>> guard:assert-trust
+  if [[ $RUN_RC -eq $prc ]] && cmp -s "$WORK/probe.ref" "$WORK/probe.cand"; then
+    TRUST=trusted
+  else
+    TRUST=untrusted TRUST_WHY="probe rc=$RUN_RC $(first_diff "$WORK/probe.ref" "$WORK/probe.cand")"
+  fi
+  # <<< guard:assert-trust
+fi
+if (( ${#s_sel[@]} > 0 )) && [[ $TRUST == trusted ]]; then
   for name in "${s_sel[@]}"; do
     nref=2
     [[ -n ${s_cu[$name]:-} ]] && nref=20
@@ -354,7 +372,7 @@ if (( ${#s_sel[@]} > 0 )); then
     # <<< guard:stable
     s_lo[$name]=$lo s_hi[$name]=$hi
     if [[ -n ${s_cu[$name]:-} ]]; then
-      floor=$(( lo / 2 ))
+      floor=$(( lo * 60 / 100 ))
       s_lo[$name]=$floor s_hi[$name]=-1
     fi
   done
@@ -388,6 +406,7 @@ grade_d() {
 }
 grade_s() {
   local name=$1 rc sec special c lo hi k np pr pre="$WORK/s-$name" tag
+  if [[ $TRUST != trusted ]]; then emit S "$name" FAIL "assert-untrusted $TRUST_WHY"; return; fi
   if [[ -n ${s_why[$name]:-} ]]; then
     emit S "$name" UNSTABLE "${s_why[$name]}"
     return
@@ -420,8 +439,8 @@ grade_s() {
 for name in "${s_sel[@]}"; do grade_s "$name"; done
 for name in "${d_sel[@]}"; do grade_d "$name"; done
 if (( examined == 0 )); then die "zero rows examined"; fi
-printf 'SUMMARY S=%s/%s D=%s/%s fail=%s diverge=%s hang=%s crash=%s unsupported=%s examined=%s\n' \
-  "$s_pass" "$s_n" "$d_match" "$d_n" "$fail" "$diverge" "$hang" "$crash" "$unsup" "$examined"
+printf 'SUMMARY S=%s/%s D=%s/%s fail=%s diverge=%s hang=%s crash=%s unsupported=%s examined=%s assert=%s\n' \
+  "$s_pass" "$s_n" "$d_match" "$d_n" "$fail" "$diverge" "$hang" "$crash" "$unsup" "$examined" "$TRUST"
 if (( fail == 0 && diverge == 0 && hang == 0 && crash == 0 && unsup == 0 && unstable == 0 \
       && s_pass == s_n && d_match == d_n )); then
   exit 0
