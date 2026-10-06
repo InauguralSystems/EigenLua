@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Run the reference, but stop partway through the program and exit 0: at the
-# first line event past line 100, which is after the tier S prelude (line 1).
+# The counting reference, stopped partway through the program with exit 0: at
+# the first line event past line 100. The atexit hook still writes the count.
 set -u
-ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-LUA="$ROOT/.ref/lua-5.4.9/src/lua"
-exec "$LUA" -e 'debug.sethook(function(_, l)
+ROOT=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+exec "$ROOT/.ref/bin/lua-count" -e 'debug.sethook(function(_, l)
   if l > 100 then debug.sethook() os.exit(0) end
 end, "l")' "$1"

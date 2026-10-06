@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # Grade a candidate against PUC-Rio Lua 5.4.9.
 # tools/grade.sh --candidate <cmd> [--tier S|D|all] [--ref <path>] [--only a,b]
-# tools/grade.sh --shim <src.lua> <dir>   (writes the tier S program, see below)
-# Candidate argv is exactly: <cmd> <file>. A tier S program is the test file
-# with tools/s_shim.lua joined onto the front of line 1, under the test's own
-# name, in a fresh directory whose other entries link to the suite. An S row
-# passes on rc 0 and an assert count equal to the reference (2 runs must agree,
-# else UNSTABLE), or for a manifest `band` row, inside [min,max] of 5 runs.
+# Candidate argv is exactly: <cmd> <file>, run with LUA_INIT and LUA_INIT_5_4
+# unset. --ref names the pristine reference; lua-count, lua-seedA and
+# lua-seedB must sit next to it (tools/build_ref.sh builds all four).
+# Tier S: the program is the UNMODIFIED suite file, run as `<cmd> <name>` in a
+# fresh directory whose entries link to the suite. Count protocol: at exit the
+# candidate ends exactly one stderr line with `EIGENLUA-ASSERTS:<n>`, n = calls of
+# its assert builtin (lua-count does this in C, tools/ref-count.patch). A row
+# passes iff rc 0, one count line, the count equals the reference's (2 runs
+# must agree, else UNSTABLE) or for a manifest `band` row lies in [min,max] of
+# 5 runs, AND the stdout lines containing no digit equal the reference's (the
+# progress cross-check on a self-reported count; a row whose reference prints
+# no such line has no cross-check, shown as progress=0).
+# Tier D: stdout and rc byte-identical to the reference. Each program must
+# print the same under the pristine build twice and under lua-seedA and
+# lua-seedB (different string hash seeds), or it is a corpus defect (exit 2).
 # Residuals: tier D ignores stderr. A nonzero reference exit is not a harness
 # error. UNSTABLE is a row verdict and is not a SUMMARY field. --selftest
 # execs tools/selftest.sh. Membership is the files on disk, both ways.
@@ -14,28 +23,16 @@ set -u
 set -o pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ulimit -c 0
+unset LUA_INIT LUA_INIT_5_4
 if [[ ${1:-} == --selftest ]]; then
   exec "$ROOT/tools/selftest.sh"
 fi
 die() { printf 'HARNESS %s\n' "$*" >&2; exit 2; }
-PRELUDE=$(grep -v '^[[:space:]]*--' "$ROOT/tools/s_shim.lua" | tr '\n' ' ') || die "cannot read tools/s_shim.lua"
-case $PRELUDE in
-  *--*|*'[['*|*'[='*|'') die "s_shim.lua code must have no inline comment or long bracket" ;;
-esac
-shim_into() {
-  local src=$1 dir=$2 base e
-  base=$(basename "$src")
-  [[ $(head -c 1 "$src") != '#' ]] || die "$base starts with '#'; the prelude would hide line 1"
+link_dir() {
+  local dir=$1 e
   mkdir -p "$dir" || die "cannot create $dir"
-  for e in "$(dirname "$src")"/*; do ln -s "$e" "$dir/" || die "cannot link $e"; done
-  rm -f "$dir/$base"
-  { printf '%s' "$PRELUDE"; cat "$src"; } >"$dir/$base" || die "cannot write $dir/$base"
+  for e in "$SUITE"/*; do ln -s "$e" "$dir/" || die "cannot link $e"; done
 }
-if [[ ${1:-} == --shim ]]; then
-  [[ $# -eq 3 && -f $2 ]] || die "usage: --shim <src.lua> <dir>"
-  shim_into "$2" "$3"
-  exit 0
-fi
 RUN_RC=0
 run_at() {
   local cwd=$1 sec=$2 cmd=$3 file=$4 out=$5 err=$6
@@ -47,12 +44,12 @@ run_at() {
   RUN_RC=$?
 }
 assert_count() {
-  local line
-  line=$(grep -E 'EIGENLUA-ASSERTS:[0-9]+' "$1" 2>/dev/null | tail -n 1 || true)
-  if [[ $line =~ EIGENLUA-ASSERTS:([0-9]+) ]]; then
-    printf '%s\n' "${BASH_REMATCH[1]}"
-  else
-    printf 'none\n'
+  local n
+  n=$(grep -cE 'EIGENLUA-ASSERTS:[0-9]+$' "$1")
+  if [[ $n -eq 1 ]]; then
+    sed -n 's/^.*EIGENLUA-ASSERTS:\([0-9][0-9]*\)$/\1/p' "$1"
+  elif [[ $n -eq 0 ]]; then printf 'none\n'
+  else printf 'many\n'
   fi
 }
 row_timeout() {
@@ -133,7 +130,7 @@ twice() {
 }
 CAND=""
 TIER=all
-REF="$ROOT/.ref/lua-5.4.9/src/lua"
+REF="$ROOT/.ref/bin/lua"
 ONLY=""
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -163,20 +160,21 @@ if [[ ! -f $CAND || ! -x $CAND ]]; then
 fi
 # <<< guard:candidate
 # >>> guard:version
-if [[ ! -x $REF ]]; then
-  die "reference missing or not executable: $REF"
-fi
-ver=$("$REF" -v 2>&1 || true)
 vre='^Lua 5\.4\.9( |$)'
-if [[ ! $ver =~ $vre ]]; then
-  die "reference -v is not 5.4.9: ${ver}"
-fi
+for r in "$REF" "${REF%/*}/lua-count" "${REF%/*}/lua-seedA" "${REF%/*}/lua-seedB"; do
+  [[ -x $r ]] || die "reference missing or not executable: $r"
+  ver=$("$r" -v 2>&1 || true)
+  if [[ ! $ver =~ $vre ]]; then
+    die "reference -v is not 5.4.9: ${ver}"
+  fi
+done
+REF_COUNT="${REF%/*}/lua-count"
 # <<< guard:version
 SUITE="$ROOT/corpus/lua-tests"
 DDIR="$ROOT/corpus/D"
 SMAN="$ROOT/corpus/S.manifest"
 DMAN="$ROOT/corpus/D.manifest"
-[[ -f $SMAN && -f $DMAN && -f $ROOT/tools/s_shim.lua ]] || die "missing manifest or assert shim"
+[[ -f $SMAN && -f $DMAN ]] || die "missing manifest"
 declare -A s_status=() d_have=() s_band=()
 declare -a s_include=() d_names=()
 while read -r status name reason; do
@@ -197,7 +195,7 @@ done
 [[ -z ${s_status[all.lua]:-} ]] || die "all.lua must not be a row"
 while read -r name extra; do
   [[ -z ${name:-} || ${name:0:1} == '#' ]] && continue
-  [[ -z ${extra:-} ]] || die "bad D manifest row: $name"
+  [[ ${extra:-} == "unspecified-audit: ok" ]] || die "D manifest row lacks unspecified-audit: ok: $name"
   [[ -n ${d_have[$name]:-} ]] && die "duplicate D row: $name"
   d_have[$name]=1
   [[ -f $DDIR/$name ]] || die "manifest row has no file: D/$name"
@@ -290,48 +288,58 @@ ref_signaled() { [[ $1 -eq 124 || $1 -ge 128 ]]; }
 if (( ${#d_sel[@]} > 0 )); then
   for name in "${d_sel[@]}"; do
     pre="$WORK/d-$name"
-    twice "$DDIR" 30 "$REF" "$DDIR/$name" "$pre"
-    if ref_signaled "$RC1" || ref_signaled "$RC2"; then
-      die "reference failed on D/$name rc=$RC1/$RC2"
+    twice "$DDIR" 30 "${REF%/*}/lua-seedA" "$DDIR/$name" "$pre"
+    run_at "$DDIR" 30 "${REF%/*}/lua-seedB" "$DDIR/$name" "$pre.B" "$pre.Be"
+    run_at "$DDIR" 30 "$REF" "$DDIR/$name" "$pre.exp" "$pre.expe"
+    if ref_signaled "$RC1" || ref_signaled "$RC2" || ref_signaled "$RUN_RC"; then
+      die "reference failed on D/$name rc=$RC1/$RC2/$RUN_RC"
     fi
     # >>> guard:nondet
-    if [[ $RC1 -ne $RC2 ]] || ! cmp -s "$pre.1o" "$pre.2o"; then
+    if [[ $RC1 -ne $RC2 || $RC1 -ne $RUN_RC ]] || ! cmp -s "$pre.1o" "$pre.2o"; then
       die "corpus defect: D/$name is nondeterministic"
     fi
     # <<< guard:nondet
-    cp -f "$pre.1o" "$pre.exp"
+    # >>> guard:unspecified
+    if ! cmp -s "$pre.1o" "$pre.B"; then
+      die "corpus defect: D/$name is UNSPECIFIED (stdout depends on the string hash seed)"
+    fi
+    # <<< guard:unspecified
+    cmp -s "$pre.1o" "$pre.exp" || die "corpus defect: D/$name differs between lua and lua-seedA"
     d_exp_rc[$name]=$RC1
     d_ms[$name]=$MS
   done
 fi
+progress() { grep -v '[0-9]' "$1" >"$1.p"; return 0; }
 run_s() {
   local name=$1 k=$2 cmd=$3 sec=$4 dir="$WORK/s-$name-$2"
-  shim_into "$SUITE/$name" "$dir"
+  link_dir "$dir"
   run_at "$dir" "$sec" "$cmd" "$name" "$dir.o" "$dir.e"
   [[ $RUN_RC -eq 99 ]] && die "could not enter $dir"
   S_RC=$RUN_RC
   S_C=$(assert_count "$dir.e")
+  progress "$dir.o"
 }
 if (( ${#s_sel[@]} > 0 )); then
   for name in "${s_sel[@]}"; do
     nref=2
     [[ -n ${s_band[$name]:-} ]] && nref=5
-    lo='' hi='' rcs='' MS=0
+    lo='' hi='' rcs='' MS=0 prog=same
     for ((k = 1; k <= nref; k++)); do
       t0=$(date +%s%N)
-      run_s "$name" "ref$k" "$REF" 180
+      run_s "$name" "ref$k" "$REF_COUNT" 180
       t1=$(( ($(date +%s%N) - t0) / 1000000 ))
       (( t1 > MS )) && MS=$t1
       ref_signaled "$S_RC" && die "reference failed on S/$name rc=$S_RC"
-      [[ $S_C =~ ^[0-9]+$ ]] || die "reference printed no assert count on S/$name"
+      [[ $S_C =~ ^[0-9]+$ ]] || die "reference printed no single assert count on S/$name"
+      cmp -s "$WORK/s-$name-ref1.o.p" "$WORK/s-$name-ref$k.o.p" || prog=differs
       rcs+=" $S_RC"
       [[ -z $lo ]] || (( S_C < lo )) && lo=$S_C
       [[ -z $hi ]] || (( S_C > hi )) && hi=$S_C
     done
     s_ms[$name]=$MS
     # >>> guard:stable
-    if [[ $rcs == *[1-9]* ]] || [[ -z ${s_band[$name]:-} && $lo -ne $hi ]]; then
-      s_why[$name]="reference over $nref runs: rc$rcs, asserts in [$lo,$hi]"
+    if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_band[$name]:-} && $lo -ne $hi ]]; then
+      s_why[$name]="reference over $nref runs: rc$rcs, asserts in [$lo,$hi], progress $prog"
     elif [[ -n ${s_band[$name]:-} && $lo -eq $hi ]]; then
       die "S/$name is declared band but $nref reference runs all counted $lo"
     fi
@@ -379,15 +387,20 @@ grade_s() {
   rc=$S_RC c=$S_C
   special=$(classify "$rc" "$WORK/s-$name-cand.e")
   if [[ -n $special ]]; then emit S "$name" "$special" "rc=$rc"; return; fi
+  local np pr=same pre="$WORK/s-$name"
+  np=$(wc -l <"$pre-ref1.o.p")
+  # >>> guard:progress
+  cmp -s "$pre-ref1.o.p" "$pre-cand.o.p" || pr="differs($(first_diff "$pre-ref1.o.p" "$pre-cand.o.p"))"
+  # <<< guard:progress
   # >>> guard:s-pass
-  if [[ $rc -eq 0 && $c != none ]] && (( c >= lo && c <= hi )); then
-    emit S "$name" PASS "asserts=$c$band"
+  if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && c <= hi )); then
+    emit S "$name" PASS "asserts=$c progress=$np$band"
     return
   fi
   # <<< guard:s-pass
   # >>> guard:s-fail
   [[ -n $band ]] || band=" ref=$lo"
-  emit S "$name" FAIL "asserts cand=$c rc=$rc$band"
+  emit S "$name" FAIL "asserts cand=$c rc=$rc$band progress=$pr"
   # <<< guard:s-fail
 }
 for name in "${s_sel[@]}"; do grade_s "$name"; done

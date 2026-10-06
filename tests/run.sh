@@ -5,12 +5,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 
 echo "RUN build_ref"
-timeout 120 tools/build_ref.sh
+timeout 600 tools/build_ref.sh
 
 echo "RUN selftest"
 timeout 420 tools/grade.sh --selftest
 
 echo "RUN canary"
-timeout 240 tools/grade.sh --candidate "$ROOT/.ref/lua-5.4.9/src/lua" --tier all
+timeout 240 tools/grade.sh --candidate "$ROOT/.ref/bin/lua-count" --tier all
 
 echo "RUN ok"

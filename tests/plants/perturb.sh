@@ -2,7 +2,7 @@
 # Run the reference, then change one stdout byte.
 set -u
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-LUA="$ROOT/.ref/lua-5.4.9/src/lua"
+LUA="$ROOT/.ref/bin/lua"
 mkdir -p "$ROOT/.tmp"
 out="$ROOT/.tmp/perturb-$$.out"
 trap 'rm -f "$out"' EXIT

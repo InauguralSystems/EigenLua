@@ -24,7 +24,7 @@ exclude heavy.lua stress test, over 120 s
 include literals.lua
 include locals.lua
 exclude main.lua fails standalone under the reference: needs the lua driver or a C module
-include math.lua
+band math.lua line 845 calls math.randomseed() with no argument, which seeds from time and an address; the statistics loops after it (doagain) then run a seed-dependent number of rounds
 band nextvar.lua find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
 include pm.lua
 include sort.lua
