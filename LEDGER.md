@@ -128,3 +128,12 @@ reference's first lines.
 
 `front-end bug` is 0 because every one found while building was fixed before this grade, not because none existed:
 an off-by-limb integer printer, a missing integral-float `.0`, `%%` in Lua's `'n%%0'` message, and `assert` message positions.
+
+## Front-end bugs the grader does not see yet
+
+`/code-review` on PR #4 found 5 front-end bugs. Each was checked by execution against the reference. No graded row
+exercises any of them, so the score above cannot reflect them, and this ledger's "0 front-end bugs" means "0 among
+graded rows". The 5 are evaluation order in multiple assignment, method lookup before its arguments, the nil-receiver
+error message, an eager NUL-string operand, and the `break` error line. They are tracked, with the corpus rows that
+must catch them, in EigenLua#5.
+
