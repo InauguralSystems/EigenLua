@@ -210,6 +210,7 @@ done
 [[ -z ${s_status[all.lua]:-} ]] || die "all.lua must not be a row"
 while read -r name extra; do
   [[ -z ${name:-} || ${name:0:1} == '#' ]] && continue
+  [[ $name == operators: ]] && { OPS=$extra; continue; }
   [[ ${extra:-} == "unspecified-audit: ok" ]] || die "D manifest row lacks unspecified-audit: ok: $name"
   [[ -n ${d_have[$name]:-} ]] && die "duplicate D row: $name"
   d_have[$name]=1
@@ -219,6 +220,11 @@ while read -r name extra; do
   d_names+=("$name")
 done <"$DMAN"
 [[ ${#d_names[@]} -ge 30 ]] || die "D corpus has ${#d_names[@]} rows, want at least 30"
+# >>> guard:ops (every operator on D.manifest's operators: line is in ops_matrix.lua's table, both ways)
+[[ -n ${d_have[ops_matrix.lua]:-} && -n ${OPS:-} ]] || die "D needs ops_matrix.lua and an operators: line"
+have=$(sed -n 's/^  {"\([^"]*\)", function.*/\1/p' "$DDIR/ops_matrix.lua" | LC_ALL=C sort -u | tr '\n' ' ')
+[[ $have == "$(tr ' ' '\n' <<<"$OPS" | grep . | LC_ALL=C sort -u | tr '\n' ' ')" ]] || die "ops_matrix.lua operator table [$have] != D.manifest operators: [$OPS]"
+# <<< guard:ops
 # >>> guard:membership
 for f in "$SUITE"/*.lua; do
   base=$(basename "$f")

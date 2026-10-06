@@ -13,7 +13,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 bad=0
 ns=$(awk '$1=="include" || $1=="count-unspecified" {c++} END{print c+0}' "$ROOT/corpus/S.manifest")
-nd=$(awk 'NF && $1 !~ /^#/{c++} END{print c+0}' "$ROOT/corpus/D.manifest")
+nd=$(awk 'NF && $1 !~ /^#/ && $1 != "operators:" {c++} END{print c+0}' "$ROOT/corpus/D.manifest")
 plant() {
   local st=OK
   [[ $2 == "$3" ]] || { st=WRONG; bad=1; }
@@ -34,27 +34,25 @@ summary_line() { awk '/^SUMMARY /{s=$0} END{print s}' "$WORK/out.txt"; }
 row_bad() { awk -v w="$1" '/^ROW / && $4!=w {c++} END{print c+0}' "$WORK/out.txt"; }
 row_n() { awk '/^ROW /{c++} END{print c+0}' "$WORK/out.txt"; }
 do_canary() {
-  local t0 t1 exp sum got
-  t0=$(date +%s)
+  local exp="SUMMARY S=${ns}/${ns} D=${nd}/${nd} fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=$((ns + nd)) assert=trusted rc=0"
   run_at_grade "$GRADE" --candidate "$COUNT" --ref "$REF" --tier all
-  t1=$(date +%s)
-  exp="SUMMARY S=${ns}/${ns} D=${nd}/${nd} fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=$((ns + nd)) assert=trusted rc=0"
-  sum=$(summary_line)
-  got="$sum rc=$GRADE_RC"
-  plant canary "$exp" "$got"
-  printf 'canary-runtime-seconds %s rows %s\n' "$((t1 - t0))" "$((ns + nd))" >&2
-  if [[ $got != "$exp" ]]; then
-    awk '/^ROW / && $4 != "PASS" && $4 != "MATCH"' "$WORK/out.txt" >&2
-  fi
+  plant canary "$exp" "$(summary_line) rc=$GRADE_RC"
+  awk '/^ROW / && $4 != "PASS" && $4 != "MATCH"' "$WORK/out.txt" >&2
 }
 do_perturb() {
   run_at_grade "$GRADE" --candidate "$PLANTS/perturb.sh" --ref "$REF" --tier D
-  local n bad exp got
-  n=$(row_n)
-  bad=$(row_bad DIVERGE)
-  exp="DIVERGE n=$nd rc=1"
-  if [[ $GRADE_RC -eq 1 && $n -eq $nd && $bad -eq 0 ]]; then got=$exp; else got="rc=$GRADE_RC n=$n bad=$bad $(summary_line)"; fi
-  plant perturb "$exp" "$got"
+  plant perturb "DIVERGE n=$nd bad=0 rc=1" "DIVERGE n=$(row_n) bad=$(row_bad DIVERGE) rc=$GRADE_RC"
+}
+do_hang() {
+  run_at_grade "$GRADE" --candidate "$PLANTS/hang.sh" --ref "$REF" --tier D --only int_one_vs_one.lua,goto_stmt.lua
+  plant hang "HANG=2 rows=2 hang=2 examined=2 rc=1" "HANG=$(awk '/^ROW / && $4=="HANG"' "$WORK/out.txt" | grep -c .) rows=$(row_n) $(summary_line | grep -o 'hang=[0-9]*') $(summary_line | grep -o 'examined=[0-9]*') rc=$GRADE_RC"
+}
+do_ops_drop() {
+  local dest
+  dest=$(stage "$WORK/opsdrop")
+  sed -i '/^  {"<<", function/d' "$dest/corpus/D/ops_matrix.lua"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness ops-drop "operator table"
 }
 do_silent() {
   local sonly="goto.lua,literals.lua,calls.lua,utf8.lua,events.lua,strings.lua" sok=0 dok=0
@@ -143,19 +141,6 @@ LUA
   run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only plant_str_pairs.lua
   harness unspecified-D "is UNSPECIFIED"
 }
-do_hang() {
-  local only="int_one_vs_one.lua,goto_stmt.lua"
-  run_at_grade "$GRADE" --candidate "$PLANTS/hang.sh" --ref "$REF" --tier D --only "$only"
-  local n sum exp="hang=2 examined=2 rc=1" got
-  n=$(awk '/^ROW / && $4=="HANG"{c++} END{print c+0}' "$WORK/out.txt")
-  sum=$(summary_line)
-  if [[ $GRADE_RC -eq 1 && $n -eq 2 && $sum == *'hang=2'* && $sum == *'examined=2'* && $(row_n) -eq 2 ]]; then
-    got=$exp
-  else
-    got="rc=$GRADE_RC n=$n $sum"
-  fi
-  plant hang "$exp" "$got"
-}
 one_row() {  # one_row <plant> <candidate> <VERDICT> <summary field>
   run_at_grade "$GRADE" --candidate "$PLANTS/$2" --ref "$REF" --tier D --only int_one_vs_one.lua
   local n sum got
@@ -241,7 +226,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D ops-drop unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi

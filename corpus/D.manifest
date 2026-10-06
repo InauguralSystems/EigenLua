@@ -23,6 +23,7 @@ meta_newindex.lua unspecified-audit: ok
 multi_assign.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
 num_print.lua unspecified-audit: ok
+ops_matrix.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok
@@ -44,3 +45,4 @@ tbl_next_pairs.lua unspecified-audit: ok
 tbl_nil_holes.lua unspecified-audit: ok
 utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
+operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>

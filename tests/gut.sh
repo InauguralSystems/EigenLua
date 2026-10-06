@@ -23,6 +23,7 @@ assert-edges	tools/ref-count.patch	+  eigenlua_asserts++;	+  (void)0;
 no-count	tools/grade.sh	    if [[ $rc -eq 0 && $c =~ ^[0-9]+$ && $pr == same ]] && (( c >= lo && (hi < 0 || c <= hi) )); then	    if [[ $rc -eq 0 && $pr == same ]]; then
 lying-count	tools/grade.sh	    cmp -s "$pre-ref1.o.p" "$pre-cand$k.o.p" || pr="differs($(first_diff "$pre-ref1.o.p" "$pre-cand$k.o.p"))"	    :
 unspecified-D	tools/grade.sh	    if ! cmp -s "$pre.1o" "$pre.B"; then	    if false; then
+ops-drop	tools/grade.sh	[[ $have == "$(tr ' ' '\n' <<<"$OPS" | grep . | LC_ALL=C sort -u | tr '\n' ' ')" ]] || die "ops_matrix.lua operator table [$have] != D.manifest operators: [$OPS]"	:
 unstable-ref	tools/grade.sh	    if [[ $rcs == *[1-9]* || $prog != same ]] || [[ -z ${s_cu[$name]:-} && $lo -ne $hi ]]; then	    if false; then
 hang	tools/grade.sh	  if [[ $rc -eq 124 || $rc -eq 137 ]]; then printf 'HANG\n'; return; fi	  :
 crash	tools/grade.sh	  if [[ $rc -ge 128 ]]; then printf 'CRASH\n'; return; fi	  :
