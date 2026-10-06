@@ -1,19 +1,41 @@
 #!/usr/bin/env bash
 # Grade a candidate against PUC-Rio Lua 5.4.9.
 # tools/grade.sh --candidate <cmd> [--tier S|D|all] [--ref <path>] [--only a,b]
-# Candidate argv is exactly: <cmd> <file>. Tier S passes the assert-count shim.
+# tools/grade.sh --shim <src.lua> <dir>   (writes the tier S program, see below)
+# Candidate argv is exactly: <cmd> <file>. A tier S program is the test file
+# with tools/s_shim.lua joined onto the front of line 1, under the test's own
+# name, in a fresh directory whose other entries link to the suite. An S row
+# passes on rc 0 and an assert count equal to the reference (2 runs must agree,
+# else UNSTABLE), or for a manifest `band` row, inside [min,max] of 5 runs.
 # Residuals: tier D ignores stderr. A nonzero reference exit is not a harness
 # error. UNSTABLE is a row verdict and is not a SUMMARY field. --selftest
 # execs tools/selftest.sh. Membership is the files on disk, both ways.
 set -u
 set -o pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-export LUA_HASHSEED=0
 ulimit -c 0
 if [[ ${1:-} == --selftest ]]; then
   exec "$ROOT/tools/selftest.sh"
 fi
 die() { printf 'HARNESS %s\n' "$*" >&2; exit 2; }
+PRELUDE=$(grep -v '^[[:space:]]*--' "$ROOT/tools/s_shim.lua" | tr '\n' ' ') || die "cannot read tools/s_shim.lua"
+case $PRELUDE in
+  *--*|*'[['*|*'[='*|'') die "s_shim.lua code must have no inline comment or long bracket" ;;
+esac
+shim_into() {
+  local src=$1 dir=$2 base e
+  base=$(basename "$src")
+  [[ $(head -c 1 "$src") != '#' ]] || die "$base starts with '#'; the prelude would hide line 1"
+  mkdir -p "$dir" || die "cannot create $dir"
+  for e in "$(dirname "$src")"/*; do ln -s "$e" "$dir/" || die "cannot link $e"; done
+  rm -f "$dir/$base"
+  { printf '%s' "$PRELUDE"; cat "$src"; } >"$dir/$base" || die "cannot write $dir/$base"
+}
+if [[ ${1:-} == --shim ]]; then
+  [[ $# -eq 3 && -f $2 ]] || die "usage: --shim <src.lua> <dir>"
+  shim_into "$2" "$3"
+  exit 0
+fi
 RUN_RC=0
 run_at() {
   local cwd=$1 sec=$2 cmd=$3 file=$4 out=$5 err=$6
@@ -30,7 +52,7 @@ assert_count() {
   if [[ $line =~ EIGENLUA-ASSERTS:([0-9]+) ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
   else
-    printf '0\n'
+    printf 'none\n'
   fi
 }
 row_timeout() {
@@ -94,13 +116,6 @@ emit() {
     UNSTABLE) unstable=$((unstable + 1)) ;;
   esac
 }
-write_shim() {
-  local src=$1 dest=$2
-  case $src in
-    *\"*|*'\'*|*'|'*) die "shim path has a quote, bar, or backslash: $src" ;;
-  esac
-  awk -v p="$src" '{ gsub("__PATH__", p); print }' "$ROOT/tools/s_shim.lua" >"$dest"
-}
 twice() {
   local cwd=$1 sec=$2 cmd=$3 file=$4 pre=$5 t0 t1 ms2
   t0=$(date +%s%N)
@@ -162,19 +177,17 @@ DDIR="$ROOT/corpus/D"
 SMAN="$ROOT/corpus/S.manifest"
 DMAN="$ROOT/corpus/D.manifest"
 [[ -f $SMAN && -f $DMAN && -f $ROOT/tools/s_shim.lua ]] || die "missing manifest or assert shim"
-declare -A s_status=() d_have=()
+declare -A s_status=() d_have=() s_band=()
 declare -a s_include=() d_names=()
 while read -r status name reason; do
   [[ -z ${status:-} || ${status:0:1} == '#' ]] && continue
-  [[ $status == include || $status == exclude ]] || die "bad S manifest status: $status"
+  [[ $status =~ ^(include|exclude|band)$ ]] || die "bad S manifest status: $status"
   [[ -n ${s_status[$name]:-} ]] && die "duplicate S row: $name"
   s_status[$name]=$status
   [[ -f $SUITE/$name ]] || die "manifest row has no file: $name"
-  if [[ $status == exclude ]]; then
-    [[ -n ${reason:-} ]] || die "exclude without reason: $name"
-  else
-    s_include+=("$name")
-  fi
+  if [[ $status == include ]]; then [[ -z ${reason:-} ]]; else [[ -n ${reason:-} ]]; fi || die "bad reason field for $status row: $name"
+  [[ $status == band ]] && s_band[$name]=1
+  [[ $status == exclude ]] || s_include+=("$name")
 done <"$SMAN"
 [[ ${#s_include[@]} -eq 27 ]] || die "include count ${#s_include[@]} != 27"
 for need in heavy.lua attrib.lua big.lua main.lua; do
@@ -272,7 +285,7 @@ if (( ${#s_sel[@]} + ${#d_sel[@]} == 0 )); then die "zero rows examined"; fi
 mkdir -p "$ROOT/.tmp"
 WORK=$(mktemp -d "$ROOT/.tmp/grade-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
-declare -A d_exp_rc=() d_ms=() s_stable=() s_count=() s_ms=() s_shim=()
+declare -A d_exp_rc=() d_ms=() s_lo=() s_hi=() s_why=() s_ms=()
 ref_signaled() { [[ $1 -eq 124 || $1 -ge 128 ]]; }
 if (( ${#d_sel[@]} > 0 )); then
   for name in "${d_sel[@]}"; do
@@ -291,25 +304,39 @@ if (( ${#d_sel[@]} > 0 )); then
     d_ms[$name]=$MS
   done
 fi
+run_s() {
+  local name=$1 k=$2 cmd=$3 sec=$4 dir="$WORK/s-$name-$2"
+  shim_into "$SUITE/$name" "$dir"
+  run_at "$dir" "$sec" "$cmd" "$name" "$dir.o" "$dir.e"
+  [[ $RUN_RC -eq 99 ]] && die "could not enter $dir"
+  S_RC=$RUN_RC
+  S_C=$(assert_count "$dir.e")
+}
 if (( ${#s_sel[@]} > 0 )); then
   for name in "${s_sel[@]}"; do
-    shim="$WORK/shim-$name.lua"
-    write_shim "$SUITE/$name" "$shim"
-    s_shim[$name]=$shim
-    pre="$WORK/s-$name"
-    twice "$SUITE" 180 "$REF" "$shim" "$pre"
-    if ref_signaled "$RC1" || ref_signaled "$RC2"; then
-      die "reference failed on S/$name rc=$RC1/$RC2"
-    fi
-    c1=$(assert_count "$pre.1e")
-    c2=$(assert_count "$pre.2e")
-    if [[ $c1 != "$c2" || $RC1 -ne $RC2 ]]; then
-      s_stable[$name]=0
-    else
-      s_stable[$name]=1
-      s_count[$name]=$c1
-    fi
+    nref=2
+    [[ -n ${s_band[$name]:-} ]] && nref=5
+    lo='' hi='' rcs='' MS=0
+    for ((k = 1; k <= nref; k++)); do
+      t0=$(date +%s%N)
+      run_s "$name" "ref$k" "$REF" 180
+      t1=$(( ($(date +%s%N) - t0) / 1000000 ))
+      (( t1 > MS )) && MS=$t1
+      ref_signaled "$S_RC" && die "reference failed on S/$name rc=$S_RC"
+      [[ $S_C =~ ^[0-9]+$ ]] || die "reference printed no assert count on S/$name"
+      rcs+=" $S_RC"
+      [[ -z $lo ]] || (( S_C < lo )) && lo=$S_C
+      [[ -z $hi ]] || (( S_C > hi )) && hi=$S_C
+    done
     s_ms[$name]=$MS
+    # >>> guard:stable
+    if [[ $rcs == *[1-9]* ]] || [[ -z ${s_band[$name]:-} && $lo -ne $hi ]]; then
+      s_why[$name]="reference over $nref runs: rc$rcs, asserts in [$lo,$hi]"
+    elif [[ -n ${s_band[$name]:-} && $lo -eq $hi ]]; then
+      die "S/$name is declared band but $nref reference runs all counted $lo"
+    fi
+    # <<< guard:stable
+    s_lo[$name]=$lo s_hi[$name]=$hi
   done
 fi
 grade_d() {
@@ -340,29 +367,27 @@ grade_d() {
   # <<< guard:d-diverge
 }
 grade_s() {
-  local name=$1 shim out err rc sec special c
-  if [[ ${s_stable[$name]} -eq 0 ]]; then
-    emit S "$name" UNSTABLE "reference assert count or rc disagreed across two runs"
+  local name=$1 rc sec special c lo hi band=''
+  if [[ -n ${s_why[$name]:-} ]]; then
+    emit S "$name" UNSTABLE "${s_why[$name]}"
     return
   fi
-  shim=${s_shim[$name]}
-  out="$WORK/s-$name.cand.out"
-  err="$WORK/s-$name.cand.err"
+  lo=${s_lo[$name]} hi=${s_hi[$name]}
+  [[ -n ${s_band[$name]:-} ]] && band=" band=[$lo,$hi]"
   sec=$(row_timeout "${s_ms[$name]}")
-  run_at "$SUITE" "$sec" "$CAND" "$shim" "$out" "$err"
-  rc=$RUN_RC
-  [[ $rc -eq 99 ]] && die "could not enter $SUITE"
-  special=$(classify "$rc" "$err")
+  run_s "$name" cand "$CAND" "$sec"
+  rc=$S_RC c=$S_C
+  special=$(classify "$rc" "$WORK/s-$name-cand.e")
   if [[ -n $special ]]; then emit S "$name" "$special" "rc=$rc"; return; fi
-  c=$(assert_count "$err")
   # >>> guard:s-pass
-  if [[ $rc -eq 0 && $c -eq ${s_count[$name]} ]]; then
-    emit S "$name" PASS "asserts=$c"
+  if [[ $rc -eq 0 && $c != none ]] && (( c >= lo && c <= hi )); then
+    emit S "$name" PASS "asserts=$c$band"
     return
   fi
   # <<< guard:s-pass
   # >>> guard:s-fail
-  emit S "$name" FAIL "asserts ref=${s_count[$name]} cand=$c rc=$rc"
+  [[ -n $band ]] || band=" ref=$lo"
+  emit S "$name" FAIL "asserts cand=$c rc=$rc$band"
   # <<< guard:s-fail
 }
 for name in "${s_sel[@]}"; do grade_s "$name"; done

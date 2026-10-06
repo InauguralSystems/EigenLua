@@ -1,5 +1,7 @@
-# Tier S rows. include = graded. exclude = not graded, with a reason.
-# all.lua is the driver and is not a row. 27 include rows.
+# Tier S rows. include = graded by exact assert count. band = graded by the
+# [min,max] count of 5 reference runs, with the reason the count cannot be made
+# deterministic. exclude = not graded, with a reason.
+# all.lua is the driver and is not a row. 27 graded rows (include + band).
 include api.lua
 exclude attrib.lua fails standalone under the reference: needs all.lua setup or a C module
 exclude big.lua fails standalone under the reference: needs all.lua setup or a C module
@@ -23,7 +25,7 @@ include literals.lua
 include locals.lua
 exclude main.lua fails standalone under the reference: needs the lua driver or a C module
 include math.lua
-include nextvar.lua
+band nextvar.lua find() at line 246 asserts once per _G entry visited before "print"; next() order follows the string hash seed, which Lua takes from time and addresses at state creation
 include pm.lua
 include sort.lua
 include strings.lua

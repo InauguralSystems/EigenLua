@@ -11,7 +11,7 @@ WORK="$ROOT/.tmp/selftest-$$"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 bad=0
-ns=$(awk '$1=="include"{c++} END{print c+0}' "$ROOT/corpus/S.manifest")
+ns=$(awk '$1=="include" || $1=="band" {c++} END{print c+0}' "$ROOT/corpus/S.manifest")
 nd=$(awk 'NF && $1 !~ /^#/{c++} END{print c+0}' "$ROOT/corpus/D.manifest")
 plant() {
   local st=OK
@@ -67,7 +67,7 @@ do_silent() {
   sn=$(awk -F, '{print NF}' <<<"$sonly")
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier S --only "$sonly"
   local sbad
-  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $0 !~ /cand=0 rc=0/) {c++} END{print c+0}' "$WORK/out.txt")
+  sbad=$(awk '/^ROW S / && ($4 != "FAIL" || $0 !~ /cand=none rc=0/) {c++} END{print c+0}' "$WORK/out.txt")
   [[ $GRADE_RC -eq 1 && $(row_n) -eq $sn && $sbad -eq 0 ]] && sok=1
   run_at_grade "$GRADE" --candidate "$PLANTS/silent.sh" --ref "$REF" --tier D
   local dbad
@@ -79,14 +79,32 @@ do_silent() {
   plant silent "$exp" "$got"
 }
 do_early() {
-  run_at_grade "$GRADE" --candidate "$PLANTS/early-exit.sh" --ref "$REF" --tier S --only goto.lua
-  local line ok=0 exp="FAIL-by-count rc=0" got
-  line=$(awk '/^ROW S goto.lua /{print}' "$WORK/out.txt")
-  if [[ $GRADE_RC -eq 1 && $line == *' FAIL '* && $line =~ ref=([0-9]+)\ cand=([0-9]+)\ rc=0 ]]; then
-    [[ ${BASH_REMATCH[1]} -ne ${BASH_REMATCH[2]} ]] && ok=1
-  fi
-  if [[ $ok -eq 1 ]]; then got=$exp; else got="rc=$GRADE_RC ${line}"; fi
+  run_at_grade "$GRADE" --candidate "$PLANTS/early-exit.sh" --ref "$REF" --tier S --only goto.lua,nextvar.lua
+  local exp="goto.lua=FAIL nextvar.lua=FAIL-band rc=1" got
+  got=$(awk -v rc="$GRADE_RC" '/^ROW S / {
+      v = $3 "=" $4; if ($0 ~ / band=\[/) v = v "-band"
+      if (!match($0, / (ref|band)=\[?[0-9]+/)) v = v "-noref"
+      lo = substr($0, RSTART, RLENGTH); gsub(/[^0-9]/, "", lo)
+      if (!match($0, / cand=[0-9]+ rc=0/)) v = v "-nocount"
+      c = substr($0, RSTART, RLENGTH); sub(/ rc=0/, "", c); gsub(/[^0-9]/, "", c)
+      if (!(c + 0 > 0 && c + 0 < lo + 0)) v = v "-notpartway"
+      s = s (s == "" ? "" : " ") v }
+    END { print s " rc=" rc }' "$WORK/out.txt")
   plant early-exit "$exp" "$got"
+}
+do_shimvis() {
+  local d="$WORK/shimvis" n r1 r2
+  mkdir -p "$d"
+  "$GRADE" --shim "$PLANTS/shim_probe.lua" "$d/shim" || { plant shim-visible identical "shim rc=$?"; return; }
+  (cd "$PLANTS" && timeout 30 "$REF" shim_probe.lua >"$d/plain.out" 2>/dev/null); r1=$?
+  (cd "$d/shim" && timeout 30 "$REF" shim_probe.lua >"$d/shim.out" 2>"$d/shim.err"); r2=$?
+  n=$(wc -l <"$d/plain.out")
+  if [[ $r1 -eq 0 && $r2 -eq 0 && $n -ge 25 ]] && grep -q '^EIGENLUA-ASSERTS:[1-9]' "$d/shim.err" \
+      && cmp -s "$d/plain.out" "$d/shim.out"; then
+    plant shim-visible identical identical
+  else
+    plant shim-visible identical "rc=$r1/$r2 lines=$n $(diff "$d/plain.out" "$d/shim.out" | head -n 3 | tr '\n' ' ')"
+  fi
 }
 do_hang() {
   local only="int_one_vs_one.lua,goto_stmt.lua"
@@ -164,12 +182,28 @@ EOF
   run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
   harness nondet-D "nondeterministic"
 }
+do_unstable() {
+  FLAKY_STATE="$WORK/flaky.n" run_at_grade "$GRADE" --candidate "$REF" --ref "$PLANTS/flaky-ref.sh" --tier S --only goto.lua
+  local got
+  got="$(awk '/^ROW /{print $3 "=" $4}' "$WORK/out.txt") rc=$GRADE_RC"
+  plant unstable-ref "goto.lua=UNSTABLE rc=1" "$got"
+}
+do_staleband() {
+  local dest
+  dest=$(stage "$WORK/stale")
+  sed -i 's/^include goto\.lua$/band goto.lua plant: a deterministic row declared band/' "$dest/corpus/S.manifest"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier S --only goto.lua
+  harness stale-band "declared band but"
+}
 dispatch() {
   case $1 in
     canary) do_canary ;;
     perturb) do_perturb ;;
     silent) do_silent ;;
     early-exit) do_early ;;
+    shim-visible) do_shimvis ;;
+    unstable-ref) do_unstable ;;
+    stale-band) do_staleband ;;
     hang) do_hang ;;
     crash) do_crash ;;
     unsupported) do_unsupported ;;
@@ -188,7 +222,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit shim-visible unstable-ref stale-band hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
     dispatch "$p"
   done
 fi
