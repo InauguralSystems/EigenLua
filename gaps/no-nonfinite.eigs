@@ -1,0 +1,14 @@
+# EigenScript gap: no inf/nan. Division by zero raises, overflow saturates at
+# +/-1e308 (EigenScript#1286 row "One overloaded number type").
+# Lua:      print(1/0, -1/0, 1e308 * 10, 0/0 ~= 0/0) -> inf  -inf  inf  true
+#           math.huge -> inf
+# Expected: IEEE inf/-inf/nan values (Lua's float semantics), or a loud
+#           refusal; EigenLua refuses (exit 3) rather than print 1e308.
+# Actual v0.44.0:  1e+308 for 1e308 * 10 (silent), and 1 / 0 raises
+#           "division by zero".
+# Rows: num_print (D); any program touching math.huge or x/0.
+print of (1e308 * 10)
+try:
+    print of (1 / 0)
+catch e:
+    print of e.message
