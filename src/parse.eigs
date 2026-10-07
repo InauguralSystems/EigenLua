@@ -3,7 +3,7 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "i": 0, "va": [1], "loops": [0]}
+    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "i": 0, "va": [1], "loops": [0], "brk": [0]}
 
 define ps_t(P) as:
     return P.t[P.i]
@@ -64,6 +64,7 @@ define lua_parse(tk) as:
     local P is ps_new of (tk)
     local body is ps_block of (P)
     ps_check of [P, "eof"]
+    ps_close_breaks of (P)
     return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
 
 define ps_block(P) as:
@@ -191,13 +192,27 @@ define ps_statement(P) as:
         ps_next of (P)
         local lp is P.loops
         if lp[len of lp - 1] == 0:
-            throw of (["SYNTAX", line, "break outside loop at line " + (str of line)])
+            # Lua resolves a break like a pending goto: the error is raised
+            # when the enclosing function closes, at the line of the token
+            # after its end (lparser.c undefgoto from close_func)
+            local bk is P.brk
+            if bk[len of bk - 1] == 0:
+                bk[len of bk - 1] is line
+            return null
         return {"k": "Break", "line": line}
     if t == "goto":
         ps_next of (P)
         local nm is ps_name of (P)
         return {"k": "Goto", "name": nm, "line": line}
     return ps_exprstat of (P)
+
+# Close a function's pending breaks: a break outside a loop is an error.
+define ps_close_breaks(P) as:
+    local bk is P.brk
+    local b is bk[len of bk - 1]
+    list_truncate of [bk, len of bk - 1]
+    if b != 0:
+        throw of (["SYNTAX", P.l[P.i], "break outside loop at line " + (str of b)])
 
 define ps_loop_block(P) as:
     append of [P.loops, 1]
@@ -284,11 +299,13 @@ define ps_body(P, is_method, line) as:
     ps_expect of [P, ")"]
     append of [P.va, vararg]
     append of [P.loops, 0]
+    append of [P.brk, 0]
     local body is ps_block of (P)
     list_truncate of [P.va, len of P.va - 1]
     list_truncate of [P.loops, len of P.loops - 1]
     local endline is P.l[P.i]
     ps_match of [P, "end", "function", line]
+    ps_close_breaks of (P)
     return {"k": "Func", "params": params, "vararg": vararg, "body": body, "line": line, "endline": endline, "name": ""}
 
 define ps_explist(P) as:

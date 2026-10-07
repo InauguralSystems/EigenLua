@@ -1,4 +1,5 @@
 assert_semantics.lua unspecified-audit: ok
+break_outside_loop.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
