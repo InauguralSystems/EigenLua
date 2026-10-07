@@ -116,6 +116,13 @@ define lr_main(f, chunk, sites) as:
     lr_st.chunk is lr_chunkid of ("@" + chunk)
     lr_st.sites is sites
     lr_init_lib of null
+    # lua.c createargtable: arg[0] is the script, arg[-1] the interpreter
+    local argt is lr_newtable of null
+    lr_rawset of [argt, 0, chunk, 0]
+    local a0 is env_get of ("EIGENLUA_ARGV0")
+    if type of a0 == "str" and a0 != "":
+        lr_rawset of [argt, -1, a0, 0]
+    lr_rawset of [lr_G, "arg", argt, 0]
     try:
         lr_call of [f, [], 0]
     catch e:
@@ -1808,16 +1815,18 @@ define lr_m_fmod(A) as:
 
 # ------------------------------------------------------------ io / os
 
+# loslib.c os_exit: a boolean, else luaL_optinteger; the status reaches the
+# system as exit() passes it on, modulo 256.
 define lr_os_exit(A) as:
     local c is lr_arg of [A, 0]
-    if c == null:
-        c is 0
-    elif type of c == "bool":
+    if type of c == "bool":
         if c:
             c is 0
         else:
             c is 1
-    lr_exit of c
+    else:
+        c is lr_optint of [A, 0, "exit", 0]
+    lr_exit of (c - 256 * (floor of (c / 256)))
 
 # os.clock: processor time is not observable here; the seconds since the
 # program started stand in (its value is out of scope, GAPS.md).

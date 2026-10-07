@@ -15,4 +15,4 @@ trap 'rm -rf "$tmp"' EXIT
 printf 'print of (type of (1 == 1))\n' >"$tmp/probe.eigs"
 [[ $("$ES" "$tmp/probe.eigs" 2>/dev/null) == bool ]] || { echo "eigenlua: $ES has no bool type (need EigenScript 686d3b7d or later)" >&2; exit 2; }
 "$ES" "$ROOT/src/compile.eigs" "$1" "$tmp/prog.eigs" "$ROOT/src/runtime.eigs" || exit $?
-"$ES" "$tmp/prog.eigs"
+EIGENLUA_ARGV0=$0 "$ES" "$tmp/prog.eigs"
