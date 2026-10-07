@@ -1,0 +1,14 @@
+# EigenScript gap (an instance of no-int64): Lua 5.4 runs an integer 'for'
+# a precomputed number of times (lvm.c forprep), so
+#   for i = math.maxinteger - 1, math.maxinteger do ... end
+# runs twice. With no 64-bit integer both bounds are the same double, 2^63:
+# not an integer in [-2^63, 2^63), so the loop is a float loop whose step
+# is absorbed (2^63 + 1 == 2^63) and it never ends (the corpus probe stops
+# it after 5 rounds). Near mininteger the bounds also collapse: one round.
+# Lua:  2 rounds near maxinteger, 2 near mininteger.
+# Expected: false (the two bounds differ), then true.
+# Actual 686d3b7d: true (they are equal), true.
+# Rows: none graded (found by the round-3 critic).
+mx is 9223372036854775807
+print of (mx - 1 == mx)
+print of (mx + 1 == mx)

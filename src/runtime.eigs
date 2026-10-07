@@ -837,7 +837,7 @@ define lr_toint(v) as:
     if type of v != "num":
         return null
     local x is v
-    if x != floor of x or x < -9223372036854775808 or x > 9223372036854775808:
+    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         return null
     return x
 
@@ -1011,33 +1011,45 @@ define lr_len(a, site) as:
 
 # ------------------------------------------------------------ numeric for
 
-# [initial, limit*sign, step, sign, count]; Lua 5.4's 'for' checks. count is
-# the number of iterations of an integer loop, -1 for a float loop.
+# [initial, limit*sign, step, sign, count]; lvm.c forprep. count is the
+# number of iterations of an integer loop, -1 for a float loop. An integer
+# loop needs an integer initial value and step; anything else, strings
+# included (luaV_tonumber_ converts them), makes a float loop.
 define lr_forprep(a, b, c, site) as:
-    if type of a != "num":
-        lr_rterr of [site, "bad 'for' initial value (number expected, got " + (lr_tname of (a)) + ")"]
-    if type of b != "num":
-        lr_rterr of [site, "bad 'for' limit (number expected, got " + (lr_tname of (b)) + ")"]
-    if type of c != "num":
-        lr_rterr of [site, "bad 'for' step (number expected, got " + (lr_tname of (c)) + ")"]
-    if c == 0:
-        lr_rterr of [site, "'for' step is zero"]
-    local lim is b
-    if lr_isint of (a) and lr_isint of (c):
+    if type of a == "num" and type of c == "num" and lr_isint of (a) and lr_isint of (c):
+        if c == 0:
+            lr_rterr of [site, "'for' step is zero"]
+        local lb is lr_fornum of [b, "limit", site]
+        local lim is 0
         # an integer loop runs a precomputed number of times (lvm.c
         # forprep), so it ends even where a double absorbs the step
         if c > 0:
-            lim is floor of b
+            lim is floor of lb
             if a > lim:
                 return [a, 0, c, 1, 0]
         else:
-            lim is ceil of b
+            lim is ceil of lb
             if a < lim:
                 return [a, 0, c, 1, 0]
         return [a, 0, c, 1, (floor of ((lim - a) / c)) + 1]
-    if c > 0:
-        return [a, lim, c, 1, -1]
-    return [a, 0 - lim, c, -1, -1]
+    local fl is lr_fornum of [b, "limit", site]
+    local fs is lr_fornum of [c, "step", site]
+    local fi is lr_fornum of [a, "initial value", site]
+    if fs == 0:
+        lr_rterr of [site, "'for' step is zero"]
+    if fs > 0:
+        return [fi, fl, fs, 1, -1]
+    return [fi, 0 - fl, fs, -1, -1]
+
+# A 'for' control value as a number (strings convert), else luaG_forerror.
+define lr_fornum(v, what, site) as:
+    if type of v == "num":
+        return v
+    if type of v == "str":
+        local x is lr_str2num of (v)
+        if x != null:
+            return x
+    lr_rterr of [site, "bad 'for' " + what + " (number expected, got " + (lr_tname of (v)) + ")"]
 
 # ------------------------------------------------------------ library helpers
 
@@ -1079,11 +1091,12 @@ define lr_checknum(A, i, fname) as:
         lr_argerr of [i + 1, fname, "number expected, got " + (lr_typearg of [A, i])]
     return x
 
-# An integral value is accepted up to 2^63 inclusive: math.maxinteger maps
-# to that double (gaps/no-int64.eigs), and must still be usable.
+# lvm.c luaV_flttointns: an integral value in [-2^63, 2^63). math.maxinteger
+# maps to the double 2^63 (gaps/no-int64.eigs), so it has no integer
+# representation here: that row diverges, the direct translation.
 define lr_checkint(A, i, fname) as:
     local x is lr_checknum of [A, i, fname]
-    if x != floor of x or x < -9223372036854775808 or x > 9223372036854775808:
+    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         lr_argerr of [i + 1, fname, "number has no integer representation"]
     return x
 
@@ -1487,61 +1500,59 @@ define lr_s_char(A) as:
 
 # ------------------------------------------------------------ table library
 
+# lauxlib.c luaL_len: the length (with __len), which must be an integer.
+define lr_auxlen(t) as:
+    local v is lr_len of [t, 0]
+    if type of v == "str":
+        v is lr_str2num of (v)
+    if type of v == "num" and lr_isint of (v):
+        return v
+    lr_throw of ((lr_where of (1)) + "object length is not an integer")
+
+# ltablib.c tinsert.
 define lr_t_insert(A) as:
     local t is lr_checktab of [A, 0, "insert", "rwl"]
-    local n is (lr_len of [t, 0])
-    if len of A == 2:
-        lr_setindex of [t, n + 1, A[1], 0]
-        return []
-    if len of A != 3:
+    local e is (lr_auxlen of (t)) + 1
+    local pos is e
+    if len of A == 3:
+        pos is lr_checkint of [A, 1, "insert"]
+        if pos < 1 or pos > e:
+            lr_argerr of [2, "insert", "position out of bounds"]
+        local i is e
+        loop while i > pos:
+            lr_setindex of [t, i, lr_index of [t, i - 1, 0], 0]
+            i is i - 1
+    elif len of A != 2:
         lr_throw of ((lr_where of (1)) + "wrong number of arguments to 'insert'")
-    local pos is lr_checkint of [A, 1, "insert"]
-    if pos < 1 or pos > n + 1:
-        lr_argerr of [2, "insert", "position out of bounds"]
-    local i is n
-    loop while i >= pos:
-        lr_setindex of [t, i + 1, lr_index of [t, i, 0], 0]
-        i is i - 1
-    lr_setindex of [t, pos, A[2], 0]
+    lr_setindex of [t, pos, A[len of A - 1], 0]
     return []
 
+# ltablib.c tremove: pos defaults to the length; a given pos other than
+# the length must lie in [1, size + 1]. t[pos] is returned and the
+# elements above it shift down, the last one becoming nil.
 define lr_t_remove(A) as:
     local t is lr_checktab of [A, 0, "remove", "rwl"]
-    local n is (lr_len of [t, 0])
-    if len of A < 2:
-        if n == 0:
-            return [null]
-        local v is lr_index of [t, n, 0]
-        lr_setindex of [t, n, null, 0]
-        return [v]
-    local pos is lr_checkint of [A, 1, "remove"]
-    if n + 1 == pos:
-        local v2 is lr_index of [t, pos, 0]
-        lr_setindex of [t, pos, null, 0]
-        return [v2]
-    if n == 0 and pos == 0:
-        return [lr_index of [t, pos, 0]]
-    if pos < 1 or pos > n + 1:
+    local size is lr_auxlen of (t)
+    local pos is size
+    if lr_arg of [A, 1] != null:
+        pos is lr_checkint of [A, 1, "remove"]
+    if pos != size and (pos < 1 or pos > size + 1):
         lr_argerr of [2, "remove", "position out of bounds"]
-    local v3 is lr_index of [t, pos, 0]
-    local i is pos
-    loop while i < n:
-        lr_setindex of [t, i, lr_index of [t, i + 1, 0], 0]
-        i is i + 1
-    lr_setindex of [t, n, null, 0]
-    return [v3]
+    local v is lr_index of [t, pos, 0]
+    loop while pos < size:
+        lr_setindex of [t, pos, lr_index of [t, pos + 1, 0], 0]
+        pos is pos + 1
+    lr_setindex of [t, pos, null, 0]
+    return [v]
 
 define lr_t_concat(A) as:
     local t is lr_checktab of [A, 0, "concat", "rl"]
+    local last is lr_auxlen of (t)
     local sep is ""
     if lr_arg of [A, 1] != null:
         sep is lr_checkstr of [A, 1, "concat"]
     local i is lr_optint of [A, 2, "concat", 1]
-    local j is 0
-    if lr_arg of [A, 3] == null:
-        j is lr_len of [t, 0]
-    else:
-        j is lr_checkint of [A, 3, "concat"]
+    local j is lr_optint of [A, 3, "concat", last]
     local parts is []
     local k is i
     loop while k <= j:
@@ -1565,7 +1576,7 @@ define lr_t_unpack(A) as:
     local i is lr_optint of [A, 1, "unpack", 1]
     local j is 0
     if lr_arg of [A, 2] == null:
-        j is lr_len of [t, 0]
+        j is lr_auxlen of (t)
     else:
         j is lr_checkint of [A, 2, "unpack"]
     if i > j:
@@ -1617,7 +1628,7 @@ define lr_t_move(A) as:
 define lr_t_sort(A) as:
     local t is lr_checktab of [A, 0, "sort", "rwl"]
     local cmp is lr_arg of [A, 1]
-    local n is lr_len of [t, 0]
+    local n is lr_auxlen of (t)
     if n > 1 and cmp != null and type of cmp != "fn" and type of cmp != "builtin":
         lr_argerr of [2, "sort", "function expected, got " + (lr_typearg of [A, 1])]
     local xs is []
@@ -2033,13 +2044,15 @@ define lr_tbc_close(tb, err, site) as:
     lr_callmm of [lr_metafield of [v, "__close"], "close", [v, err], site]
 
 # An error unwinds a to-be-closed variable: close it with the error value
-# (an error in __close replaces the original), then go on unwinding.
+# (an error in __close replaces the original), then go on unwinding. Lua
+# runs these closes from the protected call that catches the error (ldo.c
+# luaD_pcall, lua_closethread), so __close is called from C: site 0.
 define lr_tbc_unwind(tb, e, site) as:
     if not tb[1]:
         if type of e == "dict" and e.COCLOSE == 1:
-            lr_tbc_close of [tb, null, site]
+            lr_tbc_close of [tb, null, 0]
         else:
-            lr_tbc_close of [tb, lr_errobj of (e), site]
+            lr_tbc_close of [tb, lr_errobj of (e), 0]
     throw of (e)
 
 # ------------------------------------------------------------ debug upvalues

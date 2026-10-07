@@ -131,6 +131,12 @@ define lua_lex(src) as:
                 local p3 is src[i:min of [i + 3, n]]
                 local p2 is src[i:min of [i + 2, n]]
                 local op is ""
+                if src[i] == "[" and i + 1 < n and src[i + 1] == "=":
+                    # llex.c skip_sep: '[' and '='s with no second '['
+                    local k2 is i + 1
+                    loop while k2 < n and src[k2] == "=":
+                        k2 is k2 + 1
+                    lex_err of [line, "invalid long string delimiter near '" + src[i:k2] + "'"]
                 if p3 == "...":
                     op is p3
                 elif p2 == "==" or p2 == "~=" or p2 == "<=" or p2 == ">=" or p2 == "//" or p2 == "::" or p2 == "<<" or p2 == ">>" or p2 == "..":
@@ -190,9 +196,10 @@ define lex_long(src, i, lv, line, is_comment) as:
     local seg is j
     loop while 1:
         if j >= n:
+            local wht is "string"
             if is_comment:
-                lex_err of [line, "unfinished long comment near '<eof>'"]
-            lex_err of [line, "unfinished long string near '<eof>'"]
+                wht is "comment"
+            lex_err of [line, "unfinished long " + wht + " (starting at line " + (str of startline) + ") near <eof>"]
         local ch is src[j]
         if ch == "]":
             local k is j + 1
@@ -213,83 +220,140 @@ define lex_long(src, i, lv, line, is_comment) as:
         else:
             j is j + 1
 
-# Numeral at i. Returns [next_index, value, is_float]. Hex integers wrap
-# modulo 2^64 in Lua; that wrap is not representable on one double and is
-# left to the value (an EigenScript gap, see LEDGER.md).
+# Numeral at i (llex.c read_numeral). Returns [next_index, value, is_float].
+# Like Lua, it takes every hex digit and '.', an exponent mark with its
+# sign, and one letter touching the end, then converts the whole text or
+# reports it as malformed. Hex integers wrap modulo 2^64 in Lua; that wrap
+# is not representable on one double and is left to the value (an
+# EigenScript gap, see LEDGER.md).
 define lex_number(src, i, line) as:
     local n is len of src
-    local j is i
+    local j is i + 1
+    local e0 is "e"
+    local e1 is "E"
+    if src[i] == "0" and j < n and (src[j] == "x" or src[j] == "X"):
+        j is j + 1
+        e0 is "p"
+        e1 is "P"
+    loop while j < n:
+        if src[j] == e0 or src[j] == e1:
+            j is j + 1
+            if j < n and (src[j] == "-" or src[j] == "+"):
+                j is j + 1
+        elif lex_is_xdigit of (ord of src[j]) or src[j] == ".":
+            j is j + 1
+        else:
+            break
+    if j < n and lex_is_alpha of (ord of src[j]):
+        j is j + 1
+    local text is src[i:j]
+    local r is lex_str2num of (text)
+    if r == null:
+        lex_err of [line, "malformed number near '" + text + "'"]
+    return [j, r[0], r[1]]
+
+# lobject.c l_str2int/l_str2d on a numeral's whole text: [value, is_float]
+# or null.
+define lex_str2num(s) as:
+    local n is len of s
+    local j is 0
     local isf is 0
-    if src[i] == "0" and i + 1 < n and (src[i + 1] == "x" or src[i + 1] == "X"):
-        j is i + 2
+    if n > 1 and s[0] == "0" and (s[1] == "x" or s[1] == "X"):
+        j is 2
         local mant is 0
         local exp is 0
         local any is 0
-        loop while j < n and lex_is_xdigit of (ord of src[j]):
-            mant is mant * 16 + (lex_xval of (ord of src[j]))
+        loop while j < n and lex_is_xdigit of (ord of s[j]):
+            mant is mant * 16 + (lex_xval of (ord of s[j]))
             any is 1
             j is j + 1
-        if j < n and src[j] == ".":
+        if j < n and s[j] == ".":
             isf is 1
             j is j + 1
-            loop while j < n and lex_is_xdigit of (ord of src[j]):
-                mant is mant * 16 + (lex_xval of (ord of src[j]))
+            loop while j < n and lex_is_xdigit of (ord of s[j]):
+                mant is mant * 16 + (lex_xval of (ord of s[j]))
                 exp is exp - 4
                 any is 1
                 j is j + 1
         if any == 0:
-            lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
-        if j < n and (src[j] == "p" or src[j] == "P"):
+            return null
+        if j < n and (s[j] == "p" or s[j] == "P"):
             isf is 1
             j is j + 1
             local sg is 1
-            if j < n and (src[j] == "+" or src[j] == "-"):
-                if src[j] == "-":
+            if j < n and (s[j] == "+" or s[j] == "-"):
+                if s[j] == "-":
                     sg is -1
                 j is j + 1
-            if j >= n or not (lex_is_digit of (ord of src[j])):
-                lex_err of [line, f"malformed number near '{src[i:j]}'"]
+            if j >= n or not (lex_is_digit of (ord of s[j])):
+                return null
             local e is 0
-            loop while j < n and lex_is_digit of (ord of src[j]):
-                e is e * 10 + (ord of src[j]) - 48
+            loop while j < n and lex_is_digit of (ord of s[j]):
+                e is e * 10 + (ord of s[j]) - 48
                 j is j + 1
             exp is exp + sg * e
-        if j < n and (lex_is_alpha of (ord of src[j]) or lex_is_digit of (ord of src[j]) or src[j] == "."):
-            lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
+        if j != n:
+            return null
         local val is mant
         if exp != 0:
             val is mant * (pow of [2, exp])
-        return [j, val, isf]
-    loop while j < n and lex_is_digit of (ord of src[j]):
+        return [val, isf]
+    local nd is 0
+    loop while j < n and lex_is_digit of (ord of s[j]):
         j is j + 1
-    if j < n and src[j] == ".":
+        nd is nd + 1
+    if j < n and s[j] == ".":
         isf is 1
         j is j + 1
-        loop while j < n and lex_is_digit of (ord of src[j]):
+        loop while j < n and lex_is_digit of (ord of s[j]):
             j is j + 1
-    if j < n and (src[j] == "e" or src[j] == "E"):
+            nd is nd + 1
+    if nd == 0:
+        return null
+    if j < n and (s[j] == "e" or s[j] == "E"):
         isf is 1
         j is j + 1
-        if j < n and (src[j] == "+" or src[j] == "-"):
+        if j < n and (s[j] == "+" or s[j] == "-"):
             j is j + 1
-        if j >= n or not (lex_is_digit of (ord of src[j])):
-            lex_err of [line, f"malformed number near '{src[i:j]}'"]
-        loop while j < n and lex_is_digit of (ord of src[j]):
+        if j >= n or not (lex_is_digit of (ord of s[j])):
+            return null
+        loop while j < n and lex_is_digit of (ord of s[j]):
             j is j + 1
-    if j < n and (lex_is_alpha of (ord of src[j]) or src[j] == "."):
-        lex_err of [line, f"malformed number near '{src[i:min of [j + 1, n]]}'"]
-    local text is src[i:j]
+    if j != n:
+        return null
+    local text is s
     if text[0] == ".":
         text is "0" + text
     if text[len of text - 1] == ".":
         text is text + "0"
-    return [j, num of text, isf]
+    local v is num of text
+    if isf == 0 and v >= 9223372036854775808:
+        isf is 1
+    return [v, isf]
 
-# Short string at i. Returns [next_index, text, line, nuls]. A NUL byte cannot
-# live in an EigenScript string (NUL-terminated, EigenScript gap): it is held
-# as byte 1 in text and nuls lists its positions (0 when there is none); the
-# emitter builds the literal with str_from_bytes, the direct translation,
-# which ends the string at the first NUL.
+# The "near" text of a lexical error inside a string (llex.c txtToken on
+# the save buffer): the delimiter, the string read so far, then the raw
+# characters of the escape being read; %s stops at a NUL byte.
+define lex_strnear(q, parts, raw) as:
+    local s is q + (join of [parts, ""])
+    local z is index_of of [s, chr of 1]
+    if z >= 0:
+        s is s[0:z]
+    return "'" + s + raw + "'"
+
+# llex.c esccheck: when it fails, the current character (unless at the
+# end of the source) joins the near text.
+define lex_escerr(src, j, line, q, parts, raw, msg) as:
+    if j < len of src:
+        raw is raw + src[j]
+    lex_err of [line, msg + " near " + (lex_strnear of [q, parts, raw])]
+
+# Short string at i (llex.c read_string). Returns [next_index, text, line,
+# nuls]. A NUL byte cannot live in an EigenScript string (NUL-terminated,
+# EigenScript gap): it is held as byte 1 in text and nuls lists its
+# positions (0 when there is none); the emitter builds the literal with
+# str_from_bytes, the direct translation, which ends the string at the
+# first NUL.
 define lex_string(src, i, line) as:
     local n is len of src
     local q is src[i]
@@ -299,21 +363,25 @@ define lex_string(src, i, line) as:
     local nul is 0
     loop while 1:
         if j >= n:
-            lex_err of [line, "unfinished string near '<eof>'"]
+            lex_err of [line, "unfinished string near <eof>"]
         local ch is src[j]
         if ch == q:
             append of [parts, src[seg:j]]
             return [j + 1, join of [parts, ""], line, nul]
         if ch == "\n" or ch == "\r":
-            lex_err of [line, "unfinished string"]
+            append of [parts, src[seg:j]]
+            lex_err of [line, "unfinished string near " + (lex_strnear of [q, parts, ""])]
         if ch == "\\":
             append of [parts, src[seg:j]]
             j is j + 1
-            if j >= n:
-                lex_err of [line, "unfinished string near '<eof>'"]
-            local e is src[j]
             local bytes is []
-            if e == "n":
+            local e is ""
+            if j < n:
+                e is src[j]
+            if j >= n:
+                # the next round reports the unfinished string
+                null
+            elif e == "n":
                 bytes is [10]
                 j is j + 1
             elif e == "t":
@@ -345,8 +413,10 @@ define lex_string(src, i, line) as:
                 line is line + 1
             elif e == "x":
                 j is j + 1
-                if j + 1 >= n or not (lex_is_xdigit of (ord of src[j])) or not (lex_is_xdigit of (ord of src[j + 1])):
-                    lex_err of [line, "hexadecimal digit expected"]
+                if j >= n or not (lex_is_xdigit of (ord of src[j])):
+                    lex_escerr of [src, j, line, q, parts, "\\x", "hexadecimal digit expected"]
+                if j + 1 >= n or not (lex_is_xdigit of (ord of src[j + 1])):
+                    lex_escerr of [src, j + 1, line, q, parts, "\\x" + src[j], "hexadecimal digit expected"]
                 bytes is [(lex_xval of (ord of src[j])) * 16 + (lex_xval of (ord of src[j + 1]))]
                 j is j + 2
             elif e == "z":
@@ -363,34 +433,37 @@ define lex_string(src, i, line) as:
             elif e == "u":
                 j is j + 1
                 if j >= n or src[j] != "{":
-                    lex_err of [line, "missing '{' in \\u{xxxx}"]
+                    lex_escerr of [src, j, line, q, parts, "\\u", "missing '{'"]
                 j is j + 1
-                local cp is 0
-                local nd is 0
+                if j >= n or not (lex_is_xdigit of (ord of src[j])):
+                    lex_escerr of [src, j, line, q, parts, "\\u{", "hexadecimal digit expected"]
+                local cp is lex_xval of (ord of src[j])
+                local raw is "\\u{" + src[j]
+                j is j + 1
                 loop while j < n and lex_is_xdigit of (ord of src[j]):
+                    if cp > 134217727:
+                        lex_escerr of [src, j, line, q, parts, raw, "UTF-8 value too large"]
                     cp is cp * 16 + (lex_xval of (ord of src[j]))
-                    nd is nd + 1
+                    raw is raw + src[j]
                     j is j + 1
-                if nd == 0:
-                    lex_err of [line, "hexadecimal digit expected"]
-                if cp >= 2147483648:
-                    lex_err of [line, "UTF-8 value too large"]
                 if j >= n or src[j] != "}":
-                    lex_err of [line, "missing '}' in \\u{xxxx}"]
+                    lex_escerr of [src, j, line, q, parts, raw, "missing '}'"]
                 j is j + 1
                 bytes is lex_utf8 of (cp)
             elif lex_is_digit of (ord of e):
                 local v is 0
                 local k is 0
+                local raw2 is "\\"
                 loop while k < 3 and j < n and lex_is_digit of (ord of src[j]):
                     v is v * 10 + (ord of src[j]) - 48
+                    raw2 is raw2 + src[j]
                     j is j + 1
                     k is k + 1
                 if v > 255:
-                    lex_err of [line, "decimal escape too large"]
+                    lex_escerr of [src, j, line, q, parts, raw2, "decimal escape too large"]
                 bytes is [v]
             else:
-                lex_err of [line, "invalid escape sequence '\\" + e + "'"]
+                lex_escerr of [src, j, line, q, parts, "\\", "invalid escape sequence"]
             for b in bytes:
                 if b == 0:
                     if type of nul != "list":
