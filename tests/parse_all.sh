@@ -5,12 +5,12 @@
 # that fails must print a located message ("<file>:<line>:" or
 # EIGENLUA-UNSUPPORTED ... at <file>:<line>) or it is reported as UNLOCATED.
 # The population is derived from the files on disk and the manifest, and
-# examined == expected (every D program, at least 47, + 23 S) > 0 is asserted. Prints parsed=<k>/<n>;
+# examined == expected (52 D + 23 S) > 0 is asserted. Prints parsed=<k>/<n>;
 # exit 0 iff k == n.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-ES=${EIGENSCRIPT:-$(command -v eigenscript || true)}
-[[ -n $ES && -x $ES ]] || { echo "HARNESS: no EigenScript VM (set EIGENSCRIPT or put eigenscript on PATH)"; exit 2; }
+ES=${EIGENSCRIPT:-$ROOT/.tmp/eigenscript-linux-x86_64}
+[[ $("$ES" --version 2>&1) == 0.44.0 ]] || { echo "HARNESS: $ES is not EigenScript 0.44.0"; exit 2; }
 files=()
 for f in "$ROOT"/corpus/D/*.lua; do files+=("$f"); done
 nd=${#files[@]}
@@ -19,7 +19,7 @@ while read -r status name _; do
   files+=("$ROOT/corpus/lua-tests/$name")
 done <"$ROOT/corpus/S.manifest"
 ns=$(( ${#files[@]} - nd ))
-[[ $nd -ge 47 && $ns -eq 23 ]] || { echo "HARNESS: population D=$nd S=$ns, want >= 47 and 23"; exit 2; }
+[[ $nd -eq 52 && $ns -eq 23 ]] || { echo "HARNESS: population D=$nd S=$ns, want 52 and 23"; exit 2; }
 k=0 n=0
 for f in "${files[@]}"; do
   n=$((n + 1))
