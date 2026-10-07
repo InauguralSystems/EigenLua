@@ -74,7 +74,8 @@ define lr_rterr(site, msg) as:
     local line is lr_site_line of (site)
     if line < 0:
         throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
-    throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg})
+    # "site": raised by Lua code there (a message handler runs at that line)
+    throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg, "site": site})
 
 # luaL_argerror: the function is named as the call site names it (a
 # method call does not count self), else by its global name (lauxlib.c
@@ -706,7 +707,13 @@ define lr_call(f, args, site) as:
         try:
             r is f of (args)
         catch e:
-            lr_eserr of [e, site]
+            # a Lua function that failed (most often a call-depth overflow on
+            # entry) is dropped: the error belongs to the calling line
+            local lua is lr_upvals of (f) != null
+            if lua and not (type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1)):
+                list_truncate of [lr_stk, len of lr_stk - 1]
+                list_truncate of [lr_fstk, len of lr_fstk - 1]
+            lr_eserr of [e, site, lua]
         list_truncate of [lr_stk, len of lr_stk - 1]
         list_truncate of [lr_fstk, len of lr_fstk - 1]
         if site == 0:
@@ -732,8 +739,9 @@ define lr_ccall(f, args, site) as:
 
 # An EigenScript error escaping into Lua code becomes a Lua error located at
 # the Lua site it escaped from, keeping its text; Lua errors and coroutine
-# unwinding pass through unchanged.
-define lr_eserr(e, site) as:
+# unwinding pass through unchanged. `here`: Lua code at that site raised it
+# (not a C function called there), so a message handler runs at that line.
+define lr_eserr(e, site, here) as:
     if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1):
         throw of (e)
     local pos is ""
@@ -741,9 +749,12 @@ define lr_eserr(e, site) as:
         local line is lr_site_line of (site)
         if line >= 0:
             pos is (lr_site_chunk of (site)) + ":" + (str of line) + ": "
+    local msg is "EigenScript error: " + (str of e)
     if type of e == "dict" and type of e.message == "str":
-        throw of ({"LUAERR": 1, "v": pos + "EigenScript " + (str of e.kind) + " error: " + e.message})
-    throw of ({"LUAERR": 1, "v": pos + "EigenScript error: " + (str of e)})
+        msg is "EigenScript " + (str of e.kind) + " error: " + e.message
+    if here and pos != "":
+        throw of ({"LUAERR": 1, "v": pos + msg, "site": site})
+    throw of ({"LUAERR": 1, "v": pos + msg})
 
 # Call metamethod h for event ev ("add", "index", ...): Lua names it in the
 # error when it cannot be called. It is one C-stack level (luaT_callTM).
@@ -836,7 +847,7 @@ define lr_arith(op, a, b, site) as:
     try:
         return lr_arith_num of [op, x, y, site]
     catch e:
-        lr_eserr of [e, site]
+        lr_eserr of [e, site, true]
 
 define lr_arith_num(op, x, y, site) as:
     if op == "+":
@@ -1319,7 +1330,10 @@ define lr_b_xpcall(A) as:
         # the handler runs at the error point (the call-site stack still holds
         # the frames that raised), as luaG_errormsg calls it before unwinding
         local v is lr_errobj of (e)
-        local hv is lr_xp_handle of [h, v, 0]
+        local hs is 0
+        if type of e == "dict" and type of e.site == "num":
+            hs is e.site
+        local hv is lr_xp_handle of [h, v, 0, hs]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
         lr_cc.n is ccn
@@ -1329,14 +1343,26 @@ define lr_b_xpcall(A) as:
 # The message handler sees each error, its own included (ldebug.c
 # luaG_errormsg calls it again for an error it raises); past the C-call
 # limit the result is "error in error handling" (LUA_ERRERR).
-define lr_xp_handle(h, v, n) as:
+define lr_xp_handle(h, v, n, site) as:
     if n >= 200:
         return "error in error handling"
     local depth is len of lr_stk
     local ccn is lr_cc.n
     local nny is lr_co_cur[0].nny
     try:
-        return lr_call1 of [lr_ny of (h), [v], 0]
+        # called from the erring Lua frame (at its line), else from C; it
+        # cannot yield (luaD_callnoyield)
+        local r is null
+        local cr is lr_co_cur[0]
+        cr.nny is cr.nny + 1
+        if site == 0:
+            r is lr_call of [h, [v], 0]
+        else:
+            r is lr_ccall of [h, [v], site]
+        cr.nny is cr.nny - 1
+        if len of r > 0:
+            return r[0]
+        return null
     catch e:
         local rr is lr_co_cur[0]
         rr.nny is nny
@@ -1345,7 +1371,10 @@ define lr_xp_handle(h, v, n) as:
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
         lr_cc.n is ccn
-        return lr_xp_handle of [h, lr_errobj of (e), n + 1]
+        local hs is 0
+        if type of e == "dict" and type of e.site == "num":
+            hs is e.site
+        return lr_xp_handle of [h, lr_errobj of (e), n + 1, hs]
 
 define lr_b_select(A) as:
     local n is lr_arg of [A, 0]

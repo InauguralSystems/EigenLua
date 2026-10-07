@@ -80,4 +80,5 @@ tbl_remove_insert.lua unspecified-audit: ok
 tbl_sort_auxsort.lua unspecified-audit: ok
 utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
+xpcall_handler_frame.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>
