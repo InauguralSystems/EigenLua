@@ -2,6 +2,7 @@ arg_table.lua unspecified-audit: ok
 assert_semantics.lua unspecified-audit: ok
 break_outside_loop.lua unspecified-audit: ok
 builtin_values.lua unspecified-audit: ok
+builtin_values_more.lua unspecified-audit: ok
 co_close_yield.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
 co_isyieldable_c.lua unspecified-audit: ok
@@ -16,12 +17,14 @@ debug_traceback_thread.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
 err_c_function_unlocated.lua unspecified-audit: ok
 err_eigs_located.lua unspecified-audit: ok
+err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
 err_pcall.lua unspecified-audit: ok
 err_xpcall.lua unspecified-audit: ok
 for_string_bounds.lua unspecified-audit: ok
+genfor_close_line.lua unspecified-audit: ok
 goto_stmt.lua unspecified-audit: ok
 int_conversion_errors.lua unspecified-audit: ok
 int_maxinteger.lua unspecified-audit: ok
@@ -35,7 +38,10 @@ io_read_eof.lua unspecified-audit: ok
 lex_error_messages.lua unspecified-audit: ok
 lex_line_endings.lua unspecified-audit: ok
 lex_near_raw.lua unspecified-audit: ok
+lib_argerr_names.lua unspecified-audit: ok
+load_chunk_sites.lua unspecified-audit: ok
 load_mode_binary.lua unspecified-audit: ok
+load_reader_counts.lua unspecified-audit: ok
 load_reader_protected.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
@@ -53,6 +59,7 @@ method_lookup_order.lua unspecified-audit: ok
 multi_assign.lua unspecified-audit: ok
 multi_assign_order.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
+num_hexfloat_subnormal.lua unspecified-audit: ok
 num_print.lua unspecified-audit: ok
 num_str2num_edges.lua unspecified-audit: ok
 ops_matrix.lua unspecified-audit: ok
@@ -60,6 +67,7 @@ os_exit_args.lua unspecified-audit: ok
 os_exit_close.lua unspecified-audit: ok
 print_partial.lua unspecified-audit: ok
 require_searchers.lua unspecified-audit: ok
+ptr_id_space.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok
@@ -96,5 +104,6 @@ tbl_remove_insert.lua unspecified-audit: ok
 tbl_sort_auxsort.lua unspecified-audit: ok
 utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
+xpcall_handler_close.lua unspecified-audit: ok
 xpcall_handler_frame.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>

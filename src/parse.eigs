@@ -3,7 +3,7 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    local P is {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0, "lx": null}
+    local P is {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0, "lx": null, "repkeep": 0}
     if has_key of [tk, "rd"]:
         P.lx is tk
         ps_fill of [P, 0]
@@ -97,17 +97,23 @@ define lua_parse(tk) as:
 
 define ps_block(P) as:
     ps_enterblock of (P)
+    # a repeat body's scope stays open over its condition (P.repkeep):
+    # the statement leaves it after the condition
+    local keep is P.repkeep
+    P.repkeep is 0
     local stats is []
     loop while 1:
         local t is P.t[P.i]
         if t == "return":
             append of [stats, ps_retstat of (P)]
             ps_lastline of (P)
-            ps_leaveblock of (P)
+            if not keep:
+                ps_leaveblock of (P)
             return stats
         if ps_block_follow of [P, 1]:
             ps_lastline of (P)
-            ps_leaveblock of (P)
+            if not keep:
+                ps_leaveblock of (P)
             return stats
         local s is ps_statement of (P)
         if s != null:
@@ -176,9 +182,11 @@ define ps_statement1(P) as:
         return ps_for of (P)
     if t == "repeat":
         ps_next of (P)
+        P.repkeep is 1
         local body is ps_loop_block_until of (P)
         ps_match of [P, "until", "repeat", line]
         local cond is ps_expr of (P)
+        ps_leaveblock of (P)
         return {"k": "Repeat", "body": body, "cond": cond, "line": line, "bend": P.l[P.i - 1], "endl": P.l[P.i - 1]}
     if t == "function":
         ps_next of (P)
@@ -202,6 +210,7 @@ define ps_statement1(P) as:
             is_method is 1
         local fn is ps_body of [P, is_method, line]
         fn.name is fullname
+        ps_check_readonly of [P, target]
         return {"k": "Assign", "targets": [target], "exprs": [fn], "line": line, "fstat": 1}
     if t == "local":
         ps_next of (P)
@@ -223,9 +232,10 @@ define ps_statement1(P) as:
             if P.t[P.i] == "<":
                 ps_next of (P)
                 atb is ps_name of (P)
+                # getlocalattribute: checknext(ls, '>') reads the next token first
+                ps_expect of [P, ">"]
                 if atb != "const" and atb != "close":
                     throw of (["SYNTAX", P.l[P.i], "unknown attribute '" + atb + "'"])
-                ps_expect of [P, ">"]
             append of [attribs, atb]
             go is 0
             if P.t[P.i] == ",":
@@ -241,8 +251,12 @@ define ps_statement1(P) as:
         if P.t[P.i] == "=":
             ps_next of (P)
             exprs is ps_explist of (P)
+        local fsl is ps_fs of (P)
+        local ai is 0
         for nm2 in names:
             ps_addvar of [P, nm2]
+            fsl.attrs[len of fsl.attrs - 1] is attribs[ai]
+            ai is ai + 1
         return {"k": "Local", "names": names, "attribs": attribs, "exprs": exprs, "line": line}
     if t == "::":
         ps_next of (P)
@@ -406,6 +420,7 @@ define ps_exprstat(P) as:
             local tg is targets[len of targets - 1]
             if tg.k != "Name" and tg.k != "Index":
                 ps_err of [P, "syntax error"]
+            ps_check_readonly of [P, tg]
             if P.t[P.i] != ",":
                 break
             ps_next of (P)
@@ -490,7 +505,8 @@ define ps_table(P) as:
     ps_expect of [P, "{"]
     local items is []
     loop while P.t[P.i] != "}":
-        if P.lx != null:
+        # lparser.c field: luaX_lookahead only when the field starts with a name
+        if P.lx != null and P.t[P.i] == "name":
             ps_fill of [P, P.i + 1]
         if P.t[P.i] == "name" and P.t[P.i + 1] == "=":
             local kl is P.l[P.i]
@@ -615,7 +631,7 @@ define ps_subexpr1(P, limit) as:
 # level. Every resolved Goto node gets the target Label node's id.
 
 define ps_newfs as:
-    return {"actvar": 0, "vars": [], "blocks": [], "labels": [], "gotos": [], "line": 0}
+    return {"actvar": 0, "vars": [], "attrs": [], "blocks": [], "labels": [], "gotos": [], "line": 0}
 
 # lparser.c errorlimit
 define ps_errorlimit(P, limit, wht) as:
@@ -636,7 +652,26 @@ define ps_fs(P) as:
 define ps_addvar(P, name) as:
     local fs is ps_fs of (P)
     append of [fs.vars, name]
+    append of [fs.attrs, ""]
     fs.actvar is fs.actvar + 1
+
+# lparser.c check_readonly: a name that resolves to a <const> or <close>
+# local of this or an enclosing function cannot be assigned. Raised where
+# the parser stands (luaK_semerror: no "near" part).
+define ps_check_readonly(P, e) as:
+    if e.k != "Name":
+        return null
+    local k is len of P.fs - 1
+    loop while k >= 0:
+        local fs is P.fs[k]
+        local j is len of fs.vars - 1
+        loop while j >= 0:
+            if fs.vars[j] == e.n:
+                if fs.attrs[j] != "":
+                    throw of (["SYNTAX", P.l[P.i], "attempt to assign to const variable '" + e.n + "'"])
+                return null
+            j is j - 1
+        k is k - 1
 
 define ps_enterblock(P) as:
     local fs is ps_fs of (P)
@@ -657,6 +692,7 @@ define ps_leaveblock(P) as:
             i is i + 1
     fs.actvar is bl.nactvar
     list_truncate of [fs.vars, bl.nactvar]
+    list_truncate of [fs.attrs, bl.nactvar]
 
 define ps_label(P, nm, line) as:
     local fs is ps_fs of (P)

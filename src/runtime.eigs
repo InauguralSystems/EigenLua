@@ -12,11 +12,14 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null, "curf": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
 lr_fnreg is []
+# lr_fnids parallels lr_fnreg: each function's id, from lr_st.nid, the one
+# id space of tables, functions, threads and strings (tostring, %p)
+lr_fnids is []
 
 # ------------------------------------------------------------ process edges
 
@@ -30,12 +33,23 @@ define lr_exit(code) as:
     lr_stderr of ("EIGENLUA-ASSERTS:" + (str of lr_st.asserts) + "\n")
     exit of code
 
+# A site is an id into lr_st.sites (the main program's), or, in a chunk
+# compiled by load, the site record itself, held by the chunk's code and
+# freed with it (EigenLua#29).
+define lr_sd(site) as:
+    if type of site == "num":
+        return lr_st.sites[site]
+    return site
+
+define lr_issite(s) as:
+    return type of s == "num" or type of s == "list"
+
 define lr_site_line(site) as:
-    return lr_st.sites[site][0]
+    return (lr_sd of (site))[0]
 
 # The chunk name of a site: a site added by load carries its chunk's.
 define lr_site_chunk(site) as:
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     if len of sd > 3:
         return sd[3]
     return lr_st.chunk
@@ -43,7 +57,7 @@ define lr_site_chunk(site) as:
 # The source of a site's chunk (lua_Debug.source): "@file", "=name" or
 # the chunk text itself.
 define lr_site_source(site) as:
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     if len of sd > 4:
         return sd[4]
     return lr_st.source
@@ -95,8 +109,11 @@ define lr_argerr(n, fname, msg) as:
     local site is 0
     if len of lr_stk > 0:
         site is lr_stk[len of lr_stk - 1]
-    local sd is lr_st.sites[site]
-    if site != 0 and len of sd[2] > 8 and sd[2][0:8] == "method '":
+    local sd is (lr_sd of (site))
+    local mk is lr_st.mmk
+    if site != 0 and mk != null and mk[0] == len of lr_stk and mk[1] == site and lr_fnid of (lr_fstk[len of lr_fstk - 1]) == lr_fnid of (mk[2]):
+        nm is mk[3]
+    elif site != 0 and len of sd[2] > 8 and sd[2][0:8] == "method '":
         nm is sd[2][8:len of sd[2] - 1]
         n is n - 1
         if n == 0:
@@ -182,7 +199,9 @@ define lr_main(f, chunk, sites) as:
     catch e:
         if type of e == "dict" and e.EXIT == 1:
             lr_exit of (e.code)
-        local msg is lr_msgh of (lr_errobj of (e))
+        local msg is lr_errobj of (e)
+        if not (type of e == "dict" and e.hd == true):
+            msg is lr_msgh of (msg)
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
     lr_exit of 0
@@ -350,10 +369,10 @@ define lr_isdigit(c) as:
 
 # strtod on a hexadecimal numeral (luaconf.h makes lua_strx2number strtod
 # under C99): the significant hex digits ds (no leading zero) times
-# 2^e, correctly rounded to a double (round half to even). Thirteen
-# digits are exact; the 14th and 15th join them in one addition, and
-# any nonzero digit past them adds a half (a sticky bit), which rounds
-# like the exact value since the sum is at least 2^56.
+# 2^e, rounded ONCE to a double (round half to even) at the precision of
+# the result: 53 bits, or fewer for a subnormal, whose last bit is
+# 2^-1074. The kept bits form an integer below 2^53 and the scaling by
+# powers of two is then exact.
 define lr_hexd(ds, e) as:
     local k is len of ds
     loop while k > 0 and ds[k - 1] == 0:
@@ -361,25 +380,42 @@ define lr_hexd(ds, e) as:
         e is e + 4
     if k == 0:
         return 0
-    local m is 0
+    # the significand's bits, most significant first, from its first 1
+    local bits is []
     local i is 0
-    loop while i < k and i < 13:
-        m is m * 16 + ds[i]
+    loop while i < k:
+        local d is ds[i]
+        for w in [8, 4, 2, 1]:
+            if d >= w:
+                append of [bits, 1]
+                d is d - w
+            elif len of bits > 0:
+                append of [bits, 0]
         i is i + 1
-    if k > 13:
-        local r is 0
-        loop while i < 15:
-            r is r * 16
-            if i < k:
-                r is r + ds[i]
+    local b is len of bits
+    # bits kept: 53, or those at or above 2^-1074 (value is bits * 2^e)
+    local p is b + e + 1074
+    if p > 53:
+        p is 53
+    if p < 0:
+        return 0
+    if p > b:
+        p is b
+    local m is 0
+    i is 0
+    loop while i < p:
+        m is m * 2 + bits[i]
+        i is i + 1
+    if p < b and bits[p] == 1:
+        local up is m % 2 == 1
+        i is p + 1
+        loop while i < b and not up:
+            if bits[i] == 1:
+                up is true
             i is i + 1
-        loop while i < k:
-            if ds[i] != 0:
-                r is r + 0.5
-                i is k
-            i is i + 1
-        m is m * 256 + r
-        e is e + 4 * (k - 15)
+        if up:
+            m is m + 1
+    e is e + b - p
     # m * 2^e in steps that stay finite until the true result is not
     loop while e > 0:
         local s is min of [e, 512]
@@ -511,22 +547,24 @@ define lr_tostr(v) as:
             return r
         local nm is lr_metafield of [v, "__name"]
         if type of nm == "str":
-            return nm + ": 0x" + (hex of [v.id, 8])
+            return nm + ": 0x" + (str_lower of (hex of [v.id, 8]))
         if v.ud == true:
-            return "userdata: 0x" + (hex of [v.id, 8])
-        return "table: 0x" + (hex of [v.id, 8])
+            return "userdata: 0x" + (str_lower of (hex of [v.id, 8]))
+        return "table: 0x" + (str_lower of (hex of [v.id, 8]))
     if t == "fn" or t == "builtin":
-        return "function: 0x" + (hex of [lr_fnid of (v), 8])
+        return "function: 0x" + (str_lower of (hex of [lr_fnid of (v), 8]))
     if t == "list":
-        return "thread: 0x" + (hex of [v[0].id, 8])
+        return "thread: 0x" + (str_lower of (hex of [v[0].id, 8]))
     return "userdata"
 
 define lr_fnid(f) as:
     local i is list_index_of of [lr_fnreg, f]
     if i < 0:
         append of [lr_fnreg, f]
-        i is len of lr_fnreg - 1
-    return i + 1
+        lr_st.nid is lr_st.nid + 1
+        append of [lr_fnids, lr_st.nid]
+        return lr_st.nid
+    return lr_fnids[i]
 
 # ------------------------------------------------------------ tables
 
@@ -716,12 +754,10 @@ define lr_index(o, k, site) as:
     lr_rterr of [site, "'__index' chain too long; possible loop"]
 
 define lr_idxerr(o, k, site, depth) as:
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local desc is ""
     if depth == 0 and sd[1] != "":
         desc is " (" + sd[1] + ")"
-    elif depth == 0 and type of k == "str":
-        desc is " (field '" + k + "')"
     lr_rterr of [site, "attempt to index a " + (lr_tname of (o)) + " value" + desc]
 
 define lr_setindex(o, k, v, site) as:
@@ -818,7 +854,7 @@ define lr_call(f, args, site) as:
     local h is lr_metafield of [f, "__call"]
     if h != null:
         return lr_call of [h, concat of [[f], args], site]
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local desc is ""
     if sd[1] != "":
         desc is " (" + sd[1] + ")"
@@ -858,7 +894,15 @@ define lr_callmm(h, ev, args, site) as:
         lr_rterr of [site, "attempt to call a " + (lr_tname of (h)) + " value (metamethod '" + ev + "')"]
     if site == 0:
         return lr_call of [h, args, 0]
-    return lr_ccall of [h, args, site]
+    # a C function called here is named after the event (ldebug.c
+    # funcnamefromcode: "metamethod"), which luaL_argerror reports; lr_st.mmk
+    # marks the frame, and the frame's depth, site and function must all
+    # match for the mark to apply
+    local pm is lr_st.mmk
+    lr_st.mmk is [len of lr_stk + 1, site, h, ev]
+    local r is lr_ccall of [h, args, site]
+    lr_st.mmk is pm
+    return r
 
 define lr_callmm1(h, ev, args, site) as:
     local r is lr_callmm of [h, ev, args, site]
@@ -876,7 +920,7 @@ define lr_call1(f, args, site) as:
 # the method (the site's second description).
 define lr_mcall(f, o, args, site) as:
     if type of f != "fn" and lr_metafield of [f, "__call"] == null:
-        lr_rterr of [site, "attempt to call a " + (lr_tname of (f)) + " value (" + lr_st.sites[site][2] + ")"]
+        lr_rterr of [site, "attempt to call a " + (lr_tname of (f)) + " value (" + (lr_sd of (site))[2] + ")"]
     return lr_call of [f, concat of [[o], args], site]
 
 define lr_mcall1(f, o, args, site) as:
@@ -908,7 +952,7 @@ define lr_arith_meta(op, a, b, site) as:
         h is lr_metafield of [b, ev]
     if h != null:
         return lr_callmm1 of [h, ev[2:], [a, b], site]
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local bad is b
     local desc is sd[2]
     local isbit is op == "&" or op == "|" or op == "~" or op == "<<" or op == ">>" or op == "u~"
@@ -1024,7 +1068,7 @@ define lr_unm(a, site) as:
     local h is lr_metafield of [a, "__unm"]
     if h != null:
         return lr_callmm1 of [h, "unm", [a, a], site]
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local desc is ""
     if sd[1] != "":
         desc is " (" + sd[1] + ")"
@@ -1183,7 +1227,7 @@ define lr_concat(a, b, site) as:
         h is lr_metafield of [b, "__concat"]
     if h != null:
         return lr_callmm1 of [h, "concat", [a, b], site]
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local bad is a
     local desc is sd[1]
     if ta == "str" or ta == "num":
@@ -1203,7 +1247,7 @@ define lr_len(a, site) as:
         return lr_callmm1 of [h, "len", [a, a], site]
     if ta == "dict":
         return len of a.a
-    local sd is lr_st.sites[site]
+    local sd is (lr_sd of (site))
     local desc is ""
     if sd[1] != "":
         desc is " (" + sd[1] + ")"
@@ -1272,6 +1316,13 @@ define lr_checktab(A, i, fname, what) as:
 define lr_checkany(A, i, fname) as:
     if i >= len of A:
         lr_argerr of [i + 1, fname, "value expected"]
+
+# luaL_checktype(L, i, LUA_TFUNCTION)
+define lr_checkfn(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    if type of v != "fn" and type of v != "builtin":
+        lr_argerr of [i + 1, fname, "function expected, got " + (lr_typearg of [A, i])]
+    return v
 
 define lr_checktable(A, i, fname) as:
     local v is lr_arg of [A, i]
@@ -1481,9 +1532,11 @@ define lr_b_xpcall(A) as:
         # the frames that raised), as luaG_errormsg calls it before unwinding
         local v is lr_errobj of (e)
         local hs is 0
-        if type of e == "dict" and type of e.site == "num":
+        if type of e == "dict" and lr_issite of (e.site):
             hs is e.site
-        local hv is lr_xp_handle of [h, v, 0, hs]
+        local hv is v
+        if not (type of e == "dict" and e.hd == true):
+            hv is lr_xp_handle of [h, v, 0, hs]
         list_truncate of [ef, nef]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
@@ -1525,7 +1578,7 @@ define lr_xp_handle(h, v, n, site) as:
         list_truncate of [lr_fstk, depth]
         lr_ccrestore of [ccn, ccg]
         local hs is 0
-        if type of e == "dict" and type of e.site == "num":
+        if type of e == "dict" and lr_issite of (e.site):
             hs is e.site
         return lr_xp_handle of [h, lr_errobj of (e), n + 1, hs]
 
@@ -2144,6 +2197,13 @@ define lr_os_getenv(A) as:
 # Only the C locale exists (os.setlocale answers as a C library would).
 define lr_os_setlocale(A) as:
     local l is lr_arg of [A, 0]
+    if l != null:
+        l is lr_checkstr of [A, 0, "setlocale"]
+    # loslib.c: luaL_checkoption(L, 2, "all", catnames)
+    if lr_arg of [A, 1] != null:
+        local cat is lr_checkstr of [A, 1, "setlocale"]
+        if list_index_of of [["all", "collate", "ctype", "monetary", "numeric", "time"], cat] < 0:
+            lr_argerr of [2, "setlocale", "invalid option '" + cat + "'"]
     if l == null or l == "" or l == "C" or l == "POSIX":
         return ["C"]
     return [null]
@@ -2196,10 +2256,7 @@ define lr_compile(src, source, env) as:
         if type of src == "str":
             tk is lua_lex of (src)
         local ast is lua_parse of (tk)
-        local r is emit_chunk of [ast, len of lr_st.sites]
-        for st in r[1]:
-            append of [lr_st.sites, [st[0], st[1], st[2], chunkid, source]]
-        code is r[0]
+        code is emit_chunk of (ast)
     catch e:
         if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
             if e[1] < 0:
@@ -2210,9 +2267,11 @@ define lr_compile(src, source, env) as:
             lr_exit of 3
         if type of e == "dict" and e.LUAERR == 1:
             local hs is 0
-            if type of e.site == "num":
+            if lr_issite of (e.site):
                 hs is e.site
-            local ev is lr_errfunc of [e.v, hs]
+            local ev is e.v
+            if e.hd != true:
+                ev is lr_errfunc of [e.v, hs]
             local rr is lr_co_cur[0]
             rr.nny is nny
             list_truncate of [lr_stk, depth]
@@ -2222,7 +2281,7 @@ define lr_compile(src, source, env) as:
         throw of (e)
     local L is eval of code
     local cell is [env]
-    return [L of (cell)]
+    return [L of [cell, [chunkid, source]]]
 
 # ldo.c checkmode: the first character tells a binary chunk (LUA_SIGNATURE)
 # from text; null when the mode allows it.
@@ -2279,9 +2338,11 @@ define lr_b_load(A) as:
     catch e:
         if type of e == "dict" and e.LUAERR == 1:
             local hs is 0
-            if type of e.site == "num":
+            if lr_issite of (e.site):
                 hs is e.site
-            local ev is lr_errfunc of [e.v, hs]
+            local ev is e.v
+            if e.hd != true:
+                ev is lr_errfunc of [e.v, hs]
             local rr is lr_co_cur[0]
             rr.nny is nny
             list_truncate of [lr_stk, depth]
@@ -2491,8 +2552,30 @@ define lr_tbc_unwind(tb, e, site) as:
         elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
         else:
+            e is lr_errhd of (e)
             lr_tbc_close of [tb, lr_errobj of (e), 0]
     throw of (e)
+
+# An error reaching its first to-be-closed variable passes through the
+# message handler in force there, at the raise point (ldebug.c
+# luaG_errormsg calls L->errfunc before luaD_throw; the closes run later,
+# from luaD_pcall, with the handler's result). The error is marked "hd"
+# so the protected call that catches it does not call the handler again.
+define lr_errhd(e) as:
+    if type of e == "dict" and e.hd == true:
+        return e
+    local ef is lr_co_cur[0].ef
+    if len of ef == 0 or ef[len of ef - 1] == null:
+        return e
+    local hs is 0
+    if type of e == "dict" and lr_issite of (e.site):
+        hs is e.site
+    local hv is lr_errfunc of [lr_errobj of (e), hs]
+    if type of e == "dict" and e.LUAERR == 1:
+        e.v is hv
+        e.hd is true
+        return e
+    return {"LUAERR": 1, "v": hv, "hd": true, "site": hs}
 
 # ------------------------------------------------------------ debug upvalues
 # A Lua function answers a call with null (instead of its argument list)
@@ -2514,16 +2597,19 @@ define lr_upvals(f) as:
     return f of (null)
 
 define lr_d_getupvalue(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c: the index is checked before the function
     local n is lr_checkint of [A, 1, "getupvalue"]
+    local f is lr_checkfn of [A, 0, "getupvalue"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return []
     return [u[1][n - 1], u[0][n - 1][0]]
 
 define lr_d_setupvalue(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c db_setupvalue: luaL_checkany(L, 3), then auxupvalue's checks
+    lr_checkany of [A, 2, "setupvalue"]
     local n is lr_checkint of [A, 1, "setupvalue"]
+    local f is lr_checkfn of [A, 0, "setupvalue"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return []
@@ -2533,8 +2619,9 @@ define lr_d_setupvalue(A) as:
 
 # A light userdata naming the cell: equal ids for a shared upvalue.
 define lr_d_upvalueid(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c: the index is checked before the function
     local n is lr_checkint of [A, 1, "upvalueid"]
+    local f is lr_checkfn of [A, 0, "upvalueid"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return [null]
@@ -2550,7 +2637,15 @@ define lr_d_upvalueid(A) as:
 # function. Only 'currentline', 'short_src', 'source' and 'what' are filled.
 
 define lr_d_frame(level) as:
-    return lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
+    local fr is lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
+    # a chunk compiled by load runs as a main function too (what = "main"):
+    # the frame's function is the one the call below it called
+    local j is len of lr_stk - level - 1
+    if fr != null and not fr.c and not fr.main and j >= 0:
+        local u is lr_upvals of (lr_fstk[j])
+        if u != null and u[3]:
+            fr.main is true
+    return fr
 
 # Level `level` of a thread whose call-site stack is stk (main: the main
 # thread, whose bottom level is the C call of the main chunk).
@@ -2566,25 +2661,39 @@ define lr_d_framet(level, stk, main) as:
     local ismain is main and n - level == 1
     return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "source": lr_site_source of (site), "main": ismain}
 
-define lr_d_getinfo(A) as:
+# lua_getinfo's options (ldebug.c auxgetinfo); another letter is an error
+define lr_d_infoopts(opts, first) as:
+    for i in range of (len of opts):
+        if index_of of ["SlutnrLf", opts[i]] < 0:
+            lr_argerr of [first + 2, "getinfo", "invalid option"]
+
+define lr_d_getinfo0(A) as:
     local a0 is lr_arg of [A, 0]
     local first is 0
     if lr_isthread of (a0):
         if a0[0].id != lr_co_cur[0].id:
             lr_unsup of ["debug.getinfo of another coroutine", 0]
         first is 1
+    # ldblib.c db_getinfo: the options string, a leading '>', the level (out
+    # of range: fail), then lua_getinfo's option letters
+    local opts is "flnSrtu"
+    if lr_arg of [A, first + 1] != null:
+        opts is lr_checkstr of [A, first + 1, "getinfo"]
+    if len of opts > 0 and opts[0] == ">":
+        lr_argerr of [first + 2, "getinfo", "invalid option '>'"]
     local fa is lr_arg of [A, first]
     local t is lr_newtable of null
-    if type of fa == "num":
+    if type of fa != "fn" and type of fa != "builtin":
         local fr is lr_d_frame of (lr_checkint of [A, first, "getinfo"])
         if fr == null:
-            return [null]
+            return [null, ""]
+        lr_d_infoopts of [opts, first]
         if fr.c:
             lr_rawset of [t, "currentline", -1, 0]
             lr_rawset of [t, "short_src", "[C]", 0]
             lr_rawset of [t, "source", "=[C]", 0]
             lr_rawset of [t, "what", "C", 0]
-            return [t]
+            return [t, opts]
         lr_rawset of [t, "currentline", fr.line, 0]
         lr_rawset of [t, "short_src", fr.chunk, 0]
         lr_rawset of [t, "source", fr.source, 0]
@@ -2592,9 +2701,8 @@ define lr_d_getinfo(A) as:
             lr_rawset of [t, "what", "main", 0]
         else:
             lr_rawset of [t, "what", "Lua", 0]
-        return [t]
-    if type of fa != "fn" and type of fa != "builtin":
-        lr_argerr of [first + 1, "getinfo", "function or level expected"]
+        return [t, opts]
+    lr_d_infoopts of [opts, first]
     # a function value (ldebug.c funcinfo): a C function, or a Lua function
     # with the chunk and lines of its definition; it is not running, so its
     # currentline is -1
@@ -2606,7 +2714,7 @@ define lr_d_getinfo(A) as:
         lr_rawset of [t, "what", "C", 0]
         lr_rawset of [t, "linedefined", -1, 0]
         lr_rawset of [t, "lastlinedefined", -1, 0]
-        return [t]
+        return [t, opts]
     local ch is lr_site_chunk of (u[2])
     lr_rawset of [t, "short_src", ch, 0]
     lr_rawset of [t, "source", lr_site_source of (u[2]), 0]
@@ -2618,6 +2726,20 @@ define lr_d_getinfo(A) as:
         lr_rawset of [t, "what", "Lua", 0]
         lr_rawset of [t, "linedefined", lr_site_line of (u[2]), 0]
         lr_rawset of [t, "lastlinedefined", u[4], 0]
+    return [t, opts]
+
+# Only the fields the options ask for (ldebug.c auxgetinfo): 'S' the source
+# and definition lines, 'l' currentline.
+define lr_d_getinfo(A) as:
+    local r is lr_d_getinfo0 of (A)
+    local t is r[0]
+    if t == null:
+        return [null]
+    if index_of of [r[1], "S"] < 0:
+        for k in ["short_src", "source", "what", "linedefined", "lastlinedefined"]:
+            lr_rawset of [t, k, null, 0]
+    if index_of of [r[1], "l"] < 0:
+        lr_rawset of [t, "currentline", null, 0]
     return [t]
 
 # debug.traceback (lauxlib.c luaL_traceback): the first LEVELS1 (10) and last

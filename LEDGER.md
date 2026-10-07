@@ -1,17 +1,19 @@
-# EigenLua front end: divergence ledger (round 5)
+# EigenLua front end: divergence ledger (round 6)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified.
 
-- **Runtime:** EigenScript `main` at `686d3b7d14837efb7e6e2b55882190d1dd20a332` (EigenScript#1647, with the real
-  `bool`). Its `--version` prints `0.44.0`.
+- **Runtime:** EigenScript v0.45.0 (round 6; rounds 3-5 used `main` at 686d3b7d, whose `--version` printed
+  `0.44.0`). v0.45.0 has a heap use-after-free (EigenScript#1661) on an under-arity call of a 2+ parameter function
+  whose missing parameter is read about 1000 calls deep; the emitted code makes no under-arity call of such a function.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
-- **Grader verdict, end of round 5:**
-  `SUMMARY S=2/23 D=87/99 fail=16 diverge=12 hang=1 crash=0 unsupported=4 examined=122 assert=trusted`.
-- **Before this round** (round 4, 8a30e385): `SUMMARY S=2/23 D=71/83 fail=16 diverge=12 hang=1 crash=0 unsupported=4
-  examined=106 assert=trusted`.
+- **Grader verdict, end of round 6:**
+  `SUMMARY S=2/23 D=96/108 fail=15 diverge=12 hang=2 crash=0 unsupported=4 examined=131 assert=trusted`.
+- **Before this round** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
+  hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
+  cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 99 rows. Round 3 added 23 programs, round 4 added 8 and round 5 added 16 (13 for bugs fixed, each
-failing at 8a30e385 and matching now; 3 for coverage, matching at both). Lists at the end. The 12 rows that do not match are the same 12 as in round 2,
+Tier D has 108 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16 and round 6 added 9 (7 failing at
+79e29669 for the bug they fix, 1 failing there only on a probe-found bug, 1 coverage row; section at the end). The 12 rows that do not match are the same 12 as in round 2,
 all EigenScript gaps.
 
 ## Classes
@@ -33,7 +35,7 @@ A row's class is the class of its **first failure**. Its first ten failures were
 | out of scope | 6 | 6 | 0 |
 | front-end bug (open) | 0 | 0 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 89 | 2 | 87 |
+| PASS / MATCH | 98 | 2 | 96 |
 
 **Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
 known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
@@ -45,6 +47,9 @@ front-end bugs. Probe-found bugs, by issue:
   `print_partial.lua`); a pcall's C-stack restore after a resume inside it (#11, fixed, `cstack_yield_resume.lua`);
   reader errors skipped the message handler in force (#13, fixed); a round-5 regression in the lexer's raw-text list
   (fixed before the end of the round, D row `lex_near_raw.lua`).
+- round-6 probes: index errors named the key when the indexed value had no name (`f().y`, `(t.x).y`, `t[1].y`),
+  fixed with D row `err_index_varinfo.lua`; `os.setlocale` ignored its category (found by the #21 coverage row,
+  fixed); `debug.getinfo(level).what` of a loaded chunk's main function said `Lua` (fixed, `load_chunk_sites.lua`).
 - open limitations, not wrong answers: load speed (#7, attributed to `gaps/vm-op-cost.eigs`; a short `load` is still
   about 0.24 ms), and binary chunks (out of scope).
 Earlier rounds' ledgers made the same claim about graded rows and were each followed by more probe-found bugs:
@@ -70,7 +75,8 @@ a front-end bug, fixed this round.
 
 ## Gap reproducers
 
-Each is run as `eigenscript gaps/<file>`. This is its stdout on 686d3b7d.
+Each is run as `eigenscript gaps/<file>`. This is its stdout on 686d3b7d; re-run on v0.45.0 in round 6, every
+output is the same (vm-op-cost's timings vary).
 
 | file | gap | stdout | rows it explains |
 |---|---|---|---|
@@ -91,6 +97,7 @@ Each is run as `eigenscript gaps/<file>`. This is its stdout on 686d3b7d.
 | `vm-op-cost.eigs` | Speed: the VM's cost per basic operation (0.25 us per character looked at, 0.18 us per call, 0.68 us per dict literal, 17 us per eval of a 7-line chunk) floors a front end written in EigenScript at about 534 us per constructs.lua chunk, 1.8 x the 300 us per load the row's budget allows (EigenLua#7). | four timings (vary by about 20%) | S: constructs (time, after its OOS line 306). |
 | `handler-after-overflow.eigs` | A catch runs only after the VM has unwound; nothing runs at the raise point, so an xpcall handler after a call-depth overflow has the whole stack again (EigenLua#11 item 3). | `[true, 0, true, 4094]` | S: errors (549-557, CD). |
 | `pipe-read-line.eigs` | `read_line` on a pipe drops a "\r" before "\n" and hides a missing final newline (EigenLua#10). Run with a pipe on stdin. | `["a", 1, "b", 1, null]` for both `a\r\nb` and `a\r\nb\n` | None graded (the grader feeds an empty pipe). |
+| `no-errno.eigs` | A failed file open gives no reason: `read_text` returns "" for a missing, an unreadable and an empty file alike, and nothing exposes errno, so `dofile`/`loadfile`'s `: No such file or directory` (strerror) cannot be translated (EigenLua#28). | `["", false]` / `["", true]` / `["", true]` (as root; see the file) | None graded (D rows avoid it; verybig.lua's `dofile` is OOS). |
 
 ## Round 4: peel to the row's end, with a count check
 
@@ -140,7 +147,7 @@ fails correctly.
 | closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
 | constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
 | coroutine.lua | UNSUPPORTED | 107 (309) | out of scope | 349 OOS (`debug.sethook`); 352 C; 417 WK (`collectgarbage()` must clear a weak entry). Then it runs to the end (301 asserts). Round 2's first failure, line 238 (`getinfo(2).what` inside `__close` during unwinding), was a front-end bug, not out of scope as round 2 filed it; it is fixed. |
-| cstack.lua | FAIL | 261 (1206) | EigenScript gap | 105 TL (1000 suspended coroutines). With that block blanked the file passes, with the same count as the reference on the same copy (8). |
+| cstack.lua | HANG (round 6; FAIL in round 5) | 261 (1206) | EigenScript gap | 105 TL (1000 suspended coroutines). With that block blanked the file passes, with the same count as the reference on the same copy (8). Round 6: on v0.45.0 the run to line 105 takes about 20-23 s against the row's 20 s budget (the reference takes 0.2 s), so the grader stops it first; the stdout and the first failure are unchanged (`lua: cstack.lua:105: EigenScript limit error: task_spawn: too many live tasks (max 255)`, 261 asserts). The same at 79e29669 on v0.45.0. |
 | db.lua | UNSUPPORTED | 0 | out of scope | 16 OOS (`gethook`); 33, 34 OOS (`getinfo` option checks); 42, 45, 47 OOS (`name`, `func`, `activelines`); 55 OOS (`string.dump`); 56, 57 C; 91 OOS (`name`, `namewhat`). Line 38 (`getinfo(print).short_src == "[C]"`) was a front-end bug, fixed. |
 | errors.lua | UNSUPPORTED | 88 (295) | out of scope | 239 OOS (`setuservalue` on a light userdata); 280 OOS (`string.dump`); 281, 283 C; 287 OOS; 553 CD (stack overflow inside the message handler); 639 NEST (100 nested table constructors). Then the file runs to the end. |
 | events.lua | FAIL | 154 (444) | EigenScript gap | 168 INF (`1/0`). With that line blanked the file runs to the end (436 asserts). Lines 180 (`__len` gets its operand twice) and 464 (`debug.setmetatable(10, mt)`) were front-end bugs, fixed. |
@@ -296,6 +303,54 @@ each case the reference raises nothing (`no-nonfinite`, `call-depth`). The remai
   `no-nonfinite`);
 - a call-depth overflow: located at the line that made the call that overflowed (`gaps/call-depth.eigs`);
 - an xpcall handler after a call-depth overflow runs with the whole stack again (`gaps/handler-after-overflow.eigs`).
+
+## Front-end bugs fixed in round 6
+
+Each issue row's D program diverges at round 5 (79e29669, run on v0.45.0) and MATCHes now, except where noted.
+`tools/grade.sh --candidate <79e29669 checkout> --only <the 9>`: see R6-REPORT.md.
+
+| D program | bug | issue |
+|---|---|---|
+| load_reader_counts.lua | read counts with 1-, 2-, 3- and 7-char readers: a table field looked ahead past a non-name; "attempt to assign to const variable" was raised after the whole chunk was read (now at the `=`/`,`, and after a function statement's body, as check_readonly); "unknown attribute" was raised before the token after `>` was read | #24 |
+| num_hexfloat_subnormal.lua | hex floats were rounded twice (to 53 bits, then to the subnormal grid); 3000 fixed-seed numerals of 14-23 digits, 2773 subnormal, through tonumber and load (30 lines differed) | #25 |
+| xpcall_handler_close.lua | the message handler ran after pending `__close` handlers (now at the raise point; the closes get its result; with os.exit in a `__close` it has already run) | #26 |
+| ptr_id_space.lua | functions and threads had their own id counters, so `%p`/tostring addresses collided with tables' (31 duplicates in the row); tostring printed the address in upper case | #27 |
+| lib_argerr_names.lua | `math.random(2,1)` said #2; `debug.getinfo` ignored its options (`'>'`, unknown letters, the 'S'/'l' fields); `debug.setupvalue()` did not check its value first; a C function called as a metamethod was named after the expression, not the event | #28 |
+| genfor_close_line.lua | the generic for's closing value saw the `for` line in `__close` on normal exit and break (now the loop's `end` line) | #22 |
+| load_chunk_sites.lua | regression guard for #29 (sites of loaded chunks now live with the chunk; memory is not visible on stdout). Diverges at 79e29669 only on `getinfo(1).what` of a loaded chunk (`Lua`, now `main`, probe-found) | #29 |
+| builtin_values_more.lua | coverage for #21's inventory (_VERSION, string.packsize, os.difftime, debug.get/setmetatable, warn, loadfile, dofile, os.getenv, os.setlocale, package.config); it found `os.setlocale` ignoring an invalid category (fixed) | #21 |
+| err_index_varinfo.lua | index errors named the key when the indexed value had no name (now ldebug.c getobjname: field, `integer index`, `?`, nothing for a call result, through parentheses) | probe |
+
+Not translated: `dofile('/nonexistent')`'s `: No such file or directory` (EigenLua#28) needs errno, which
+EigenScript does not expose (`gaps/no-errno.eigs`).
+
+### #29: loaded chunks' sites
+
+`load` appended about 9 site records per chunk to `lr_st.sites`, never freed. A loaded chunk's code now builds its own
+site list when it is instantiated and passes `S[k]`; the runtime reads sites through `lr_sd`. Measured on this box
+(4 cores; base and fixed runs in parallel for the per-load numbers):
+
+| measurement | 79e29669 | round 6 |
+|---|---|---|
+| 12000 loads of a constructs.lua-shaped chunk: peak RSS | 199 MB | 20 MB (48000 loads: 20 MB) |
+| the same: worst single load | 713 ms | 17.5 ms |
+| constructs.lua (line 306 blanked, OOS), whole run: peak RSS / wall | 7.69 GB / 767 s | 2.46 GB / 656 s |
+| constructs.lua short-circuit loop (about 204k loads), instrumented: iterations over 10 ms | 328, 145.8 s in all, worst 50.2 s | 176, 139.8 s in all, worst 10.8 s |
+| the same loop, stall-free time (total minus iterations over 10 ms) | 508.2 s, 2.49 ms per load | 475.2 s, 2.33 ms per load |
+
+The remaining stalls are not sites: the file's own case tables hold 590 MB with no `load` at all (a variant with the
+`load` replaced by a closure peaks at 590 MB; the reference peaks at 89 MB on the whole file). constructs.lua stays a
+FAIL by its OOS line 306, and past it by time (`vm-op-cost`).
+
+### #21: grader gates
+
+The one grader change this round. `tools/grade.sh` exits 2 on a D.manifest line given twice (the `operators:` line
+included; plant `dup-manifest`), and checks `corpus/builtins.inventory` against the reference: the inventory must
+list exactly the reference's globals and library fields (the grader asks the reference for them), each cited by a
+D manifest row whose code names it or declared `uncovered: <reason>` (plants `builtin-missing`, `builtin-uncited`).
+150 names: 128 covered, 22 uncovered (out of scope per GAPS.md, or a process or file-system operation). A
+row's "naming" is textual (`lib.k`, or `"k"` for a field reached by key), so the gate shows coverage is declared and
+reachable, not that every value is checked.
 
 ## What remains UNSUPPORTED (exit 3)
 

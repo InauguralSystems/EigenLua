@@ -275,10 +275,10 @@ define lex_number(src, i, line) as:
 
 # strtod on a hexadecimal numeral (luaconf.h makes lua_strx2number strtod
 # under C99): the significant hex digits ds (no leading zero) times
-# 2^e, correctly rounded to a double (round half to even). Thirteen
-# digits are exact; the 14th and 15th join them in one addition, and
-# any nonzero digit past them adds a half (a sticky bit), which rounds
-# like the exact value since the sum is at least 2^56.
+# 2^e, rounded ONCE to a double (round half to even) at the precision of
+# the result: 53 bits, or fewer for a subnormal, whose last bit is
+# 2^-1074. The kept bits form an integer below 2^53 and the scaling by
+# powers of two is then exact.
 define lex_hexd(ds, e) as:
     local k is len of ds
     loop while k > 0 and ds[k - 1] == 0:
@@ -286,25 +286,42 @@ define lex_hexd(ds, e) as:
         e is e + 4
     if k == 0:
         return 0
-    local m is 0
+    # the significand's bits, most significant first, from its first 1
+    local bits is []
     local i is 0
-    loop while i < k and i < 13:
-        m is m * 16 + ds[i]
+    loop while i < k:
+        local d is ds[i]
+        for w in [8, 4, 2, 1]:
+            if d >= w:
+                append of [bits, 1]
+                d is d - w
+            elif len of bits > 0:
+                append of [bits, 0]
         i is i + 1
-    if k > 13:
-        local r is 0
-        loop while i < 15:
-            r is r * 16
-            if i < k:
-                r is r + ds[i]
+    local b is len of bits
+    # bits kept: 53, or those at or above 2^-1074 (value is bits * 2^e)
+    local p is b + e + 1074
+    if p > 53:
+        p is 53
+    if p < 0:
+        return 0
+    if p > b:
+        p is b
+    local m is 0
+    i is 0
+    loop while i < p:
+        m is m * 2 + bits[i]
+        i is i + 1
+    if p < b and bits[p] == 1:
+        local up is m % 2 == 1
+        i is p + 1
+        loop while i < b and not up:
+            if bits[i] == 1:
+                up is true
             i is i + 1
-        loop while i < k:
-            if ds[i] != 0:
-                r is r + 0.5
-                i is k
-            i is i + 1
-        m is m * 256 + r
-        e is e + 4 * (k - 15)
+        if up:
+            m is m + 1
+    e is e + b - p
     # m * 2^e in steps that stay finite until the true result is not
     loop while e > 0:
         local s is min of [e, 512]

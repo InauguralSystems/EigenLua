@@ -88,8 +88,11 @@ grader exits 2 unless that program's operator table equals the operator list dec
 (plant `ops-drop`).
 
 **So a grade means BOTH tiers.** Tier S alone can read 21/23 for a candidate that Tier D marks wrong. Only
-`S=N/N D=M/M` (exit 0) is a pass. Value bugs in builtins, beyond the operators and the string library, are not yet
-enumerated: EigenLua#3.
+`S=N/N D=M/M` (exit 0) is a pass. Value bugs in builtins, beyond the operators and the string library, are
+enumerated by coverage rows (`builtin_values.lua`, `builtin_values_more.lua`, `tbl_library.lua`, ...), and the
+grader checks `corpus/builtins.inventory` (EigenLua#21): it must list exactly the reference's globals and library
+fields, each cited by a D row that names it or declared uncovered with a reason (plants `builtin-missing`,
+`builtin-uncited`); a D.manifest line given twice exits 2 (plant `dup-manifest`).
 
 **Declared residual:** a front end whose `assert` is correct on line 1 and in every probe shape, but toothless at some
 other call site, would pass. That needs a compiler that treats identical call sites differently by position. It is

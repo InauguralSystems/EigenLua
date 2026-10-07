@@ -234,6 +234,8 @@ define em_tmp(E) as:
 # A site is [line, descriptor_a, descriptor_b]; its id indexes the table.
 define em_site(E, line, da, db) as:
     append of [E.G.sites, [line, da, db]]
+    if E.G.chunk:
+        return "S[" + (str of (len of E.G.sites - 1)) + "]"
     return str of (E.G.sitebase + len of E.G.sites - 1)
 
 # Lua's variable description for an operand, as in its error messages.
@@ -244,8 +246,16 @@ define em_desc(E, e) as:
         if e.var.fn.id != E.fn.id:
             return "upvalue '" + e.n + "'"
         return "local '" + e.n + "'"
-    if e.k == "Index" and e.key.k == "Str":
-        return "field '" + e.key.v + "'"
+    if e.k == "Paren":
+        return em_desc of [E, e.e]
+    # ldebug.c getobjname: OP_GETFIELD names its key, OP_GETI is "integer
+    # index", any other key (rname) is "?"
+    if e.k == "Index":
+        if e.key.k == "Str":
+            return "field '" + e.key.v + "'"
+        if e.key.k == "Num" and not e.key.fl and e.key.v >= 0 and e.key.v <= 255:
+            return "field 'integer index'"
+        return "field '?'"
     if e.k == "Str":
         return "constant '" + e.v + "'"
     return ""
@@ -1062,7 +1072,9 @@ define em_genfor(E, s) as:
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": csite}]
     em_genfor_loop of [E, s, site, tf, tst, tc]
     list_truncate of [E.tbc, len of E.tbc - 1]
-    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + csite + "]"]
+    # normal exit and break close at the loop's end (lparser.c forbody's
+    # leaveblock runs at its 'end' line)
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + (em_site of [E, s.endl, "", ""]) + "]"]
     em_dedent of (E)
     em_line of [E, "catch " + tb + "e:"]
     em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + csite + "]"]
@@ -1104,7 +1116,7 @@ define em_dirname(p) as:
     return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "labseen": {}, "labline": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "chunk": false, "labelloop": {}, "labseen": {}, "labline": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -1125,21 +1137,25 @@ define emit_program(ast, file, runtime) as:
 
 # A chunk compiled at run time by load: the code of a function L(ENV) whose
 # result is the chunk's main function, its globals indexing ENV[0] (ENV is
-# the cell of its _ENV upvalue, so debug.setupvalue can replace it). Site ids
-# start at sitebase; the caller appends the returned sites to the site table.
-# Returns [code, sites].
-define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "labseen": {}, "labline": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+# the cell of its _ENV upvalue, so debug.setupvalue can replace it). Sites
+# are records in the chunk's own list S, made when L(ENV, SRC) runs (SRC:
+# [chunkid, source]), so they are freed with the chunk (EigenLua#29); a site
+# argument is S[k]. S is built by appends (a list literal holds at most 1024
+# elements, gaps/list-literal-cap.eigs).
+define emit_chunk(ast) as:
+    local G is {"funcs": [], "sites": [], "sitebase": 0, "chunk": true, "labelloop": {}, "labseen": {}, "labline": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
-    local out is ["define L(ENV) as:"]
+    local out is ["define L(ENV, SRC) as:", "    local S is []"]
+    for st in G.sites:
+        append of [out, "    append of [S, [" + (str of st[0]) + ", " + (em_strlit of (st[1])) + ", " + (em_strlit of (st[2])) + ", SRC[0], SRC[1]]]"]
     for f in G.funcs:
         for ln in split of [f, "\n"]:
             append of [out, "    " + ln]
     append of [out, "    return F" + (str of ast.id) + " of ([])"]
     append of [out, "L"]
-    return [(join of [out, "\n"]) + "\n", G.sites]
+    return (join of [out, "\n"]) + "\n"
 
 # ---------------------------------------------------------------- goto
 # A block with labels becomes a dispatch loop over its segments (the

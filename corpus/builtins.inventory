@@ -1,0 +1,150 @@
+# The declared builtin inventory (EigenLua#21, #3): every global of the
+# reference interpreter and every field of its library tables, one line each,
+# as `<name> <D row>` (a Tier D program whose code, outside comment lines,
+# names it: `lib.k`, or the string "k" for a library field it reaches by key;
+# a base name not after '.' or ':') or `<name> uncovered: <reason>`.
+# tools/grade.sh lists the names from the reference itself and exits 2 unless
+# this list equals them both ways, every cited row is a manifest row, and
+# every cited row names its builtin (plants builtin-missing, builtin-uncited).
+_G debug_upvalue_computed.lua
+_VERSION builtin_values_more.lua
+arg arg_table.lua
+assert assert_semantics.lua
+collectgarbage builtin_values.lua
+coroutine.close co_close_yield.lua
+coroutine.create builtin_values.lua
+coroutine.isyieldable co_isyieldable_c.lua
+coroutine.resume co_close_yield.lua
+coroutine.running debug_traceback_thread.lua
+coroutine.status co_close_yield.lua
+coroutine.wrap co_close_yield.lua
+coroutine.yield co_close_yield.lua
+debug.debug uncovered: out of scope: most of debug (GAPS.md)
+debug.gethook uncovered: out of scope: most of debug (GAPS.md)
+debug.getinfo debug_getinfo_func.lua
+debug.getlocal uncovered: out of scope: most of debug (GAPS.md)
+debug.getmetatable builtin_values_more.lua
+debug.getregistry uncovered: out of scope: most of debug (GAPS.md)
+debug.getupvalue lib_argerr_names.lua
+debug.getuservalue uncovered: out of scope: most of debug (GAPS.md)
+debug.setcstacklimit uncovered: out of scope: most of debug (GAPS.md)
+debug.sethook uncovered: out of scope: most of debug (GAPS.md)
+debug.setlocal uncovered: out of scope: most of debug (GAPS.md)
+debug.setmetatable builtin_values_more.lua
+debug.setupvalue lib_argerr_names.lua
+debug.setuservalue uncovered: out of scope: most of debug (GAPS.md)
+debug.traceback debug_traceback_levels.lua
+debug.upvalueid lib_argerr_names.lua
+debug.upvaluejoin uncovered: out of scope: most of debug (GAPS.md)
+dofile builtin_values_more.lua
+error builtin_values.lua
+getmetatable builtin_values.lua
+io.close meta_cstack_kinds.lua
+io.flush io_file_results.lua
+io.input io_default_output.lua
+io.lines io_read_eof.lua
+io.open uncovered: out of scope: io beyond print, io.write and stdin (GAPS.md)
+io.output io_default_output.lua
+io.popen uncovered: out of scope: io beyond print, io.write and stdin (GAPS.md)
+io.read io_default_output.lua
+io.stderr io_default_output.lua
+io.stdin io_default_output.lua
+io.stdout io_default_output.lua
+io.tmpfile uncovered: out of scope: io beyond print, io.write and stdin (GAPS.md)
+io.type builtin_values.lua
+io.write io_default_output.lua
+ipairs break_outside_loop.lua
+load break_outside_loop.lua
+loadfile builtin_values_more.lua
+math.abs builtin_values.lua
+math.acos builtin_values.lua
+math.asin builtin_values.lua
+math.atan builtin_values.lua
+math.ceil builtin_values.lua
+math.cos builtin_values.lua
+math.deg builtin_values.lua
+math.exp builtin_values.lua
+math.floor builtin_values.lua
+math.fmod builtin_values.lua
+math.huge num_print.lua
+math.log builtin_values.lua
+math.max builtin_values.lua
+math.maxinteger int_maxinteger.lua
+math.min builtin_values.lua
+math.mininteger builtin_values.lua
+math.modf builtin_values.lua
+math.pi builtin_values.lua
+math.rad builtin_values.lua
+math.random int_conversion_errors.lua
+math.randomseed rng_xoshiro.lua
+math.sin builtin_values.lua
+math.sqrt builtin_values.lua
+math.tan builtin_values.lua
+math.tointeger builtin_values.lua
+math.type builtin_values.lua
+math.ult builtin_values.lua
+next builtin_values.lua
+os.clock uncovered: out of scope: its value (GAPS.md)
+os.date tbl_library.lua
+os.difftime builtin_values_more.lua
+os.execute uncovered: not in Tier D: it runs a process or changes the file system
+os.exit os_exit_args.lua
+os.getenv builtin_values_more.lua
+os.remove uncovered: not in Tier D: it runs a process or changes the file system
+os.rename uncovered: not in Tier D: it runs a process or changes the file system
+os.setlocale builtin_values_more.lua
+os.time uncovered: out of scope: its value (GAPS.md)
+os.tmpname uncovered: not in Tier D: it runs a process or changes the file system
+package.config builtin_values_more.lua
+package.cpath require_searchers.lua
+package.loaded require_searchers.lua
+package.loadlib uncovered: out of scope: the C API and C modules (GAPS.md)
+package.path require_searchers.lua
+package.preload meta_cstack_kinds.lua
+package.searchers require_searchers.lua
+package.searchpath require_searchers.lua
+pairs builtin_values.lua
+pcall assert_semantics.lua
+print arg_table.lua
+rawequal assert_semantics.lua
+rawget builtin_values.lua
+rawlen arg_table.lua
+rawset builtin_values.lua
+require meta_cstack_kinds.lua
+select arg_table.lua
+setmetatable builtin_values.lua
+string.byte int_conversion_errors.lua
+string.char int_conversion_errors.lua
+string.dump uncovered: out of scope: string.dump (GAPS.md)
+string.find co_error.lua
+string.format builtin_values.lua
+string.gmatch debug_getinfo_func.lua
+string.gsub co_close_yield.lua
+string.len lib_argerr_names.lua
+string.lower str_case_rev_sub.lua
+string.match err_level.lua
+string.pack str_unpack_signext.lua
+string.packsize builtin_values_more.lua
+string.rep int_conversion_errors.lua
+string.reverse str_case_rev_sub.lua
+string.sub int_conversion_errors.lua
+string.unpack str_unpack_signext.lua
+string.upper str_case_rev_sub.lua
+table.concat assert_semantics.lua
+table.insert int_conversion_errors.lua
+table.move tbl_library.lua
+table.pack assert_semantics.lua
+table.remove io_file_results.lua
+table.sort err_c_function_unlocated.lua
+table.unpack builtin_values.lua
+tonumber builtin_values.lua
+tostring assert_semantics.lua
+type arg_table.lua
+utf8.char int_conversion_errors.lua
+utf8.charpattern utf8_lib.lua
+utf8.codepoint utf8_lib.lua
+utf8.codes utf8_lib.lua
+utf8.len meta_cstack_kinds.lua
+utf8.offset utf8_lib.lua
+warn builtin_values_more.lua
+xpcall err_xpcall.lua

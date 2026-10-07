@@ -1,0 +1,14 @@
+# EigenScript gap (EigenLua#28): a failed file open gives no reason. Lua's
+# luaL_fileresult / errfile append strerror(errno): dofile, loadfile and
+# io.open say "cannot open /nonexistent: No such file or directory" (ENOENT)
+# or "...: Permission denied" (EACCES). read_text returns "" for a missing
+# file, an unreadable one and an empty one alike, and file_exists cannot
+# tell ENOENT from EACCES, so the reason cannot be translated; inventing it
+# from file_exists would be a substitute (owner decision 1).
+# Run as root the unreadable case is readable; run as a user:
+#   touch /tmp/f && chmod 000 /tmp/f && eigenscript gaps/no-errno.eigs
+# Expected: three different reasons (missing, unreadable, empty).
+# Actual v0.45.0: ["", false] / ["", true] / ["", true]
+write_text of ["/tmp/eigenlua-empty", ""]
+for p in ["/nonexistent", "/tmp/f", "/tmp/eigenlua-empty"]:
+    print of [read_text of p, file_exists of p]
