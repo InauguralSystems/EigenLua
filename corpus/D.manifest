@@ -31,6 +31,7 @@ lex_line_endings.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
 meta_concat.lua unspecified-audit: ok
+meta_cstack_limit.lua unspecified-audit: ok
 meta_eq.lua unspecified-audit: ok
 meta_index.lua unspecified-audit: ok
 meta_len.lua unspecified-audit: ok

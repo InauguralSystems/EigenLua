@@ -1014,7 +1014,7 @@ define em_genfor_loop(E, s, site, tf, tst, tc) as:
     em_indent of (E)
     em_loop_begin of [E, "lua"]
     local tr is em_tmp of (E)
-    em_line of [E, "local " + tr + " is lr_call of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
+    em_line of [E, "local " + tr + " is lr_ccall of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
     local i is 0
     local t0 is em_tmp of (E)
     em_line of [E, "local " + t0 + " is lr_at of [" + tr + ", 0]"]

@@ -659,7 +659,45 @@ define lr_gget(name, site) as:
 define lr_gset(name, v, site) as:
     lr_setindex of [lr_G, name, v, site]
 
+# C-stack levels (ldo.c ccall, nCcalls): a call made through C (a site of
+# 0: a library function calling back, pcall, the generic for's iterator)
+# and every metamethod call counts one level; a Lua-to-Lua call counts none.
+# Reaching LUAI_MAXCCALLS (200) raises "C stack overflow"; past 220 (while
+# handling that error) "error in error handling". lua.c runs the main chunk
+# at level 2. After a coroutine resume the levels below it are forgotten,
+# as lua_resume restarts the count, so a count never drops below the base.
+lr_cc is {"n": 1, "base": 1}
+
+define lr_ccinc(site) as:
+    lr_cc.n is lr_cc.n + 1
+    if lr_cc.n >= 200:
+        if lr_cc.n == 200:
+            if site == 0:
+                lr_throw of ("C stack overflow")
+            lr_rterr of [site, "C stack overflow"]
+        if lr_cc.n >= 220:
+            lr_throw of ("error in error handling")
+
+define lr_ccdec() as:
+    if lr_cc.n > lr_cc.base:
+        lr_cc.n is lr_cc.n - 1
+
 define lr_call(f, args, site) as:
+    if site == 0:
+        lr_ccinc of 0
+        local r0 is lr_calln of [f, args, 0]
+        lr_ccdec of null
+        return r0
+    return lr_calln of [f, args, site]
+
+# A call through C with a Lua call site (the generic for's iterator).
+define lr_ccall(f, args, site) as:
+    lr_ccinc of site
+    local r is lr_calln of [f, args, site]
+    lr_ccdec of null
+    return r
+
+define lr_calln(f, args, site) as:
     local tf is type of f
     if tf == "fn":
         local pf is lr_st.curf
@@ -674,7 +712,7 @@ define lr_call(f, args, site) as:
         return r
     local h is lr_metafield of [f, "__call"]
     if h != null:
-        return lr_call of [h, concat of [[f], args], site]
+        return lr_calln of [h, concat of [[f], args], site]
     local sd is lr_st.sites[site]
     local desc is ""
     if sd[1] != "":
@@ -682,11 +720,13 @@ define lr_call(f, args, site) as:
     lr_rterr of [site, "attempt to call a " + (lr_tname of (f)) + " value" + desc]
 
 # Call metamethod h for event ev ("add", "index", ...): Lua names it in the
-# error when it cannot be called.
+# error when it cannot be called. It is one C-stack level (luaT_callTM).
 define lr_callmm(h, ev, args, site) as:
     if type of h != "fn" and type of h != "builtin" and lr_metafield of [h, "__call"] == null:
         lr_rterr of [site, "attempt to call a " + (lr_tname of (h)) + " value (metamethod '" + ev + "')"]
-    return lr_call of [h, args, site]
+    if site == 0:
+        return lr_call of [h, args, 0]
+    return lr_ccall of [h, args, site]
 
 define lr_callmm1(h, ev, args, site) as:
     local r is lr_callmm of [h, ev, args, site]
@@ -1216,6 +1256,7 @@ define lr_b_pcall(A) as:
     if len of A == 0:
         lr_argerr of [1, "pcall", "value expected"]
     local depth is len of lr_stk
+    local ccn is lr_cc.n
     local nny is lr_co_cur[0].nny
     local r is null
     try:
@@ -1227,6 +1268,7 @@ define lr_b_pcall(A) as:
         rr.nny is nny
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
+        lr_cc.n is ccn
         return [false, lr_errobj of (e)]
     return concat of [[true], r]
 
@@ -1236,6 +1278,7 @@ define lr_b_xpcall(A) as:
     if type of h != "fn" and type of h != "builtin":
         lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
+    local ccn is lr_cc.n
     local r is null
     try:
         r is lr_call of [lr_arg of [A, 0], list_slice of [A, 2, len of A], 0]
@@ -1250,6 +1293,7 @@ define lr_b_xpcall(A) as:
         local hv is lr_xp_handle of [h, v, 0]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
+        lr_cc.n is ccn
         return [false, hv]
     return concat of [[true], r]
 
@@ -1260,6 +1304,7 @@ define lr_xp_handle(h, v, n) as:
     if n >= 200:
         return "error in error handling"
     local depth is len of lr_stk
+    local ccn is lr_cc.n
     local nny is lr_co_cur[0].nny
     try:
         return lr_call1 of [lr_ny of (h), [v], 0]
@@ -1270,6 +1315,7 @@ define lr_xp_handle(h, v, n) as:
             throw of (e)
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
+        lr_cc.n is ccn
         return lr_xp_handle of [h, lr_errobj of (e), n + 1]
 
 define lr_b_select(A) as:

@@ -37,7 +37,10 @@ define lr_co_runner(co) as:
         local r is co[0]
         local res is null
         try:
-            local vals is lr_call of [r.f, r.transfer, 0]
+            # resume starts the body with ccall, which checks the C stack
+            if lr_cc.n >= 200:
+                lr_throw of ("C stack overflow")
+            local vals is lr_calln of [r.f, r.transfer, 0]
             res is concat of [[true], vals]
         catch e:
             if type of e == "dict" and e.COCLOSE == 1:
@@ -60,14 +63,13 @@ define lr_co_resume(co, args) as:
         return [false, "cannot resume non-suspended coroutine"]
     local prv is lr_co_cur
     local pr is prv[0]
-    # lua_resume refuses past LUAI_MAXCCALLS (200) nested C calls; a resume
-    # chain is the nesting that reaches it here (and it keeps the live tasks
-    # under EigenScript's 255)
-    if pr.depth == null:
-        pr.depth is 0
-    if pr.depth >= 200:
+    # lua_resume refuses at LUAI_MAXCCALLS (200) C levels (runtime.eigs
+    # lr_cc) and runs the coroutine one level above its resumer; this also
+    # keeps a resume chain under EigenScript's 255 live tasks
+    local ccn is lr_cc.n
+    local ccb is lr_cc.base
+    if ccn >= 200:
         return [false, "C stack overflow"]
-    r.depth is pr.depth + 1
     pr.status is "normal"
     pr.stk is lr_stk
     pr.fstk is lr_fstk
@@ -77,6 +79,8 @@ define lr_co_resume(co, args) as:
     lr_co_cur is co
     lr_stk is r.stk
     lr_fstk is r.fstk
+    lr_cc.n is ccn + 1
+    lr_cc.base is ccn + 1
     if r.tid == null:
         r.tid is task_spawn of (lr_co_runner of (co))
         task_detach of r.tid
@@ -86,6 +90,8 @@ define lr_co_resume(co, args) as:
     lr_co_cur is prv
     lr_stk is pr.stk
     lr_fstk is pr.fstk
+    lr_cc.n is ccn
+    lr_cc.base is ccb
     pr.status is "running"
     return r.result
 
