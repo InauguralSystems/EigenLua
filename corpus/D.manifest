@@ -36,6 +36,7 @@ lex_error_messages.lua unspecified-audit: ok
 lex_line_endings.lua unspecified-audit: ok
 lex_near_raw.lua unspecified-audit: ok
 load_mode_binary.lua unspecified-audit: ok
+load_reader_counts.lua unspecified-audit: ok
 load_reader_protected.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
