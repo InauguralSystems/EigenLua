@@ -2464,8 +2464,8 @@ define lr_tbc_unwind(tb, e, site) as:
     throw of (e)
 
 # ------------------------------------------------------------ debug upvalues
-# A Lua function answers a call with a dict (instead of its argument list)
-# with [cells, names]: its upvalue cells and their names, in Lua's upvalue
+# A Lua function answers a call with null (instead of its argument list)
+# with [cells, names, ...]: its upvalue cells and their names, in Lua's upvalue
 # order (first reference). Only functions the emitter wrote (named f<id>)
 # are asked. A cell gets an id the first time upvalueid asks for one.
 
@@ -2480,7 +2480,7 @@ define lr_upvals(f) as:
     local s is str of f
     if len of s < 6 or s[0:5] != "<fn f" or not (lr_isdigit of (s[5])):
         return null
-    return f of ({"UPQ": 1})
+    return f of (null)
 
 define lr_d_getupvalue(A) as:
     local f is lr_arg of [A, 0]

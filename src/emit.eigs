@@ -603,12 +603,15 @@ define em_function(G, fn) as:
     em_line of [E, "define f" + id + "(A) as:"]
     em_indent of (E)
     # debug.getupvalue asks a Lua function for its upvalue cells and their
-    # names by calling it with a dict (lr_upvals); a loaded chunk's main
-    # function has the one upvalue _ENV, the cell ENV
+    # names by calling it with null for its argument list (lr_upvals); a
+    # call always passes a list. Comparing with null is the cheapest test
+    # measured (EigenLua#9: 1.6% of a Lua call, against 6.1% for a type
+    # test). A loaded chunk's main function has the one upvalue _ENV, the
+    # cell ENV
     # [cells, names, definition site, is main, last line]
     local dsite is em_site of [E, fn.line, "", ""]
     local tail is ", " + dsite + ", " + (str of (fn.main == 1)) + ", " + (str of fn.endline) + "]"
-    em_line of [E, "if type of A == \"dict\":"]
+    em_line of [E, "if A == null:"]
     if fn.main == 1 and G.env != "lr_G":
         em_line of [E, "    return [[ENV], [\"_ENV\"]" + tail]
     else:
