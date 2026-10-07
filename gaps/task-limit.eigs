@@ -1,0 +1,21 @@
+# EigenScript gap: at most 255 live cooperative tasks (the handle table
+# threads, channels, tasks and stores share; docs/CONCURRENCY.md). EigenLua
+# runs each coroutine as a task, so a program holding more than about 250
+# suspended coroutines at once fails where Lua (no such limit) does not.
+# Not a #1286 row; a VM limit.
+# Lua:  local t = {} for i = 1, 1000 do t[i] = coroutine.create(coroutine.yield)
+#       coroutine.resume(t[i]) end print(#t) -> 1000
+# Expected: 1000 suspended tasks (or a limit far above Lua programs' needs).
+# Actual 686d3b7d: "task_spawn: too many live tasks (max 255)", then 255
+# Rows: cstack.lua (line 105, "chain of 'coroutine.close'") (S).
+define parked(x) as:
+    task_recv of null
+    return null
+n is 0
+try:
+    for i in range of 1000:
+        task_spawn of parked
+        n is n + 1
+catch e:
+    print of e.message
+print of n

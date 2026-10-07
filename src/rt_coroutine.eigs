@@ -58,6 +58,14 @@ define lr_co_resume(co, args) as:
         return [false, "cannot resume non-suspended coroutine"]
     local prev is lr_co_cur
     local pr is prev[0]
+    # lua_resume refuses past LUAI_MAXCCALLS (200) nested C calls; a resume
+    # chain is the nesting that reaches it here (and it keeps the live tasks
+    # under EigenScript's 255)
+    if pr.depth == null:
+        pr.depth is 0
+    if pr.depth >= 200:
+        return [false, "C stack overflow"]
+    r.depth is pr.depth + 1
     pr.status is "normal"
     pr.stk is lr_stk
     r.status is "running"
