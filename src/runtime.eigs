@@ -1769,16 +1769,6 @@ define lr_os_setlocale(A) as:
 
 # ------------------------------------------------------------ load
 
-# A loaded chunk's globals: ENV is the cell of its _ENV upvalue.
-define lr_cell0(c) as:
-    return c[0]
-
-define lr_genv(c, k, site) as:
-    return lr_index of [c[0], k, site]
-
-define lr_gsetenv(c, k, v, site) as:
-    lr_setindex of [c[0], k, v, site]
-
 # luaO_chunkid with LUA_IDSIZE 60: how a chunk name appears in messages.
 define lr_chunkid(src) as:
     local n is len of src

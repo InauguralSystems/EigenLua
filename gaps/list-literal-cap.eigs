@@ -1,0 +1,21 @@
+# EigenScript gap: a list literal holds at most 1024 elements ("list literal
+# exceeds 1024 elements"). Lua's table constructor has no such cap (2^25
+# items before "constructor too long"). EigenLua writes a constructor's
+# positional items, and every argument list, as one list literal; round 2
+# split long literals into 512-element pieces joined with concat to dodge
+# the cap, and round 3 removed that workaround (owner decision 2).
+# Lua:  #load("return {" .. ("1,"):rep(1500) .. "}")() -> 1500
+# Expected: 1024, then 1025.
+# Actual 686d3b7d: 1024, then "eval: parse error in code string" (stderr:
+#   "Parse error line 1: list literal exceeds 1024 elements").
+# Rows: none graded.
+define lit(n) as:
+    local xs is []
+    for i in range of n:
+        append of [xs, "1"]
+    return "len of [" + (join of [xs, ", "]) + "]"
+for n in [1024, 1025]:
+    try:
+        print of (eval of (lit of n))
+    catch e:
+        print of e.message

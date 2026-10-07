@@ -398,23 +398,10 @@ define em_operands_multi(E, front, last) as:
         i is i - 1
     return [codes, tail]
 
-# A list literal; EigenScript caps a literal at 1024 elements.
+# A list literal, written as one (EigenScript refuses one of more than 1024
+# elements: gaps/list-literal-cap.eigs; such a row diverges).
 define em_listlit(codes) as:
-    local n is len of codes
-    if n <= 512:
-        return "[" + (join of [codes, ", "]) + "]"
-    local chunks is []
-    local i is 0
-    loop while i < n:
-        local j is min of [i + 512, n]
-        append of [chunks, "[" + (join of [list_slice of [codes, i, j], ", "]) + "]"]
-        i is j
-    local acc is chunks[0]
-    local k is 1
-    loop while k < len of chunks:
-        acc is "(concat of [" + acc + ", " + chunks[k] + "])"
-        k is k + 1
-    return acc
+    return "[" + (join of [codes, ", "]) + "]"
 
 # Multi-valued expression -> code for the list of its values.
 define em_multi(E, e) as:
@@ -462,23 +449,10 @@ define em_binop_fn(op) as:
     local m is {"+": "lr_add", "-": "lr_sub", "*": "lr_mul", "/": "lr_div", "%": "lr_mod", "//": "lr_idiv", "^": "lr_pow", "..": "lr_concat", "==": "lr_eq", "~=": "lr_ne", "<": "lr_lt", "<=": "lr_le", ">": "lr_gt", ">=": "lr_ge", "&": "lr_band", "|": "lr_bor", "~": "lr_bxor", "<<": "lr_shl", ">>": "lr_shr"}
     return m[op]
 
-# Single-valued expression -> EigenScript expression code (may hoist).
-# EigenScript caps expression nesting, so every 16th level of a deeply nested
-# expression is hoisted into a temp; the operand pinning that keeps calls in
-# order (em_operands) keeps this in order too.
+# Single-valued expression -> EigenScript expression code (may hoist). A
+# deeply nested Lua expression is a deeply nested EigenScript expression
+# (EigenScript refuses deep nesting: gaps/nesting-limits.eigs).
 define em_expr(E, e) as:
-    if E.ed == null:
-        E.ed is 0
-    E.ed is E.ed + 1
-    local c is em_expr1 of [E, e]
-    E.ed is E.ed - 1
-    if E.ed > 0 and E.ed % 16 == 0 and not (em_is_tmp of (c)):
-        local t is em_tmp of (E)
-        em_line of [E, "local " + t + " is " + c]
-        return t
-    return c
-
-define em_expr1(E, e) as:
     local k is e.k
     if k == "Nil":
         return "null"
@@ -504,7 +478,7 @@ define em_expr1(E, e) as:
             return "(lr_index of [" + (em_var_ref of (e.envvar)) + ", " + (em_strlit of (e.n)) + ", " + site + "])"
         local site is em_site of [E, e.line, "global '" + e.n + "'", ""]
         if E.G.env != "lr_G":
-            return "(lr_genv of [ENV, " + (em_strlit of (e.n)) + ", " + site + "])"
+            return "(lr_index of [ENV[0], " + (em_strlit of (e.n)) + ", " + site + "])"
         return "(lr_gget of [" + (em_strlit of (e.n)) + ", " + site + "])"
     if k == "Paren":
         return em_expr of [E, e.e]
@@ -774,7 +748,7 @@ define em_assign_to(E, target, code, site_line) as:
                 site is em_site of [E, site_line, em_envdesc of [E, target.envvar], ""]
                 em_line of [E, "lr_setindex of [" + (em_var_ref of (target.envvar)) + ", " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
             elif E.G.env != "lr_G":
-                em_line of [E, "lr_gsetenv of [ENV, " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+                em_line of [E, "lr_setindex of [ENV[0], " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
             else:
                 em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
         return null
@@ -1048,13 +1022,12 @@ define emit_program(ast, file, runtime) as:
     return (join of [out, "\n"]) + "\n"
 
 # A chunk compiled at run time by load: the code of a function L(ENV) whose
-# result is the chunk's main function, its globals indexing ENV[0] through
-# lr_genv/lr_gsetenv (no subscript: gaps/subscript-nesting.eigs; ENV is
+# result is the chunk's main function, its globals indexing ENV[0] (ENV is
 # the cell of its _ENV upvalue, so debug.setupvalue can replace it). Site ids
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "(lr_cell0 of (ENV))", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]

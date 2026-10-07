@@ -1,0 +1,25 @@
+# EigenScript gap: the parser refuses an expression nested about 60 levels
+# deep ("expression nesting too deep"); a call with a list argument,
+# `(f of [1, ...])`, spends two levels (the parentheses and the list). Lua
+# nests expressions up to its C-stack limit (LUAI_MAXCCALLS, 200 levels).
+# EigenLua writes each Lua operator as such a call (lr_add of [a, b, site]),
+# so a Lua expression nested about 30 levels deep does not compile; round 2
+# hoisted every 16th level into a temporary to dodge this, and round 3
+# removed that workaround (owner decision 2).
+# Lua:  load("return " .. ("(1+"):rep(70) .. "1" .. (")"):rep(70))() -> 71
+# Expected: 50 and 70 nested calls both evaluate (51 and 71).
+# Actual 686d3b7d: 51, then "eval: parse error in code string" (stderr:
+#   "Parse error line 1: expression nesting too deep").
+# Rows: none graded (errors.lua's deep-nesting tests stop earlier).
+define add(a, b) as:
+    return a + b
+define nest(n) as:
+    local s is "1"
+    for i in range of n:
+        s is "(add of [1, " + s + "])"
+    return s
+for n in [50, 70]:
+    try:
+        print of (eval of (nest of n))
+    catch e:
+        print of e.message

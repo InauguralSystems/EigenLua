@@ -5,7 +5,9 @@
 # Not a #1286 row; a parser defect.
 # EigenLua writes upvalues as cell subscripts (c5[0]), so a Lua expression
 # with about 250 upvalue references in one call or table constructor does
-# not compile; loaded chunks reach their globals without a subscript.
+# not compile. Loaded chunks index their _ENV cell (ENV[0]) the same way:
+# round 2 routed them through helper calls to dodge this, and round 3
+# removed that workaround (owner decision 2).
 # Lua:  a call or constructor with 300 upvalue operands compiles (the limit
 #       Lua checks is 255 registers for arguments, 2^25 table items).
 # Expected: the 300-element list below evaluates.

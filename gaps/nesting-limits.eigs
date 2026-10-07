@@ -1,8 +1,8 @@
 # EigenScript gap: the parser stops at 64 indentation levels and the
 # compiler at 128 levels of nesting (an if/elif chain counts one level per
 # branch). Lua nests blocks and expressions up to its C-stack limit (about
-# 200 levels: LUAI_MAXCCALLS). EigenLua hoists deep expressions into temps
-# and emits elseif as elif, but a Lua block nested more deeply than the
+# 200 levels: LUAI_MAXCCALLS). EigenLua emits elseif as elif (the natural
+# translation), but a Lua block nested more deeply than the
 # EigenScript code can indent, or an elseif chain longer than about 125
 # branches, does not compile. Not a #1286 row; a VM limit.
 # Lua:  load(string.rep("while a do ", 100) .. string.rep(" end", 100))
