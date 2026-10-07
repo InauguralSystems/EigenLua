@@ -9,7 +9,7 @@ It is graded against reference Lua 5.4.9 and the official Lua test suite. The ba
 
 Status: front end round 5. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
 and runs the result on the EigenScript VM: `$EIGENSCRIPT`, else `eigenscript` on `PATH`. It needs the `bool` type,
-which arrived at EigenScript `main` 686d3b7d (EigenScript#1647).
+which arrived in EigenScript v0.45.0 (EigenScript#1647).
 
 The runtime library has these parts:
 - `src/runtime.eigs`;
