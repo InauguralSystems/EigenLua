@@ -1,0 +1,192 @@
+# EigenLua runtime: the math library beyond runtime.eigs, and Lua 5.4's
+# xoshiro256** generator (lmathlib.c), bit-exact.
+#
+# A 64-bit generator word is a pair [hi, lo] of 32-bit halves held in
+# doubles, the shape of lmathlib.c's own Rand64 fallback, so every step is
+# exact although EigenScript has no 64-bit unsigned integer.
+
+lr_rng_M32 is 4294967295
+lr_rng_2P32 is 4294967296
+
+define lr_rng_xor(a, b) as:
+    return [a[0] ^ b[0], a[1] ^ b[1]]
+
+define lr_rng_shl(a, n) as:
+    return [((a[0] << n) & lr_rng_M32) | (a[1] >> (32 - n)), (a[1] << n) & lr_rng_M32]
+
+define lr_rng_add(a, b) as:
+    local l is a[1] + b[1]
+    local h is a[0] + b[0]
+    if l >= lr_rng_2P32:
+        l is l - lr_rng_2P32
+        h is h + 1
+    return [h & lr_rng_M32, l]
+
+# rotate left by n, 0 < n < 32
+define lr_rng_rotl(a, n) as:
+    return [((a[0] << n) & lr_rng_M32) | (a[1] >> (32 - n)), (a[0] >> (32 - n)) | ((a[1] << n) & lr_rng_M32)]
+
+# rotate left by n, 32 < n < 64 (a right rotation by 64 - n)
+define lr_rng_rotl1(a, n) as:
+    local m is 64 - n
+    return [(a[0] >> m) | ((a[1] << (32 - m)) & lr_rng_M32), ((a[0] << (32 - m)) & lr_rng_M32) | (a[1] >> m)]
+
+define lr_rng_next(st) as:
+    local s1 is st[1]
+    local res is lr_rng_rotl of [lr_rng_add of [lr_rng_shl of [s1, 2], s1], 7]
+    res is lr_rng_add of [lr_rng_shl of [res, 3], res]
+    local t is lr_rng_shl of [s1, 17]
+    st[2] is lr_rng_xor of [st[2], st[0]]
+    st[3] is lr_rng_xor of [st[3], st[1]]
+    st[1] is lr_rng_xor of [st[1], st[2]]
+    st[0] is lr_rng_xor of [st[0], st[3]]
+    st[2] is lr_rng_xor of [st[2], t]
+    st[3] is lr_rng_rotl1 of [st[3], 45]
+    return res
+
+# lua_Integer -> its two's complement halves (lr_u64 in rt_format.eigs).
+define lr_rng_int2i(n) as:
+    return lr_u64 of (n)
+
+# A 64-bit word read as a lua_Integer, rounded to the nearest double.
+define lr_rng_toint(w) as:
+    local h is w[0]
+    if h >= 2147483648:
+        h is h - lr_rng_2P32
+    return h * lr_rng_2P32 + w[1]
+
+# I2d with FIGS = 53: the high 53 bits scaled to [0, 1).
+define lr_rng_float(w) as:
+    return (w[0] * 2097152 + (w[1] >> 11)) / 9007199254740992
+
+lr_rng_state is [[0, 0], [0, 0], [0, 0], [0, 0]]
+
+define lr_rng_setseed(n1, n2) as:
+    lr_rng_state[0] is lr_rng_int2i of (n1)
+    lr_rng_state[1] is [0, 255]
+    lr_rng_state[2] is lr_rng_int2i of (n2)
+    lr_rng_state[3] is [0, 0]
+    for i in range of 16:
+        lr_rng_next of (lr_rng_state)
+
+define lr_rng_le(a, b) as:
+    if a[0] != b[0]:
+        return a[0] < b[0]
+    return a[1] <= b[1]
+
+# project (lmathlib.c): ran into [0, n], both 64-bit words.
+define lr_rng_project(ran, n) as:
+    local n1 is lr_rng_add of [n, [0, 1]]
+    if (n[0] & n1[0]) == 0 and (n[1] & n1[1]) == 0:
+        return [ran[0] & n[0], ran[1] & n[1]]
+    local lim is [n[0], n[1]]
+    for sh in [1, 2, 4, 8, 16, 32]:
+        local s is [0, 0]
+        if sh == 32:
+            s is [0, lim[0]]
+        else:
+            s is [lim[0] >> sh, (lim[1] >> sh) | ((lim[0] << (32 - sh)) & lr_rng_M32)]
+        lim is [lim[0] | s[0], lim[1] | s[1]]
+    local r is [ran[0] & lim[0], ran[1] & lim[1]]
+    loop while not (lr_rng_le of [r, n]):
+        local nx is lr_rng_next of (lr_rng_state)
+        r is [nx[0] & lim[0], nx[1] & lim[1]]
+    return r
+
+define lr_m_random(A) as:
+    local rv is lr_rng_next of (lr_rng_state)
+    local low is 1
+    local up is 0
+    local na is len of A
+    if na == 0:
+        return [lr_rng_float of (rv)]
+    if na == 1:
+        up is lr_checkint of [A, 0, "random"]
+        if up == 0:
+            return [lr_rng_toint of (rv)]
+    elif na == 2:
+        low is lr_checkint of [A, 0, "random"]
+        up is lr_checkint of [A, 1, "random"]
+    else:
+        lr_throw of ((lr_where of (1)) + "wrong number of arguments")
+    if low > up:
+        lr_argerr of [na, "random", "interval is empty"]
+    # (lua_Unsigned)up - (lua_Unsigned)low, as a 64-bit word
+    local ul is lr_u64 of (up)
+    local ll is lr_u64 of (low)
+    local nl is lr_rng_add of [ul, lr_rng_add of [[ll[0] ^ lr_rng_M32, ll[1] ^ lr_rng_M32], [0, 1]]]
+    local p is lr_rng_project of [rv, nl]
+    local r is lr_rng_add of [p, ll]
+    return [lr_rng_toint of (r)]
+
+define lr_m_randomseed(A) as:
+    if len of A == 0:
+        local n1 is floor of (clock_unix of null)
+        local n2 is floor of ((random of null) * 4294967296)
+        lr_rng_setseed of [n1, n2]
+        return [n1, n2]
+    local n1 is lr_checkint of [A, 0, "randomseed"]
+    local n2 is lr_optint of [A, 1, "randomseed", 0]
+    lr_rng_setseed of [n1, n2]
+    return [n1, n2]
+
+lr_m_randomseed of ([])
+
+define lr_m_sin(A) as:
+    return [sin of (lr_checknum of [A, 0, "sin"])]
+
+define lr_m_cos(A) as:
+    return [cos of (lr_checknum of [A, 0, "cos"])]
+
+define lr_m_tan(A) as:
+    return [tan of (lr_checknum of [A, 0, "tan"])]
+
+define lr_m_asin(A) as:
+    return [asin of (lr_checknum of [A, 0, "asin"])]
+
+define lr_m_acos(A) as:
+    return [acos of (lr_checknum of [A, 0, "acos"])]
+
+define lr_m_atan(A) as:
+    local y is lr_checknum of [A, 0, "atan"]
+    local x is 1
+    if lr_arg of [A, 1] != null:
+        x is lr_checknum of [A, 1, "atan"]
+    return [atan2 of [y, x]]
+
+define lr_m_exp(A) as:
+    return [exp of (lr_checknum of [A, 0, "exp"])]
+
+define lr_m_log(A) as:
+    local x is lr_checknum of [A, 0, "log"]
+    if lr_arg of [A, 1] == null:
+        return [log of x]
+    local b is lr_checknum of [A, 1, "log"]
+    if b == 2:
+        return [(log of x) / (log of 2)]
+    if b == 10:
+        return [(log of x) / (log of 10)]
+    return [(log of x) / (log of b)]
+
+define lr_m_deg(A) as:
+    return [(lr_checknum of [A, 0, "deg"]) * (180 / (pi of null))]
+
+define lr_m_rad(A) as:
+    return [(lr_checknum of [A, 0, "rad"]) * ((pi of null) / 180)]
+
+# modf: integral part (a float in Lua) and fraction
+define lr_m_modf(A) as:
+    local x is lr_checknum of [A, 0, "modf"]
+    local ip is 0
+    if x >= 0:
+        ip is floor of x
+    else:
+        ip is ceil of x
+    return [ip, x - ip]
+
+define lr_m_ult(A) as:
+    local a is lr_u64 of (lr_checkint of [A, 0, "ult"])
+    local b is lr_u64 of (lr_checkint of [A, 1, "ult"])
+    if a[0] != b[0]:
+        return [a[0] < b[0]]
+    return [a[1] < b[1]]

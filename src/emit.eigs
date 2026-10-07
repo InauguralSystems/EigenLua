@@ -854,7 +854,7 @@ define em_genfor(E, s) as:
     em_line of [E, "null"]
     em_dedent of (E)
 
-em_rt_parts is ["rt_pattern.eigs"]
+em_rt_parts is ["rt_pattern.eigs", "rt_format.eigs", "rt_math.eigs"]
 
 define em_dirname(p) as:
     local i is len of p - 1

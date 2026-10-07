@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null, "curf": null}
 lr_stk is []
 lr_fnreg is []
 
@@ -46,10 +46,6 @@ define lr_unsup(what, site) as:
     lr_stderr of ("EIGENLUA-UNSUPPORTED: " + what + " at " + (lr_site_chunk of (site)) + ":" + (str of line) + "\n")
     lr_exit of 3
 
-# A value Lua would compute that one finite double cannot hold.
-define lr_nonfinite(site) as:
-    lr_unsup of ["non-finite number (inf/nan: EigenScript has none)", site]
-
 define lr_cur_line(level) as:
     local i is len of lr_stk - level
     if i < 0:
@@ -72,8 +68,44 @@ define lr_rterr(site, msg) as:
         throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
     throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg})
 
+# luaL_argerror: the function is named as the call site names it (a
+# method call does not count self), else by its global name (lauxlib.c
+# pushglobalfuncname), else '?'.
 define lr_argerr(n, fname, msg) as:
-    throw of ({"LUAERR": 1, "v": (lr_where of (1)) + "bad argument #" + (str of n) + " to '" + fname + "' (" + msg + ")"})
+    local nm is "?"
+    local site is 0
+    if len of lr_stk > 0:
+        site is lr_stk[len of lr_stk - 1]
+    local sd is lr_st.sites[site]
+    if site != 0 and len of sd[2] > 8 and sd[2][0:8] == "method '":
+        nm is sd[2][8:len of sd[2] - 1]
+        n is n - 1
+        if n == 0:
+            lr_throw of ((lr_where of (1)) + "calling '" + nm + "' on bad self")
+    elif site != 0 and index_of of [sd[1], "'"] >= 0:
+        local d is sd[1]
+        nm is d[(index_of of [d, "'"]) + 1:len of d - 1]
+    else:
+        local g is lr_globalfuncname of (lr_st.curf)
+        if g != null:
+            nm is g
+    lr_throw of ((lr_where of (1)) + "bad argument #" + (str of n) + " to '" + nm + "' (" + msg + ")")
+
+define lr_globalfuncname(f) as:
+    if f == null:
+        return null
+    for k in keys of lr_G.h:
+        local v is lr_G.h[k]
+        if (type of v == "fn" or type of v == "builtin") and lr_fnid of (v) == lr_fnid of (f):
+            return k
+    for lib in ["string", "table", "math", "io", "os", "coroutine", "utf8", "debug"]:
+        local t is lr_G.h[lib]
+        if type of t == "dict":
+            for k in keys of t.h:
+                local v is t.h[k]
+                if (type of v == "fn" or type of v == "builtin") and lr_fnid of (v) == lr_fnid of (f):
+                    return lib + "." + k
+    return null
 
 define lr_main(f, chunk, sites) as:
     lr_st.chunk is lr_chunkid of ("@" + chunk)
@@ -210,91 +242,11 @@ define lr_intdigits(x) as:
         j is j - 1
     return s
 
-define lr_pow10(p) as:
-    if p >= 0 and p <= 22:
-        return pow of [10, p]
-    if p < 0 and p >= -22:
-        return 1 / (pow of [10, 0 - p])
-    return pow of [10, p]
-
-# x * 10^p with as few roundings as the exponent allows.
-define lr_scale10(x, p) as:
-    if p >= 0:
-        if p <= 22:
-            return x * (pow of [10, p])
-        return x * (pow of [10, 22]) * (pow of [10, p - 22])
-    if p >= -22:
-        return x / (pow of [10, 0 - p])
-    return x / (pow of [10, 22]) / (pow of [10, (0 - p) - 22])
-
-# The P significant digits of ax > 0 and its decimal exponent: [digits, e].
-define lr_sigdigits(ax, P) as:
-    local e is floor of ((log of ax) / (log of 10))
-    if lr_scale10 of [1, e] > ax:
-        e is e - 1
-    if lr_scale10 of [1, e + 1] <= ax:
-        e is e + 1
-    local m is lr_round_even of (lr_scale10 of [ax, P - 1 - e])
-    if m >= lr_pow10 of (P):
-        e is e + 1
-        m is lr_round_even of (lr_scale10 of [ax, P - 1 - e])
-    local ds is str of m
-    loop while len of ds < P:
-        ds is "0" + ds
-    return [ds, e]
-
-define lr_round_even(v) as:
-    local f is floor of v
-    local d is v - f
-    if d > 0.5:
-        return f + 1
-    if d < 0.5:
-        return f
-    if f % 2 == 0:
-        return f
-    return f + 1
-
-define lr_strip0(s) as:
-    local n is len of s
-    loop while n > 0 and s[n - 1] == "0":
-        n is n - 1
-    return s[0:n]
-
-# C's %.<P>g for finite x.
+# C's %.<P>g for finite x (exact; src/rt_format.eigs).
 define lr_fmt_g(x, P) as:
-    if P == 0:
-        P is 1
-    if x == 0:
-        return "0"
-    local sg is ""
-    local ax is x
     if x < 0:
-        sg is "-"
-        ax is 0 - x
-    local r is lr_sigdigits of [ax, P]
-    local ds is r[0]
-    local e is r[1]
-    if e < -4 or e >= P:
-        local frac is lr_strip0 of (ds[1:])
-        local mant is ds[0:1]
-        if len of frac > 0:
-            mant is mant + "." + frac
-        local es is str of (abs of e)
-        if len of es < 2:
-            es is "0" + es
-        if e < 0:
-            return sg + mant + "e-" + es
-        return sg + mant + "e+" + es
-    if e >= 0:
-        local ip is ds[0:e + 1]
-        local fp is lr_strip0 of (ds[e + 1:])
-        if len of fp > 0:
-            return sg + ip + "." + fp
-        return sg + ip
-    local z is ""
-    for k in range of ((0 - e) - 1):
-        z is z + "0"
-    return sg + "0." + z + (lr_strip0 of (ds))
+        return "-" + (lr_fx_g of [0 - x, P, false, false])
+    return lr_fx_g of [x, P, false, false]
 
 # Lua's number-to-string: integers (here: integral values below 2^63) in
 # full, everything else %.14g. One double cannot tell 1 from 1.0, so integral
@@ -410,8 +362,6 @@ define lr_str2num(s) as:
     if text[len of text - 1] == ".":
         text is text + "0"
     local v is num of text
-    if v >= 1e308 or v <= -1e308:
-        lr_nonfinite of (0)
     if neg:
         return 0 - v
     return v
@@ -679,6 +629,8 @@ define lr_gset(name, v, site) as:
 define lr_call(f, args, site) as:
     local tf is type of f
     if tf == "fn":
+        if site == 0:
+            lr_st.curf is f
         append of [lr_stk, site]
         local r is f of (args)
         list_truncate of [lr_stk, len of lr_stk - 1]
@@ -712,11 +664,6 @@ define lr_mcall1(f, o, args, site) as:
     return null
 
 # ------------------------------------------------------------ arithmetic
-
-define lr_fin(r, site) as:
-    if r >= 1e308 or r <= -1e308:
-        lr_nonfinite of (site)
-    return r
 
 # Operand as a number for arithmetic (strings convert), else null.
 define lr_arnum(v) as:
@@ -771,15 +718,13 @@ define lr_arith(op, a, b, site) as:
 
 define lr_arith_num(op, x, y, site) as:
     if op == "+":
-        return lr_fin of [x + y, site]
+        return x + y
     if op == "-":
-        return lr_fin of [x - y, site]
+        return x - y
     if op == "*":
-        return lr_fin of [x * y, site]
+        return x * y
     if op == "/":
-        if y == 0:
-            lr_nonfinite of (site)
-        return lr_fin of [x / y, site]
+        return x / y
     if op == "%":
         return lr_modnum of [x, y, site]
     if op == "//":
@@ -790,26 +735,17 @@ define lr_arith_num(op, x, y, site) as:
 
 define lr_add(a, b, site) as:
     if type of a == "num" and type of b == "num":
-        local r is a + b
-        if r >= 1e308 or r <= -1e308:
-            lr_nonfinite of (site)
-        return r
+        return a + b
     return lr_arith of ["+", a, b, site]
 
 define lr_sub(a, b, site) as:
     if type of a == "num" and type of b == "num":
-        local r is a - b
-        if r >= 1e308 or r <= -1e308:
-            lr_nonfinite of (site)
-        return r
+        return a - b
     return lr_arith of ["-", a, b, site]
 
 define lr_mul(a, b, site) as:
     if type of a == "num" and type of b == "num":
-        local r is a * b
-        if r >= 1e308 or r <= -1e308:
-            lr_nonfinite of (site)
-        return r
+        return a * b
     return lr_arith of ["*", a, b, site]
 
 define lr_div(a, b, site) as:
@@ -830,7 +766,6 @@ define lr_modnum(x, y, site) as:
     if y == 0:
         if lr_isint of (x) and lr_isint of (y):
             lr_rterr of [site, "attempt to perform 'n%0'"]
-        lr_nonfinite of (site)
     local m is x % y
     if m != 0 and (m < 0) != (y < 0):
         m is m + y
@@ -840,15 +775,10 @@ define lr_idivnum(x, y, site) as:
     if y == 0:
         if lr_isint of (x) and lr_isint of (y):
             lr_rterr of [site, "attempt to perform 'n//0'"]
-        lr_nonfinite of (site)
-    return lr_fin of [floor of (x / y), site]
+    return floor of (x / y)
 
 define lr_pownum(x, y, site) as:
-    if x == 0 and y < 0:
-        lr_nonfinite of (site)
-    if x < 0 and y != floor of y:
-        lr_nonfinite of (site)
-    return lr_fin of [pow of [x, y], site]
+    return pow of [x, y]
 
 define lr_unm(a, site) as:
     if type of a == "num":
@@ -1414,53 +1344,6 @@ define lr_s_char(A) as:
     # direct translation: a NUL byte ends the EigenScript string
     return [str_from_bytes of (bs)]
 
-# string.format: %d %i %s %% and %c, with no flags, width or precision.
-# Any other conversion is unsupported (exit 3), never approximated.
-define lr_s_format(A) as:
-    local fmt is lr_checkstr of [A, 0, "format"]
-    local parts is []
-    local n is len of fmt
-    local i is 0
-    local seg is 0
-    local arg is 1
-    loop while i < n:
-        if fmt[i] == "%":
-            append of [parts, fmt[seg:i]]
-            if i + 1 >= n:
-                lr_throw of ((lr_where of (1)) + "invalid conversion '%' to 'format'")
-            local c is fmt[i + 1]
-            if c == "%":
-                append of [parts, "%"]
-            elif c == "d" or c == "i":
-                if arg >= len of A:
-                    lr_argerr of [arg + 1, "format", "number expected, got no value"]
-                local x is lr_arnum of (A[arg])
-                if x == null:
-                    lr_argerr of [arg + 1, "format", "number expected, got " + (lr_type of (A[arg]))]
-                if x != floor of x:
-                    lr_argerr of [arg + 1, "format", "number has no integer representation"]
-                append of [parts, lr_numstr of (x)]
-                arg is arg + 1
-            elif c == "s":
-                if arg >= len of A:
-                    lr_argerr of [arg + 1, "format", "no value"]
-                append of [parts, lr_tostr of (A[arg])]
-                arg is arg + 1
-            elif c == "c":
-                local cc is lr_checkint of [A, arg, "format"]
-                if cc == 0:
-                    lr_unsup of ["string.format('%c', 0): a NUL byte", 0]
-                append of [parts, chr of cc]
-                arg is arg + 1
-            else:
-                lr_unsup of ["string.format conversion '%" + c + "'", 0]
-            i is i + 2
-            seg is i
-        else:
-            i is i + 1
-    append of [parts, fmt[seg:n]]
-    return [join of [parts, ""]]
-
 # ------------------------------------------------------------ table library
 
 define lr_t_insert(A) as:
@@ -1613,8 +1496,6 @@ define lr_m_abs(A) as:
 
 define lr_m_sqrt(A) as:
     local x is lr_checknum of [A, 0, "sqrt"]
-    if x < 0:
-        lr_nonfinite of (0)
     return [sqrt of x]
 
 define lr_m_max(A) as:
@@ -1661,7 +1542,6 @@ define lr_m_fmod(A) as:
     if b == 0:
         if lr_isint of (a) and lr_isint of (b):
             lr_argerr of [2, "fmod", "zero"]
-        lr_nonfinite of (0)
     return [a % b]
 
 # ------------------------------------------------------------ io / os
@@ -1825,7 +1705,10 @@ lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, 
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
 lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort}, lr_stubs of ["table.", "move"], {}]
-lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod}, lr_stubs of ["math.", "cos deg exp log modf rad random randomseed sin tan ult acos asin atan"], {"huge": "math.huge (inf: EigenScript has no non-finite numbers)"}]
+lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod, "random": lr_m_random, "randomseed": lr_m_randomseed, "sin": lr_m_sin, "cos": lr_m_cos, "tan": lr_m_tan, "asin": lr_m_asin, "acos": lr_m_acos, "atan": lr_m_atan, "exp": lr_m_exp, "log": lr_m_log, "deg": lr_m_deg, "rad": lr_m_rad, "modf": lr_m_modf, "ult": lr_m_ult}, {}, {}]
+# math.huge is inf in Lua; the direct translation is EigenScript's own
+# overflow, which saturates at 1e308 (gaps/no-nonfinite.eigs)
+lr_rawset of [lr_mathlib, "huge", 1e308 * 10, 0]
 lr_rawset of [lr_mathlib, "pi", pi of null, 0]
 lr_rawset of [lr_mathlib, "maxinteger", 9223372036854775807, 0]
 lr_rawset of [lr_mathlib, "mininteger", -9223372036854775808, 0]
