@@ -68,6 +68,7 @@ str_embedded_nul.lua unspecified-audit: ok
 str_find_match.lua unspecified-audit: ok
 str_format.lua unspecified-audit: ok
 str_format_num.lua unspecified-audit: ok
+str_format_p_string.lua unspecified-audit: ok
 str_frontier_end.lua unspecified-audit: ok
 str_gmatch_init_end.lua unspecified-audit: ok
 str_gsub.lua unspecified-audit: ok

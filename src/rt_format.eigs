@@ -644,16 +644,17 @@ define lr_s_format(A) as:
     append of [parts, fmt[seg:n]]
     return [join of [parts, ""]]
 
-# %p of a string: a short string (40 bytes or fewer, LUAI_MAXSHORTLEN) is
-# interned in Lua, so equal contents give one address, here a hash of the
-# bytes; a long string is its own object, here a fresh number each time.
-lr_fx_longstr is {"n": 0}
+# %p of a string (lua_topointer: the string object's address). An
+# EigenScript string has no identity apart from its value
+# (gaps/no-string-identity.eigs), so the direct translation names the value:
+# an id from the table id counter, kept per distinct string, as a table keeps
+# its id. One string always formats alike, and so do equal strings; Lua
+# gives an equal long string made elsewhere (a concatenation) its own
+# address, so that case diverges.
+lr_fx_strids is {}
 
 define lr_fx_strptr(s) as:
-    if len of s > 40:
-        lr_fx_longstr.n is lr_fx_longstr.n + 1
-        return 2147483648 + lr_fx_longstr.n
-    local h is 5381
-    for i in range of (len of s):
-        h is (h * 33 + (ord of s[i])) % 2147483647
-    return h
+    if not (has_key of [lr_fx_strids, s]):
+        lr_st.nid is lr_st.nid + 1
+        lr_fx_strids[s] is lr_st.nid
+    return lr_fx_strids[s]
