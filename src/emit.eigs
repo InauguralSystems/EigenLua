@@ -16,8 +16,8 @@
 #     Lua line and the variable descriptions Lua puts in its messages.
 # A construct the emitter does not handle raises ["UNSUP", what, line].
 
-define em_unsup(what, line) as:
-    throw of (["UNSUP", what, line])
+define em_unsup(wht, line) as:
+    throw of (["UNSUP", wht, line])
 
 # ---------------------------------------------------------------- resolver
 
@@ -46,12 +46,18 @@ define rs_lookup(R, name) as:
     return null
 
 # Mark v captured and thread it through every function from fn up to v.fn.
-define rs_capture(R, v, fn) as:
+define rs_capture(R, v, fn, line) as:
     v.cap is 1
     local g is fn
     loop while g != null and g.id != v.fn.id:
         local key is str of v.id
         if not (has_key of [g.freeidx, key]):
+            if len of g.free >= 255:
+                # lparser.c newupvalue: MAXUPVAL (255)
+                local wh is "main function"
+                if g.main != 1:
+                    wh is "function at line " + (str of g.line)
+                throw of (["SYNTAX", line, "too many upvalues (limit is 255) in " + wh + " near '" + v.name + "'"])
             g.freeidx[key] is len of g.free
             append of [g.free, v]
         g is g.parent
@@ -96,8 +102,8 @@ define rs_stat(R, s) as:
         local vs is []
         local i is 0
         for nm in s.names:
-            local at is s.attribs[i]
-            local v is rs_new_var of [R, nm, R.fn, at]
+            local atb is s.attribs[i]
+            local v is rs_new_var of [R, nm, R.fn, atb]
             append of [vs, v]
             i is i + 1
         for v in vs:
@@ -178,12 +184,12 @@ define rs_expr(R, e) as:
         local v is rs_lookup of [R, e.n]
         e.var is v
         if v != null and v.fn.id != R.fn.id:
-            rs_capture of [R, v, R.fn]
+            rs_capture of [R, v, R.fn, e.line]
         if v == null and R.G.useenv:
             local ev is rs_lookup of [R, "_ENV"]
             e.envvar is ev
             if ev.fn.id != R.fn.id:
-                rs_capture of [R, ev, R.fn]
+                rs_capture of [R, ev, R.fn, e.line]
     elif k == "Index":
         rs_expr of [R, e.o]
         rs_expr of [R, e.key]
@@ -457,7 +463,22 @@ define em_binop_fn(op) as:
     return m[op]
 
 # Single-valued expression -> EigenScript expression code (may hoist).
+# EigenScript caps expression nesting, so every 16th level of a deeply nested
+# expression is hoisted into a temp; the operand pinning that keeps calls in
+# order (em_operands) keeps this in order too.
 define em_expr(E, e) as:
+    if E.ed == null:
+        E.ed is 0
+    E.ed is E.ed + 1
+    local c is em_expr1 of [E, e]
+    E.ed is E.ed - 1
+    if E.ed > 0 and E.ed % 16 == 0 and not (em_is_tmp of (c)):
+        local t is em_tmp of (E)
+        em_line of [E, "local " + t + " is " + c]
+        return t
+    return c
+
+define em_expr1(E, e) as:
     local k is e.k
     if k == "Nil":
         return "null"
@@ -483,7 +504,7 @@ define em_expr(E, e) as:
             return "(lr_index of [" + (em_var_ref of (e.envvar)) + ", " + (em_strlit of (e.n)) + ", " + site + "])"
         local site is em_site of [E, e.line, "global '" + e.n + "'", ""]
         if E.G.env != "lr_G":
-            return "(lr_index of [" + E.G.env + ", " + (em_strlit of (e.n)) + ", " + site + "])"
+            return "(lr_genv of [ENV, " + (em_strlit of (e.n)) + ", " + site + "])"
         return "(lr_gget of [" + (em_strlit of (e.n)) + ", " + site + "])"
     if k == "Paren":
         return em_expr of [E, e.e]
@@ -753,7 +774,7 @@ define em_assign_to(E, target, code, site_line) as:
                 site is em_site of [E, site_line, em_envdesc of [E, target.envvar], ""]
                 em_line of [E, "lr_setindex of [" + (em_var_ref of (target.envvar)) + ", " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
             elif E.G.env != "lr_G":
-                em_line of [E, "lr_setindex of [" + E.G.env + ", " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+                em_line of [E, "lr_gsetenv of [ENV, " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
             else:
                 em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
         return null
@@ -851,12 +872,47 @@ define em_if(E, s, i) as:
     em_block of [E, s.blocks[i]]
     em_line of [E, "null"]
     em_dedent of (E)
-    if i + 1 < len of s.conds:
+    # elseif becomes elif (EigenScript caps nesting at 64 levels); a condition
+    # that hoists statements needs them inside an else, so it nests instead
+    local k is i + 1
+    loop while k < len of s.conds:
+        local mark is len of E.out
+        local c2 is em_cond of [E, s.conds[k]]
+        if len of E.out != mark:
+            local hoisted is list_slice of [E.out, mark, len of E.out]
+            list_truncate of [E.out, mark]
+            em_line of [E, "else:"]
+            for h in hoisted:
+                append of [E.out, "    " + h]
+            em_indent of (E)
+            em_line of [E, "if " + c2 + ":"]
+            em_indent of (E)
+            em_block of [E, s.blocks[k]]
+            em_line of [E, "null"]
+            em_dedent of (E)
+            em_if_rest of [E, s, k + 1]
+            em_dedent of (E)
+            return null
+        em_line of [E, "elif " + c2 + ":"]
+        em_indent of (E)
+        em_block of [E, s.blocks[k]]
+        em_line of [E, "null"]
+        em_dedent of (E)
+        k is k + 1
+    em_if_else of [E, s]
+
+# The rest of an if chain from condition k, after an if block.
+define em_if_rest(E, s, k) as:
+    if k < len of s.conds:
         em_line of [E, "else:"]
         em_indent of (E)
-        em_if of [E, s, i + 1]
+        em_if of [E, s, k]
         em_dedent of (E)
-    elif s["else"] != null:
+    else:
+        em_if_else of [E, s]
+
+define em_if_else(E, s) as:
+    if s["else"] != null:
         em_line of [E, "else:"]
         em_indent of (E)
         em_block of [E, s["else"]]
@@ -992,12 +1048,13 @@ define emit_program(ast, file, runtime) as:
     return (join of [out, "\n"]) + "\n"
 
 # A chunk compiled at run time by load: the code of a function L(ENV) whose
-# result is the chunk's main function, its globals indexing ENV[0] (ENV is
+# result is the chunk's main function, its globals indexing ENV[0] through
+# lr_genv/lr_gsetenv (no subscript: gaps/subscript-nesting.eigs; ENV is
 # the cell of its _ENV upvalue, so debug.setupvalue can replace it). Site ids
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "(lr_cell0 of (ENV))", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]

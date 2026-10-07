@@ -139,6 +139,13 @@ define lr_io_f_close(A) as:
     # the standard files cannot be closed (liolib.c io_noclose)
     return [null, "cannot close standard file"]
 
+# __gc and __close of a file handle (io_gc): only checks its argument here.
+define lr_io_f_gc(A) as:
+    local f is lr_arg of [A, 0]
+    if not (lr_io_isfile of (f)):
+        lr_argerr of [1, "__gc", "FILE* expected, got " + (lr_typearg of [A, 0])]
+    return []
+
 define lr_io_f_tostring(A) as:
     local f is lr_arg of [A, 0]
     if f.closed:
@@ -159,12 +166,16 @@ define lr_io_output(A) as:
     if len of A > 0 and lr_arg of [A, 0] != null:
         if lr_io_isfile of (A[0]):
             return [A[0]]
-        lr_unsup of ["io.output with a file name", 0]
+        if type of A[0] == "str" or type of A[0] == "num":
+            lr_unsup of ["io.output with a file name", 0]
+        lr_argerr of [1, "output", "FILE* expected, got " + (lr_typearg of [A, 0])]
     return [lr_io_stdout]
 
 define lr_io_input(A) as:
     if len of A > 0 and lr_arg of [A, 0] != null:
         if lr_io_isfile of (A[0]):
             return [A[0]]
-        lr_unsup of ["io.input with a file name", 0]
+        if type of A[0] == "str" or type of A[0] == "num":
+            lr_unsup of ["io.input with a file name", 0]
+        lr_argerr of [1, "input", "FILE* expected, got " + (lr_typearg of [A, 0])]
     return [lr_io_stdin]

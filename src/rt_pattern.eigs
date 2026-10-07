@@ -189,11 +189,11 @@ define lr_pm_min_expand(ms, s, p, ep) as:
         else:
             return -1
 
-define lr_pm_start_capture(ms, s, p, what) as:
+define lr_pm_start_capture(ms, s, p, wh) as:
     local level is ms.level
     if level >= lr_pm_MAXCAPTURES:
         lr_pm_err of ("too many captures")
-    ms.cap[level] is [s, what]
+    ms.cap[level] is [s, wh]
     ms.level is level + 1
     local res is lr_pm_match of [ms, s, p]
     if res == -1:
@@ -271,13 +271,13 @@ define lr_pm_match(ms, s, p) as:
                 if p >= pl or pat[p] != 91:
                     lr_pm_err of ("missing '[' after '%f' in pattern")
                 local ep is lr_pm_class_end of [ms, p]
-                local prev is 0
+                local prv is 0
                 if s > 0:
-                    prev is ms.s[s - 1]
+                    prv is ms.s[s - 1]
                 local cur is 0
                 if s < ms.sl:
                     cur is ms.s[s]
-                if not (lr_pm_bracket of [ms, prev, p, ep - 1]) and (lr_pm_bracket of [ms, cur, p, ep - 1]):
+                if not (lr_pm_bracket of [ms, prv, p, ep - 1]) and (lr_pm_bracket of [ms, cur, p, ep - 1]):
                     p is ep
                     continue
                 s is -1

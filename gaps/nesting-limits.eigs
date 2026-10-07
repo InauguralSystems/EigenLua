@@ -1,0 +1,39 @@
+# EigenScript gap: the parser stops at 64 indentation levels and the
+# compiler at 128 levels of nesting (an if/elif chain counts one level per
+# branch). Lua nests blocks and expressions up to its C-stack limit (about
+# 200 levels: LUAI_MAXCCALLS). EigenLua hoists deep expressions into temps
+# and emits elseif as elif, but a Lua block nested more deeply than the
+# EigenScript code can indent, or an elseif chain longer than about 125
+# branches, does not compile. Not a #1286 row; a VM limit.
+# Lua:  load(string.rep("while a do ", 100) .. string.rep(" end", 100))
+#       -> a function (100 levels are fine; 500 are refused)
+# Expected: the same nesting as Lua, about 200 levels.
+# Actual 686d3b7d: stdout "eval: parse error in code string" then
+#   "eval: compile error in code string"; stderr says why:
+#   "Syntax error line 65: indent too deep (max 64 levels)" and
+#   "Compile error line 250: expression nesting too deep to compile (limit 128)".
+# Rows: errors.lua (line 639, testrep "while a do ") (S, after its debug
+#       region; the row stops earlier on out-of-scope debug functions).
+define nested_ifs(n) as:
+    local lines is ["define f(x) as:"]
+    local ind is "    "
+    for i in range of n:
+        append of [lines, ind + "if x:"]
+        ind is ind + "    "
+    append of [lines, ind + "return 1"]
+    append of [lines, "f"]
+    return join of [lines, "\n"]
+define elif_chain(n) as:
+    local lines is ["define g(x) as:", "    if x == 0:", "        return 0"]
+    for i in range of n:
+        append of [lines, "    elif x == " + (str of (i + 1)) + ":"]
+        append of [lines, "        return " + (str of (i + 1))]
+    append of [lines, "    return -1"]
+    append of [lines, "g"]
+    return join of [lines, "\n"]
+for src in [nested_ifs of 70, elif_chain of 130]:
+    try:
+        local fn is eval of src
+        print of (fn of 1)
+    catch e:
+        print of e.message

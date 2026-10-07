@@ -39,11 +39,11 @@ define lr_site_chunk(site) as:
     return lr_st.chunk
 
 # The construct is not handled: say so and exit 3, never run on.
-define lr_unsup(what, site) as:
+define lr_unsup(wht, site) as:
     local line is lr_site_line of (site)
     if line < 0:
         line is lr_cur_line of (1)
-    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + what + " at " + (lr_site_chunk of (site)) + ":" + (str of line) + "\n")
+    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + wht + " at " + (lr_site_chunk of (site)) + ":" + (str of line) + "\n")
     lr_exit of 3
 
 define lr_cur_line(level) as:
@@ -592,8 +592,6 @@ define lr_index(o, k, site) as:
             if type of h == "fn" or type of h == "builtin":
                 return lr_callmm1 of [h, "index", [o, k], site]
             o is h
-        elif t == "str":
-            o is lr_strlib
         else:
             local h2 is lr_metafield of [o, "__index"]
             if h2 == null:
@@ -1182,18 +1180,22 @@ define lr_b_pcall(A) as:
     if len of A == 0:
         lr_argerr of [1, "pcall", "value expected"]
     local depth is len of lr_stk
+    local nny is lr_co_cur[0].nny
     local r is null
     try:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
         if type of e == "dict" and e.COCLOSE == 1:
             throw of (e)
+        local rr is lr_co_cur[0]
+        rr.nny is nny
         list_truncate of [lr_stk, depth]
         return [false, lr_errobj of (e)]
     return concat of [[true], r]
 
 define lr_b_xpcall(A) as:
     local h is lr_arg of [A, 1]
+    local nny is lr_co_cur[0].nny
     if type of h != "fn" and type of h != "builtin":
         lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
@@ -1203,9 +1205,14 @@ define lr_b_xpcall(A) as:
     catch e:
         if type of e == "dict" and e.COCLOSE == 1:
             throw of (e)
+        local rr is lr_co_cur[0]
+        rr.nny is nny
+        # the handler runs at the error point (the call-site stack still holds
+        # the frames that raised), as luaG_errormsg calls it before unwinding
         local v is lr_errobj of (e)
+        local hv is lr_xp_handle of [h, v, 0]
         list_truncate of [lr_stk, depth]
-        return [false, lr_xp_handle of [h, v, 0]]
+        return [false, hv]
     return concat of [[true], r]
 
 # The message handler sees each error, its own included (ldebug.c
@@ -1215,9 +1222,12 @@ define lr_xp_handle(h, v, n) as:
     if n >= 200:
         return "error in error handling"
     local depth is len of lr_stk
+    local nny is lr_co_cur[0].nny
     try:
-        return lr_call1 of [h, [v], 0]
+        return lr_call1 of [lr_ny of (h), [v], 0]
     catch e:
+        local rr is lr_co_cur[0]
+        rr.nny is nny
         if type of e == "dict" and e.COCLOSE == 1:
             throw of (e)
         list_truncate of [lr_stk, depth]
@@ -1362,11 +1372,12 @@ define lr_b_collectgarbage(A) as:
     if opt == "isrunning":
         return [lr_st.gcrun != false]
     if opt == "incremental" or opt == "generational":
-        local prev is lr_st.gcmode
-        if prev == null:
-            prev is "incremental"
+        local prv is lr_st.gcmode
+        if prv == null:
+            # lua.c switches to generational mode at startup
+            prv is "generational"
         lr_st.gcmode is opt
-        return [prev]
+        return [prv]
     if opt == "setpause" or opt == "setstepmul":
         return [100]
     lr_argerr of [1, "collectgarbage", "invalid option '" + opt + "'"]
@@ -1755,6 +1766,16 @@ define lr_os_setlocale(A) as:
 
 # ------------------------------------------------------------ load
 
+# A loaded chunk's globals: ENV is the cell of its _ENV upvalue.
+define lr_cell0(c) as:
+    return c[0]
+
+define lr_genv(c, k, site) as:
+    return lr_index of [c[0], k, site]
+
+define lr_gsetenv(c, k, v, site) as:
+    lr_setindex of [c[0], k, v, site]
+
 # luaO_chunkid with LUA_IDSIZE 60: how a chunk name appears in messages.
 define lr_chunkid(src) as:
     local n is len of src
@@ -1798,6 +1819,8 @@ define lr_compile(text, chunkid, env) as:
         code is r[0]
     catch e:
         if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
+            if e[1] < 0:
+                return [null, e[2]]
             return [null, chunkid + ":" + (str of e[1]) + ": " + e[2]]
         if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
             lr_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + chunkid + ":" + (str of e[2]) + "\n")
@@ -2038,6 +2061,107 @@ define lr_d_upvalueid(A) as:
     local cell is u[0][n - 1]
     return [{"id": cell[1], "a": [], "h": {}, "o": {}, "mt": null, "ud": true}]
 
+# ------------------------------------------------------------ debug.getinfo
+# In scope (GAPS.md): currentline and short_src. Level k names the function
+# that made the call lr_stk[len - k] (level 0 is getinfo itself, a C
+# function); a site of 0 is a call made by the runtime, so that frame is a C
+# function. Only 'currentline', 'short_src', 'source' and 'what' are filled.
+
+define lr_d_frame(level) as:
+    local n is len of lr_stk
+    if level == 0:
+        return {"c": true}
+    if level < 0 or level > n:
+        return null
+    local site is lr_stk[n - level]
+    if site == 0:
+        return {"c": true}
+    local main is lr_co_cur[0].main and n - level == 1
+    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "main": main}
+
+define lr_d_getinfo(A) as:
+    local a0 is lr_arg of [A, 0]
+    local first is 0
+    if lr_isthread of (a0):
+        if a0[0].id != lr_co_cur[0].id:
+            lr_unsup of ["debug.getinfo of another coroutine", 0]
+        first is 1
+    local fa is lr_arg of [A, first]
+    local t is lr_newtable of null
+    if type of fa == "num":
+        local fr is lr_d_frame of (lr_checkint of [A, first, "getinfo"])
+        if fr == null:
+            return [null]
+        if fr.c:
+            lr_rawset of [t, "currentline", -1, 0]
+            lr_rawset of [t, "short_src", "[C]", 0]
+            lr_rawset of [t, "source", "=[C]", 0]
+            lr_rawset of [t, "what", "C", 0]
+            return [t]
+        lr_rawset of [t, "currentline", fr.line, 0]
+        lr_rawset of [t, "short_src", fr.chunk, 0]
+        lr_rawset of [t, "source", "@" + fr.chunk, 0]
+        if fr.main:
+            lr_rawset of [t, "what", "main", 0]
+        else:
+            lr_rawset of [t, "what", "Lua", 0]
+        return [t]
+    if type of fa != "fn" and type of fa != "builtin":
+        lr_argerr of [first + 1, "getinfo", "function or level expected"]
+    # a function value: no line information is kept for it
+    lr_rawset of [t, "currentline", -1, 0]
+    lr_rawset of [t, "short_src", lr_st.chunk, 0]
+    lr_rawset of [t, "source", "@" + lr_st.chunk, 0]
+    lr_rawset of [t, "what", "Lua", 0]
+    return [t]
+
+# debug.traceback: the message and one "chunk:line:" entry per Lua level.
+define lr_d_traceback(A) as:
+    local first is 0
+    if lr_isthread of (lr_arg of [A, 0]):
+        first is 1
+    local msg is lr_arg of [A, first]
+    if msg != null and type of msg != "str" and type of msg != "num":
+        return [msg]
+    local level is lr_optint of [A, first + 1, "traceback", 1]
+    local parts is []
+    if msg != null:
+        append of [parts, lr_tostr of (msg)]
+        append of [parts, "\n"]
+    append of [parts, "stack traceback:"]
+    local k is level
+    loop while 1:
+        local fr is lr_d_frame of (k)
+        if fr == null:
+            break
+        if fr.c:
+            append of [parts, "\n\t[C]: in ?"]
+        elif fr.main:
+            append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in main chunk"]
+        else:
+            append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in function <?>"]
+        k is k + 1
+    return [join of [parts, ""]]
+
+# debug.getmetatable/setmetatable: no __metatable protection; only tables
+# carry a metatable here (strings share lr_strmt).
+define lr_d_getmetatable(A) as:
+    lr_checkany of [A, 0, "getmetatable"]
+    return [lr_metatable of (A[0])]
+
+define lr_d_setmetatable(A) as:
+    local v is lr_arg of [A, 0]
+    local mt is lr_arg of [A, 1]
+    if (mt != null and type of mt != "dict") or len of A < 2:
+        lr_argerr of [2, "setmetatable", "nil or table expected"]
+    if type of v == "dict":
+        v.mt is mt
+        return [v]
+    if type of v == "str":
+        lr_strmt is mt
+        return [v]
+    lr_unsup of ["debug.setmetatable of a " + (lr_type of (v)), 0]
+
 # ------------------------------------------------------------ globals
 
 define lr_lib(fns, stubs, trap) as:
@@ -2060,10 +2184,10 @@ define lr_init_lib as:
     null
 
 lr_G is lr_newtable of null
-lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format, "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_s_gsub, "pack": lr_s_pack, "packsize": lr_s_packsize, "unpack": lr_s_unpack}, lr_stubs of ["string.", "dump"], {}]
+lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_ny of (lr_s_format), "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_ny of (lr_s_gsub), "pack": lr_s_pack, "packsize": lr_s_packsize, "unpack": lr_s_unpack}, lr_stubs of ["string.", "dump"], {}]
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
-lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort, "move": lr_t_move}, {}, {}]
+lr_tablib is lr_lib of [{"insert": lr_ny of (lr_t_insert), "remove": lr_ny of (lr_t_remove), "concat": lr_ny of (lr_t_concat), "pack": lr_t_pack, "unpack": lr_ny of (lr_t_unpack), "sort": lr_ny of (lr_t_sort), "move": lr_ny of (lr_t_move)}, {}, {}]
 lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod, "random": lr_m_random, "randomseed": lr_m_randomseed, "sin": lr_m_sin, "cos": lr_m_cos, "tan": lr_m_tan, "asin": lr_m_asin, "acos": lr_m_acos, "atan": lr_m_atan, "exp": lr_m_exp, "log": lr_m_log, "deg": lr_m_deg, "rad": lr_m_rad, "modf": lr_m_modf, "ult": lr_m_ult}, {}, {}]
 # math.huge is inf in Lua; the direct translation is EigenScript's own
 # overflow, which saturates at 1e308 (gaps/no-nonfinite.eigs)
@@ -2077,6 +2201,8 @@ lr_io_mt is lr_newtable of null
 lr_rawset of [lr_io_mt, "__index", lr_io_methods, 0]
 lr_rawset of [lr_io_mt, "__name", "FILE*", 0]
 lr_rawset of [lr_io_mt, "__tostring", lr_io_f_tostring, 0]
+lr_rawset of [lr_io_mt, "__gc", lr_io_f_gc, 0]
+lr_rawset of [lr_io_mt, "__close", lr_io_f_gc, 0]
 lr_io_stdout is lr_io_mkfile of ("stdout")
 lr_io_stderr is lr_io_mkfile of ("stderr")
 lr_io_stdin is lr_io_mkfile of ("stdin")
@@ -2091,19 +2217,19 @@ lr_colib is lr_lib of [{"close": lr_co_close, "create": lr_co_create, "isyieldab
 lr_utf8lib is lr_lib of [{"char": lr_utf8_char, "codepoint": lr_utf8_codepoint, "codes": lr_utf8_codes, "len": lr_utf8_len, "offset": lr_utf8_offset}, {}, {}]
 # UTF8PATT holds a NUL byte; the direct translation ends it there
 lr_rawset of [lr_utf8lib, "charpattern", str_from_bytes of ([91, 0, 45, 127, 194, 45, 253, 93, 91, 128, 45, 191, 93, 42]), 0]
-lr_dbglib is lr_lib of [{"getupvalue": lr_d_getupvalue, "setupvalue": lr_d_setupvalue, "upvalueid": lr_d_upvalueid}, lr_stubs of ["debug.", "debug gethook getinfo getlocal getmetatable getregistry getuservalue sethook setlocal setmetatable setuservalue traceback upvaluejoin setcstacklimit"], {}]
+lr_dbglib is lr_lib of [{"getupvalue": lr_d_getupvalue, "setupvalue": lr_d_setupvalue, "upvalueid": lr_d_upvalueid, "getinfo": lr_d_getinfo, "traceback": lr_d_traceback, "getmetatable": lr_d_getmetatable, "setmetatable": lr_d_setmetatable}, lr_stubs of ["debug.", "debug gethook getlocal getregistry getuservalue sethook setlocal setuservalue upvaluejoin setcstacklimit"], {}]
 lr_pkglib is lr_lib of [{"searchpath": lr_p_searchpath}, lr_stubs of ["package.", "loadlib"], {"searchers": "package.searchers"}]
 lr_rawset of [lr_pkglib, "path", "/usr/local/share/lua/5.4/?.lua;/usr/local/share/lua/5.4/?/init.lua;/usr/local/lib/lua/5.4/?.lua;/usr/local/lib/lua/5.4/?/init.lua;./?.lua;./?/init.lua", 0]
 lr_rawset of [lr_pkglib, "cpath", "/usr/local/lib/lua/5.4/?.so;/usr/local/lib/lua/5.4/loadall.so;./?.so", 0]
 lr_rawset of [lr_pkglib, "config", "/\n;\n?\n!\n-\n", 0]
 lr_rawset of [lr_pkglib, "preload", lr_newtable of null, 0]
-lr_basefns is {"print": lr_b_print, "type": lr_b_type, "tostring": lr_b_tostring, "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
+lr_basefns is {"print": lr_ny of (lr_b_print), "type": lr_b_type, "tostring": lr_ny of (lr_b_tostring), "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
 for k in keys of lr_basefns:
     lr_rawset of [lr_G, k, lr_basefns[k], 0]
-lr_rawset of [lr_G, "load", lr_b_load, 0]
+lr_rawset of [lr_G, "load", lr_ny of (lr_b_load), 0]
 lr_rawset of [lr_G, "loadfile", lr_b_loadfile, 0]
 lr_rawset of [lr_G, "dofile", lr_b_dofile, 0]
-lr_rawset of [lr_G, "require", lr_b_require, 0]
+lr_rawset of [lr_G, "require", lr_ny of (lr_b_require), 0]
 lr_rawset of [lr_G, "warn", lr_b_warn, 0]
 lr_rawset of [lr_G, "_G", lr_G, 0]
 lr_rawset of [lr_G, "_VERSION", "Lua 5.4", 0]

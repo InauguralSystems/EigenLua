@@ -20,7 +20,7 @@ lr_co_nid is {"n": 0}
 
 define lr_co_new(f, main) as:
     lr_co_nid.n is lr_co_nid.n + 1
-    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "main": main, "err": null}]
+    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "main": main, "err": null, "nny": 0}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]
@@ -56,8 +56,8 @@ define lr_co_resume(co, args) as:
         return [false, "cannot resume dead coroutine"]
     if r.status != "suspended":
         return [false, "cannot resume non-suspended coroutine"]
-    local prev is lr_co_cur
-    local pr is prev[0]
+    local prv is lr_co_cur
+    local pr is prv[0]
     # lua_resume refuses past LUAI_MAXCCALLS (200) nested C calls; a resume
     # chain is the nesting that reaches it here (and it keeps the live tasks
     # under EigenScript's 255)
@@ -79,7 +79,7 @@ define lr_co_resume(co, args) as:
     else:
         task_send of [r.tid, 1]
     task_recv of null
-    lr_co_cur is prev
+    lr_co_cur is prv
     lr_stk is pr.stk
     pr.status is "running"
     return r.result
@@ -105,6 +105,8 @@ define lr_co_yield(A) as:
     local r is co[0]
     if r.main:
         lr_throw of ((lr_where of (1)) + "attempt to yield from outside a coroutine")
+    if r.nny > 0:
+        lr_throw of ((lr_where of (1)) + "attempt to yield across a C-call boundary")
     r.result is concat of [[true], A]
     r.status is "suspended"
     r.stk is lr_stk
@@ -162,3 +164,16 @@ define lr_co_close(A) as:
             return e
         return [true]
     lr_throw of ((lr_where of (1)) + "cannot close a " + r.status + " coroutine")
+
+# A library function that calls back into Lua through lua_call (not
+# lua_callk) makes its callees non-yieldable: they run with the current
+# coroutine's nny raised, and a yield there is an error. pcall restores the
+# count when an error unwinds such a call.
+define lr_ny(f) as:
+    define lr_ny_call(A) as:
+        local r is lr_co_cur[0]
+        r.nny is r.nny + 1
+        local res is f of (A)
+        r.nny is r.nny - 1
+        return res
+    return lr_ny_call

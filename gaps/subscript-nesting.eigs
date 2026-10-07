@@ -1,0 +1,27 @@
+# EigenScript gap: each subscript inside one expression counts as a level of
+# expression nesting that is never given back, so a flat list literal with a
+# few hundred subscripted elements is refused as "expression nesting too
+# deep" although nothing in it nests (300 parenthesized names are fine).
+# Not a #1286 row; a parser defect.
+# EigenLua writes upvalues as cell subscripts (c5[0]), so a Lua expression
+# with about 250 upvalue references in one call or table constructor does
+# not compile; loaded chunks reach their globals without a subscript.
+# Lua:  a call or constructor with 300 upvalue operands compiles (the limit
+#       Lua checks is 255 registers for arguments, 2^25 table items).
+# Expected: the 300-element list below evaluates.
+# Actual 686d3b7d: 300, then "eval: parse error in code string" (stderr:
+#   "Parse error line 1: expression nesting too deep")
+# Rows: none graded (found through errors.lua's register-limit test).
+define attempt(src) as:
+    try:
+        print of (eval of src)
+    catch e:
+        print of e.message
+E is [1]
+subs is []
+parens is []
+for i in range of 300:
+    append of [subs, "E[0]"]
+    append of [parens, "(E)"]
+attempt of ("len of [" + (join of [parens, ", "]) + "]")
+attempt of ("len of [" + (join of [subs, ", "]) + "]")
