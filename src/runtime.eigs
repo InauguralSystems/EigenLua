@@ -403,6 +403,8 @@ define lr_tostr(v) as:
         local nm is lr_metafield of [v, "__name"]
         if type of nm == "str":
             return nm + ": 0x" + (hex of [v.id, 8])
+        if v.ud == true:
+            return "userdata: 0x" + (hex of [v.id, 8])
         return "table: 0x" + (hex of [v.id, 8])
     if t == "fn" or t == "builtin":
         return "function: 0x" + (hex of [lr_fnid of (v), 8])
@@ -1879,6 +1881,60 @@ define lr_tbc_unwind(tb, e, site) as:
             lr_tbc_close of [tb, lr_errobj of (e), site]
     throw of (e)
 
+# ------------------------------------------------------------ debug upvalues
+# Only in chunks that name the debug upvalue functions (parse.eigs dbgup):
+# every closure is registered with its upvalue cells and their names, in
+# Lua's upvalue order (first reference), and each cell carries an id.
+
+lr_upreg is {"f": [], "cells": [], "names": []}
+
+define lr_cellid as:
+    lr_st.nid is lr_st.nid + 1
+    return lr_st.nid
+
+define lr_regfn(f, cells, names) as:
+    append of [lr_upreg.f, f]
+    append of [lr_upreg.cells, cells]
+    append of [lr_upreg.names, names]
+    return f
+
+# [cells, names] of a registered Lua function, or null.
+define lr_upvals(f) as:
+    if type of f != "fn":
+        return null
+    local i is list_index_of of [lr_upreg.f, f]
+    if i < 0:
+        return null
+    return [lr_upreg.cells[i], lr_upreg.names[i]]
+
+define lr_d_getupvalue(A) as:
+    local f is lr_arg of [A, 0]
+    local n is lr_checkint of [A, 1, "getupvalue"]
+    local u is lr_upvals of (f)
+    if u == null or n < 1 or n > len of u[0]:
+        return []
+    return [u[1][n - 1], u[0][n - 1][0]]
+
+define lr_d_setupvalue(A) as:
+    local f is lr_arg of [A, 0]
+    local n is lr_checkint of [A, 1, "setupvalue"]
+    local u is lr_upvals of (f)
+    if u == null or n < 1 or n > len of u[0]:
+        return []
+    local cell is u[0][n - 1]
+    cell[0] is lr_arg of [A, 2]
+    return [u[1][n - 1]]
+
+# A light userdata naming the cell: equal ids for a shared upvalue.
+define lr_d_upvalueid(A) as:
+    local f is lr_arg of [A, 0]
+    local n is lr_checkint of [A, 1, "upvalueid"]
+    local u is lr_upvals of (f)
+    if u == null or n < 1 or n > len of u[0]:
+        return [null]
+    local cell is u[0][n - 1]
+    return [{"id": cell[1], "a": [], "h": {}, "o": {}, "mt": null, "ud": true}]
+
 # ------------------------------------------------------------ globals
 
 define lr_lib(fns, stubs, trap) as:
@@ -1932,7 +1988,7 @@ lr_colib is lr_lib of [{"close": lr_co_close, "create": lr_co_create, "isyieldab
 lr_utf8lib is lr_lib of [{"char": lr_utf8_char, "codepoint": lr_utf8_codepoint, "codes": lr_utf8_codes, "len": lr_utf8_len, "offset": lr_utf8_offset}, {}, {}]
 # UTF8PATT holds a NUL byte; the direct translation ends it there
 lr_rawset of [lr_utf8lib, "charpattern", str_from_bytes of ([91, 0, 45, 127, 194, 45, 253, 93, 91, 128, 45, 191, 93, 42]), 0]
-lr_dbglib is lr_lib of [{}, lr_stubs of ["debug.", "debug gethook getinfo getlocal getmetatable getregistry getupvalue getuservalue sethook setlocal setmetatable setupvalue setuservalue traceback upvalueid upvaluejoin setcstacklimit"], {}]
+lr_dbglib is lr_lib of [{"getupvalue": lr_d_getupvalue, "setupvalue": lr_d_setupvalue, "upvalueid": lr_d_upvalueid}, lr_stubs of ["debug.", "debug gethook getinfo getlocal getmetatable getregistry getuservalue sethook setlocal setmetatable setuservalue traceback upvaluejoin setcstacklimit"], {}]
 lr_pkglib is lr_lib of [{"searchpath": lr_p_searchpath}, lr_stubs of ["package.", "loadlib"], {"searchers": "package.searchers"}]
 lr_rawset of [lr_pkglib, "path", "/usr/local/share/lua/5.4/?.lua;/usr/local/share/lua/5.4/?/init.lua;/usr/local/lib/lua/5.4/?.lua;/usr/local/lib/lua/5.4/?/init.lua;./?.lua;./?/init.lua", 0]
 lr_rawset of [lr_pkglib, "cpath", "/usr/local/lib/lua/5.4/?.so;/usr/local/lib/lua/5.4/loadall.so;./?.so", 0]

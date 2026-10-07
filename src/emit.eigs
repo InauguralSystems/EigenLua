@@ -130,10 +130,13 @@ define rs_stat(R, s) as:
         rs_expr of [R, s.cond]
         rs_pop of (R)
     elif k == "If":
+        # in source order (cond, block, cond, block): upvalues are numbered
+        # by first reference
+        local ci is 0
         for c in s.conds:
             rs_expr of [R, c]
-        for b in s.blocks:
-            rs_block of [R, b]
+            rs_block of [R, s.blocks[ci]]
+            ci is ci + 1
         if s["else"] != null:
             rs_block of [R, s["else"]]
     elif k == "NumFor":
@@ -247,6 +250,13 @@ define em_envdesc(E, v) as:
     if v.implicit == 1 or v.fn.id != E.fn.id:
         return "upvalue '_ENV'"
     return "local '_ENV'"
+
+# A captured variable's cell. When the chunk uses the debug upvalue
+# functions, a cell also carries an id, so upvalueid can tell cells apart.
+define em_cell(E, code) as:
+    if E.G.dbgup:
+        return "[" + code + ", lr_cellid of null]"
+    return "[" + code + "]"
 
 define em_var_ref(v) as:
     if v.cap:
@@ -581,9 +591,15 @@ define em_table(E, e) as:
 define em_closure(E, fn) as:
     em_function of [E.G, fn]
     local cells is []
+    local names is []
     for v in fn.free:
         append of [cells, "c" + (str of v.id)]
-    return "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
+        append of [names, em_strlit of (v.name)]
+    local cl is "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
+    if E.G.dbgup:
+        # registered with its cells and their names for debug.getupvalue
+        return "(lr_regfn of [" + cl + ", [" + (join of [cells, ", "]) + "], [" + (join of [names, ", "]) + "]])"
+    return cl
 
 # Emit the factory for fn into G.funcs.
 define em_function(G, fn) as:
@@ -602,7 +618,7 @@ define em_function(G, fn) as:
     for v in fn.pvars:
         local val is "lr_at of [A, " + (str of i) + "]"
         if v.cap:
-            em_line of [E, "local c" + (str of v.id) + " is [" + val + "]"]
+            em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, val])]
         else:
             em_line of [E, "local v" + (str of v.id) + " is " + val]
         i is i + 1
@@ -671,7 +687,7 @@ define em_close_tbc(E, depth) as:
 # Declare a local v with value code.
 define em_declare(E, v, code) as:
     if v.cap:
-        em_line of [E, "local c" + (str of v.id) + " is [" + code + "]"]
+        em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, code])]
     else:
         em_line of [E, "local v" + (str of v.id) + " is " + code]
 
@@ -756,7 +772,7 @@ define em_stat(E, s) as:
     elif k == "LocalFunction":
         local v is s.var
         if v.cap:
-            em_line of [E, "local c" + (str of v.id) + " is [null]"]
+            em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, "null"])]
             local fc is em_closure of [E, s.func]
             em_line of [E, "c" + (str of v.id) + "[0] is " + fc]
         else:
@@ -956,7 +972,7 @@ define em_dirname(p) as:
     return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -980,7 +996,7 @@ define emit_program(ast, file, runtime) as:
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
