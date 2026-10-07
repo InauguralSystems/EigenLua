@@ -72,8 +72,10 @@ define lr_throw(v) as:
 
 define lr_rterr(site, msg) as:
     local line is lr_site_line of (site)
+    # ldebug.c luaG_runerror: a position only when the running function is
+    # Lua; site 0 is an operation done by a library (C) function
     if line < 0:
-        throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
+        throw of ({"LUAERR": 1, "v": msg})
     # "site": raised by Lua code there (a message handler runs at that line)
     throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg, "site": site})
 
@@ -585,7 +587,7 @@ define lr_next(t, k) as:
         if k != null:
             j is (list_index_of of [hk, k]) + 1
             if j == 0:
-                lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+                lr_throw of ("invalid key to 'next'")
         if j < len of hk:
             return [hk[j], t.h[hk[j]]]
         k is null
@@ -594,7 +596,7 @@ define lr_next(t, k) as:
     if k != null:
         j2 is (list_index_of of [ok, lr_okey of (k)]) + 1
         if j2 == 0:
-            lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+            lr_throw of ("invalid key to 'next'")
     if j2 < len of ok:
         local p is t.o[ok[j2]]
         return [p[0], p[1]]
