@@ -411,8 +411,10 @@ define lr_s_gmatch(A) as:
     local p is lr_checkstr of [A, 1, "gmatch"]
     local ls is len of s
     local init is lr_posrelat of [lr_optint of [A, 2, "gmatch", 1], ls]
-    if init > ls + 1:
-        init is ls + 1
+    # lstrlib.c gmatch: an init past the end starts after the end (ls + 1,
+    # 0-based), where not even an empty match is left
+    if init - 1 > ls:
+        init is ls + 2
     local ms is lr_pm_new of [s, p]
     local st is {"src": init - 1, "last": -1}
     define gmatch_aux(B) as:
