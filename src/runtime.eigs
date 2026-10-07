@@ -2478,16 +2478,21 @@ define lr_d_upvalueid(A) as:
 # function. Only 'currentline', 'short_src', 'source' and 'what' are filled.
 
 define lr_d_frame(level) as:
-    local n is len of lr_stk
+    return lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
+
+# Level `level` of a thread whose call-site stack is stk (main: the main
+# thread, whose bottom level is the C call of the main chunk).
+define lr_d_framet(level, stk, main) as:
+    local n is len of stk
     if level == 0:
         return {"c": true}
-    if level < 0 or level > n or (level == n and not lr_co_cur[0].main):
+    if level < 0 or level > n or (level == n and not main):
         return null
-    local site is lr_stk[n - level]
+    local site is stk[n - level]
     if site == 0:
         return {"c": true}
-    local main is lr_co_cur[0].main and n - level == 1
-    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "main": main}
+    local ismain is main and n - level == 1
+    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "main": ismain}
 
 define lr_d_getinfo(A) as:
     local a0 is lr_arg of [A, 0]
@@ -2548,17 +2553,17 @@ define lr_d_getinfo(A) as:
 # function is named by its global name, else "main chunk", else
 # "function <src:line>" for a Lua function, else "?". Names from the calling
 # code (namewhat) are out of scope (GAPS.md).
-define lr_tb_last() as:
-    local n is len of lr_stk
-    if lr_co_cur[0].main:
+define lr_tb_last(stk, main) as:
+    local n is len of stk
+    if main:
         return n
     return n - 1
 
-define lr_tb_fname(level, fr) as:
-    local n is len of lr_stk
+define lr_tb_fname(level, fr, stk, fstk) as:
+    local n is len of stk
     local f is null
     if n - 1 - level >= 0:
-        f is lr_fstk[n - 1 - level]
+        f is fstk[n - 1 - level]
     local g is lr_globalfuncname of (f)
     if g != null:
         return "function '" + g + "'"
@@ -2572,25 +2577,46 @@ define lr_tb_fname(level, fr) as:
     return "function <" + (lr_site_chunk of (u[2])) + ":" + (str of (lr_site_line of (u[2]))) + ">"
 
 define lr_d_traceback(A) as:
+    # ldblib.c db_traceback: the levels of thread L1 (the running one by
+    # default); the default level is 1 for the running thread, else 0
     local first is 0
+    local co is lr_co_cur
     if lr_isthread of (lr_arg of [A, 0]):
         first is 1
+        co is A[0]
     local msg is lr_arg of [A, first]
     if msg != null and type of msg != "str" and type of msg != "num":
         return [msg]
-    local level is lr_optint of [A, first + 1, "traceback", 1]
+    local stk is lr_stk
+    local fstk is lr_fstk
+    local dl is 1
+    local sh is 0
+    if co[0].id != lr_co_cur[0].id:
+        stk is co[0].stk
+        fstk is co[0].fstk
+        dl is 0
+        # a coroutine that died raising in a Lua function: that function is
+        # its level 0, at the line it raised at
+        local n is len of stk
+        if co[0].status == "dead" and co[0].errsite != null and n > 0 and lr_upvals of (fstk[n - 1]) != null:
+            stk is concat of [stk, [co[0].errsite]]
+            fstk is concat of [fstk, [null]]
+            sh is 1
+    local main is co[0].main
+    local level is lr_optint of [A, first + 1, "traceback", dl]
+    level is level + sh
     local parts is []
     if msg != null:
         append of [parts, lr_tostr of (msg)]
         append of [parts, "\n"]
     append of [parts, "stack traceback:"]
-    local last is lr_tb_last of null
+    local last is lr_tb_last of [stk, main]
     local limit2show is -1
     if last - level > 21:
         limit2show is 10
     local k is level
     loop while k >= 0 and k <= last:
-        local fr is lr_d_frame of (k)
+        local fr is lr_d_framet of [k, stk, main]
         if fr == null:
             break
         k is k + 1
@@ -2603,7 +2629,7 @@ define lr_d_traceback(A) as:
                 append of [parts, "\n\t[C]: in "]
             else:
                 append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in "]
-            append of [parts, lr_tb_fname of [k - 1, fr]]
+            append of [parts, lr_tb_fname of [k - 1, fr, stk, fstk]]
         limit2show is limit2show - 1
     return [join of [parts, ""]]
 

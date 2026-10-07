@@ -53,6 +53,9 @@ define lr_co_runner(co) as:
                 res is [true]
             else:
                 res is [false, lr_errobj of (e)]
+                # the line a Lua function raised at stays its current line
+                if type of e == "dict" and type of e.site == "num":
+                    r.errsite is e.site
                 r.err is res
         r.status is "dead"
         r.result is res
