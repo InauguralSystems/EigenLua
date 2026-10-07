@@ -182,7 +182,9 @@ define lr_main(f, chunk, sites) as:
     catch e:
         if type of e == "dict" and e.EXIT == 1:
             lr_exit of (e.code)
-        local msg is lr_msgh of (lr_errobj of (e))
+        local msg is lr_errobj of (e)
+        if not (type of e == "dict" and e.hd == true):
+            msg is lr_msgh of (msg)
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
     lr_exit of 0
@@ -1500,7 +1502,9 @@ define lr_b_xpcall(A) as:
         local hs is 0
         if type of e == "dict" and type of e.site == "num":
             hs is e.site
-        local hv is lr_xp_handle of [h, v, 0, hs]
+        local hv is v
+        if not (type of e == "dict" and e.hd == true):
+            hv is lr_xp_handle of [h, v, 0, hs]
         list_truncate of [ef, nef]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
@@ -2229,7 +2233,9 @@ define lr_compile(src, source, env) as:
             local hs is 0
             if type of e.site == "num":
                 hs is e.site
-            local ev is lr_errfunc of [e.v, hs]
+            local ev is e.v
+            if e.hd != true:
+                ev is lr_errfunc of [e.v, hs]
             local rr is lr_co_cur[0]
             rr.nny is nny
             list_truncate of [lr_stk, depth]
@@ -2298,7 +2304,9 @@ define lr_b_load(A) as:
             local hs is 0
             if type of e.site == "num":
                 hs is e.site
-            local ev is lr_errfunc of [e.v, hs]
+            local ev is e.v
+            if e.hd != true:
+                ev is lr_errfunc of [e.v, hs]
             local rr is lr_co_cur[0]
             rr.nny is nny
             list_truncate of [lr_stk, depth]
@@ -2508,8 +2516,30 @@ define lr_tbc_unwind(tb, e, site) as:
         elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
         else:
+            e is lr_errhd of (e)
             lr_tbc_close of [tb, lr_errobj of (e), 0]
     throw of (e)
+
+# An error reaching its first to-be-closed variable passes through the
+# message handler in force there, at the raise point (ldebug.c
+# luaG_errormsg calls L->errfunc before luaD_throw; the closes run later,
+# from luaD_pcall, with the handler's result). The error is marked "hd"
+# so the protected call that catches it does not call the handler again.
+define lr_errhd(e) as:
+    if type of e == "dict" and e.hd == true:
+        return e
+    local ef is lr_co_cur[0].ef
+    if len of ef == 0 or ef[len of ef - 1] == null:
+        return e
+    local hs is 0
+    if type of e == "dict" and type of e.site == "num":
+        hs is e.site
+    local hv is lr_errfunc of [lr_errobj of (e), hs]
+    if type of e == "dict" and e.LUAERR == 1:
+        e.v is hv
+        e.hd is true
+        return e
+    return {"LUAERR": 1, "v": hv, "hd": true, "site": hs}
 
 # ------------------------------------------------------------ debug upvalues
 # A Lua function answers a call with null (instead of its argument list)
