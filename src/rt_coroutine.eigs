@@ -1,0 +1,144 @@
+# EigenLua runtime: coroutines (lcorolib.c) on EigenScript cooperative tasks.
+#
+# A Lua thread is an EigenScript list [rec]: lists are no other Lua value,
+# so type() can say "thread". rec holds the status, the body function, the
+# task id once started, and the values passed across a switch. A coroutine
+# runs as its own task, so its EigenScript call stack is kept while it is
+# suspended. A switch is a hand-off: resume stores the arguments, wakes the
+# coroutine's task (or spawns it) and blocks in task_recv; yield or the end
+# of the body stores the results and wakes the resumer. Only a wake-up token
+# goes through the task mailbox (task messages are deep copies); the values
+# themselves travel in rec, which both tasks share through closures. Exactly
+# one task runs at a time, so the schedule is the program's own order.
+# Each coroutine has its own call-site stack (lr_stk), swapped on a switch.
+
+# lr_stk is runtime.eigs's call-site stack; it is declared here as well
+# because an assignment inside a function binds a new local unless the
+# global already exists when the function is compiled.
+lr_stk is []
+lr_co_nid is {"n": 0}
+
+define lr_co_new(f, main) as:
+    lr_co_nid.n is lr_co_nid.n + 1
+    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "main": main, "err": null}]
+
+lr_co_main is lr_co_new of [null, true]
+lr_co_mainrec is lr_co_main[0]
+lr_co_mainrec.status is "running"
+lr_co_cur is lr_co_main
+
+define lr_isthread(v) as:
+    return type of v == "list"
+
+define lr_co_runner(co) as:
+    define lr_co_run(x) as:
+        local r is co[0]
+        local res is null
+        try:
+            local vals is lr_call of [r.f, r.transfer, 0]
+            res is concat of [[true], vals]
+        catch e:
+            res is [false, lr_errobj of (e)]
+            r.err is res
+        r.status is "dead"
+        r.result is res
+        task_send of [r.resumer, 1]
+        return null
+    return lr_co_run
+
+# Resume co with args: [true, values...] or [false, error value].
+define lr_co_resume(co, args) as:
+    local r is co[0]
+    if r.status == "dead":
+        return [false, "cannot resume dead coroutine"]
+    if r.status != "suspended":
+        return [false, "cannot resume non-suspended coroutine"]
+    local prev is lr_co_cur
+    local pr is prev[0]
+    pr.status is "normal"
+    pr.stk is lr_stk
+    r.status is "running"
+    r.transfer is args
+    r.resumer is task_self of null
+    lr_co_cur is co
+    lr_stk is r.stk
+    if r.tid == null:
+        r.tid is task_spawn of (lr_co_runner of (co))
+        task_detach of r.tid
+    else:
+        task_send of [r.tid, 1]
+    task_recv of null
+    lr_co_cur is prev
+    lr_stk is pr.stk
+    pr.status is "running"
+    return r.result
+
+define lr_co_check(A, fname) as:
+    local co is lr_arg of [A, 0]
+    if not (lr_isthread of (co)):
+        lr_argerr of [1, fname, "thread expected, got " + (lr_typearg of [A, 0])]
+    return co
+
+define lr_co_create(A) as:
+    local f is lr_arg of [A, 0]
+    if type of f != "fn" and type of f != "builtin":
+        lr_argerr of [1, "create", "function expected, got " + (lr_typearg of [A, 0])]
+    return [lr_co_new of [f, false]]
+
+define lr_co_b_resume(A) as:
+    local co is lr_co_check of [A, "resume"]
+    return lr_co_resume of [co, list_slice of [A, 1, len of A]]
+
+define lr_co_yield(A) as:
+    local co is lr_co_cur
+    local r is co[0]
+    if r.main:
+        lr_throw of ((lr_where of (1)) + "attempt to yield from outside a coroutine")
+    r.result is concat of [[true], A]
+    r.status is "suspended"
+    r.stk is lr_stk
+    task_send of [r.resumer, 1]
+    task_recv of null
+    return r.transfer
+
+define lr_co_status(A) as:
+    local co is lr_co_check of [A, "status"]
+    return [co[0].status]
+
+define lr_co_running(A) as:
+    return [lr_co_cur, lr_co_cur[0].main]
+
+define lr_co_isyieldable(A) as:
+    local co is lr_co_cur
+    if len of A > 0:
+        co is lr_co_check of [A, "isyieldable"]
+    return [not co[0].main]
+
+define lr_co_wrap(A) as:
+    local f is lr_arg of [A, 0]
+    if type of f != "fn" and type of f != "builtin":
+        lr_argerr of [1, "wrap", "function expected, got " + (lr_typearg of [A, 0])]
+    local co is lr_co_new of [f, false]
+    define lr_co_wrapped(B) as:
+        local res is lr_co_resume of [co, B]
+        if res[0] == false:
+            local ev is res[1]
+            if type of ev == "str":
+                ev is (lr_where of (1)) + ev
+            lr_throw of (ev)
+        return list_slice of [res, 1, len of res]
+    return [lr_co_wrapped]
+
+define lr_co_close(A) as:
+    local co is lr_co_check of [A, "close"]
+    local r is co[0]
+    if r.status == "suspended" or r.status == "dead":
+        if r.status == "suspended" and r.tid != null:
+            task_kill of r.tid
+        r.status is "dead"
+        if r.err != null:
+            local e is r.err
+            r.err is null
+            return e
+        return [true]
+    lr_throw of ((lr_where of (1)) + "cannot close a " + r.status + " coroutine")

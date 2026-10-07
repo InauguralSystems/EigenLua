@@ -158,6 +158,8 @@ define lr_type(v) as:
         return "boolean"
     if t == "fn" or t == "builtin":
         return "function"
+    if t == "list":
+        return "thread"
     return "userdata"
 
 define lr_t(v) as:
@@ -393,6 +395,8 @@ define lr_tostr(v) as:
         return "table: 0x" + (hex of [v.id, 8])
     if t == "fn" or t == "builtin":
         return "function: 0x" + (hex of [lr_fnid of (v), 8])
+    if t == "list":
+        return "thread: 0x" + (hex of [v[0].id, 8])
     return "userdata"
 
 define lr_fnid(f) as:
@@ -422,6 +426,8 @@ define lr_okey(k) as:
         return "n" + (str of k)
     if t == "dict":
         return "t" + (str of k.id)
+    if t == "list":
+        return "c" + (str of k[0].id)
     return "f" + (str of (lr_fnid of (k)))
 
 define lr_rawget(t, k) as:
@@ -869,6 +875,8 @@ define lr_eq(a, b, site) as:
         return lr_t of (lr_call1 of [h, [a, b], site])
     if ta == "fn" or ta == "builtin":
         return lr_fnid of (a) == lr_fnid of (b)
+    if ta == "list":
+        return a[0].id == b[0].id
     return a == b
 
 define lr_ne(a, b, site) as:
@@ -1161,6 +1169,8 @@ define lr_b_rawequal(A) as:
         return [a.id == b.id]
     if type of a == "fn" or type of a == "builtin":
         return [lr_fnid of (a) == lr_fnid of (b)]
+    if type of a == "list":
+        return [a[0].id == b[0].id]
     return [a == b]
 
 define lr_b_rawlen(A) as:
@@ -1800,7 +1810,7 @@ lr_rawset of [lr_mathlib, "maxinteger", 9223372036854775807, 0]
 lr_rawset of [lr_mathlib, "mininteger", -9223372036854775808, 0]
 lr_iolib is lr_lib of [{"write": lr_io_write}, lr_stubs of ["io.", "close flush input lines open output popen read tmpfile type"], {"stdin": "io.stdin", "stdout": "io.stdout", "stderr": "io.stderr"}]
 lr_oslib is lr_lib of [{"exit": lr_os_exit}, lr_stubs of ["os.", "clock date difftime execute getenv remove rename setlocale time tmpname"], {}]
-lr_colib is lr_lib of [{}, lr_stubs of ["coroutine.", "close create isyieldable resume running status wrap yield"], {}]
+lr_colib is lr_lib of [{"close": lr_co_close, "create": lr_co_create, "isyieldable": lr_co_isyieldable, "resume": lr_co_b_resume, "running": lr_co_running, "status": lr_co_status, "wrap": lr_co_wrap, "yield": lr_co_yield}, {}, {}]
 lr_utf8lib is lr_lib of [{"char": lr_utf8_char, "codepoint": lr_utf8_codepoint, "codes": lr_utf8_codes, "len": lr_utf8_len, "offset": lr_utf8_offset}, {}, {}]
 # UTF8PATT holds a NUL byte; the direct translation ends it there
 lr_rawset of [lr_utf8lib, "charpattern", str_from_bytes of ([91, 0, 45, 127, 194, 45, 253, 93, 91, 128, 45, 191, 93, 42]), 0]
