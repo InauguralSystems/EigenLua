@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
@@ -99,7 +99,10 @@ define lr_argerr(n, fname, msg) as:
     if len of lr_stk > 0:
         site is lr_stk[len of lr_stk - 1]
     local sd is lr_st.sites[site]
-    if site != 0 and len of sd[2] > 8 and sd[2][0:8] == "method '":
+    local mk is lr_st.mmk
+    if site != 0 and mk != null and mk[0] == len of lr_stk and mk[1] == site and lr_fnid of (lr_fstk[len of lr_fstk - 1]) == lr_fnid of (mk[2]):
+        nm is mk[3]
+    elif site != 0 and len of sd[2] > 8 and sd[2][0:8] == "method '":
         nm is sd[2][8:len of sd[2] - 1]
         n is n - 1
         if n == 0:
@@ -882,7 +885,15 @@ define lr_callmm(h, ev, args, site) as:
         lr_rterr of [site, "attempt to call a " + (lr_tname of (h)) + " value (metamethod '" + ev + "')"]
     if site == 0:
         return lr_call of [h, args, 0]
-    return lr_ccall of [h, args, site]
+    # a C function called here is named after the event (ldebug.c
+    # funcnamefromcode: "metamethod"), which luaL_argerror reports; lr_st.mmk
+    # marks the frame, and the frame's depth, site and function must all
+    # match for the mark to apply
+    local pm is lr_st.mmk
+    lr_st.mmk is [len of lr_stk + 1, site, h, ev]
+    local r is lr_ccall of [h, args, site]
+    lr_st.mmk is pm
+    return r
 
 define lr_callmm1(h, ev, args, site) as:
     local r is lr_callmm of [h, ev, args, site]
@@ -1296,6 +1307,13 @@ define lr_checktab(A, i, fname, what) as:
 define lr_checkany(A, i, fname) as:
     if i >= len of A:
         lr_argerr of [i + 1, fname, "value expected"]
+
+# luaL_checktype(L, i, LUA_TFUNCTION)
+define lr_checkfn(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    if type of v != "fn" and type of v != "builtin":
+        lr_argerr of [i + 1, fname, "function expected, got " + (lr_typearg of [A, i])]
+    return v
 
 define lr_checktable(A, i, fname) as:
     local v is lr_arg of [A, i]
@@ -2566,16 +2584,19 @@ define lr_upvals(f) as:
     return f of (null)
 
 define lr_d_getupvalue(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c: the index is checked before the function
     local n is lr_checkint of [A, 1, "getupvalue"]
+    local f is lr_checkfn of [A, 0, "getupvalue"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return []
     return [u[1][n - 1], u[0][n - 1][0]]
 
 define lr_d_setupvalue(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c db_setupvalue: luaL_checkany(L, 3), then auxupvalue's checks
+    lr_checkany of [A, 2, "setupvalue"]
     local n is lr_checkint of [A, 1, "setupvalue"]
+    local f is lr_checkfn of [A, 0, "setupvalue"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return []
@@ -2585,8 +2606,9 @@ define lr_d_setupvalue(A) as:
 
 # A light userdata naming the cell: equal ids for a shared upvalue.
 define lr_d_upvalueid(A) as:
-    local f is lr_arg of [A, 0]
+    # ldblib.c: the index is checked before the function
     local n is lr_checkint of [A, 1, "upvalueid"]
+    local f is lr_checkfn of [A, 0, "upvalueid"]
     local u is lr_upvals of (f)
     if u == null or n < 1 or n > len of u[0]:
         return [null]
@@ -2618,25 +2640,39 @@ define lr_d_framet(level, stk, main) as:
     local ismain is main and n - level == 1
     return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "source": lr_site_source of (site), "main": ismain}
 
-define lr_d_getinfo(A) as:
+# lua_getinfo's options (ldebug.c auxgetinfo); another letter is an error
+define lr_d_infoopts(opts, first) as:
+    for i in range of (len of opts):
+        if index_of of ["SlutnrLf", opts[i]] < 0:
+            lr_argerr of [first + 2, "getinfo", "invalid option"]
+
+define lr_d_getinfo0(A) as:
     local a0 is lr_arg of [A, 0]
     local first is 0
     if lr_isthread of (a0):
         if a0[0].id != lr_co_cur[0].id:
             lr_unsup of ["debug.getinfo of another coroutine", 0]
         first is 1
+    # ldblib.c db_getinfo: the options string, a leading '>', the level (out
+    # of range: fail), then lua_getinfo's option letters
+    local opts is "flnSrtu"
+    if lr_arg of [A, first + 1] != null:
+        opts is lr_checkstr of [A, first + 1, "getinfo"]
+    if len of opts > 0 and opts[0] == ">":
+        lr_argerr of [first + 2, "getinfo", "invalid option '>'"]
     local fa is lr_arg of [A, first]
     local t is lr_newtable of null
-    if type of fa == "num":
+    if type of fa != "fn" and type of fa != "builtin":
         local fr is lr_d_frame of (lr_checkint of [A, first, "getinfo"])
         if fr == null:
-            return [null]
+            return [null, ""]
+        lr_d_infoopts of [opts, first]
         if fr.c:
             lr_rawset of [t, "currentline", -1, 0]
             lr_rawset of [t, "short_src", "[C]", 0]
             lr_rawset of [t, "source", "=[C]", 0]
             lr_rawset of [t, "what", "C", 0]
-            return [t]
+            return [t, opts]
         lr_rawset of [t, "currentline", fr.line, 0]
         lr_rawset of [t, "short_src", fr.chunk, 0]
         lr_rawset of [t, "source", fr.source, 0]
@@ -2644,9 +2680,8 @@ define lr_d_getinfo(A) as:
             lr_rawset of [t, "what", "main", 0]
         else:
             lr_rawset of [t, "what", "Lua", 0]
-        return [t]
-    if type of fa != "fn" and type of fa != "builtin":
-        lr_argerr of [first + 1, "getinfo", "function or level expected"]
+        return [t, opts]
+    lr_d_infoopts of [opts, first]
     # a function value (ldebug.c funcinfo): a C function, or a Lua function
     # with the chunk and lines of its definition; it is not running, so its
     # currentline is -1
@@ -2658,7 +2693,7 @@ define lr_d_getinfo(A) as:
         lr_rawset of [t, "what", "C", 0]
         lr_rawset of [t, "linedefined", -1, 0]
         lr_rawset of [t, "lastlinedefined", -1, 0]
-        return [t]
+        return [t, opts]
     local ch is lr_site_chunk of (u[2])
     lr_rawset of [t, "short_src", ch, 0]
     lr_rawset of [t, "source", lr_site_source of (u[2]), 0]
@@ -2670,6 +2705,20 @@ define lr_d_getinfo(A) as:
         lr_rawset of [t, "what", "Lua", 0]
         lr_rawset of [t, "linedefined", lr_site_line of (u[2]), 0]
         lr_rawset of [t, "lastlinedefined", u[4], 0]
+    return [t, opts]
+
+# Only the fields the options ask for (ldebug.c auxgetinfo): 'S' the source
+# and definition lines, 'l' currentline.
+define lr_d_getinfo(A) as:
+    local r is lr_d_getinfo0 of (A)
+    local t is r[0]
+    if t == null:
+        return [null]
+    if index_of of [r[1], "S"] < 0:
+        for k in ["short_src", "source", "what", "linedefined", "lastlinedefined"]:
+            lr_rawset of [t, k, null, 0]
+    if index_of of [r[1], "l"] < 0:
+        lr_rawset of [t, "currentline", null, 0]
     return [t]
 
 # debug.traceback (lauxlib.c luaL_traceback): the first LEVELS1 (10) and last

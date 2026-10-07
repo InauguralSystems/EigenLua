@@ -110,7 +110,8 @@ define lr_m_random(A) as:
     else:
         lr_throw of ((lr_where of (1)) + "wrong number of arguments")
     if low > up:
-        lr_argerr of [na, "random", "interval is empty"]
+        # lmathlib.c math_random: luaL_argcheck(L, low <= up, 1, ...)
+        lr_argerr of [1, "random", "interval is empty"]
     # (lua_Unsigned)up - (lua_Unsigned)low, as a 64-bit word
     local ul is lr_u64 of (up)
     local ll is lr_u64 of (low)
