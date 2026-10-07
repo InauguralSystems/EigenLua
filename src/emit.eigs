@@ -17,7 +17,7 @@
 # A construct the emitter does not handle raises ["UNSUP", what, line].
 
 define em_unsup(what, line) as:
-    throw of ["UNSUP", what, line]
+    throw of (["UNSUP", what, line])
 
 # ---------------------------------------------------------------- resolver
 
@@ -111,7 +111,7 @@ define rs_stat(R, s) as:
         for t in s.targets:
             rs_expr of [R, t]
             if t.k == "Name" and t.var != null and t.var.attr != "":
-                throw of ["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"]
+                throw of (["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"])
         for e in s.exprs:
             rs_expr of [R, e]
     elif k == "CallStat":
@@ -168,7 +168,7 @@ define rs_stat(R, s) as:
     elif k == "Label":
         em_unsup of ["label (goto target)", s.line]
     else:
-        throw of ["INTERNAL", "unknown statement " + k]
+        throw of (["INTERNAL", "unknown statement " + k])
 
 define rs_expr(R, e) as:
     local k is e.k
@@ -428,9 +428,9 @@ define em_expr(E, e) as:
     if k == "Nil":
         return "null"
     if k == "True":
-        return "1"
+        return "true"
     if k == "False":
-        return "0"
+        return "false"
     if k == "Num":
         return em_numlit of [E, e.v]
     if k == "Str":
@@ -473,18 +473,18 @@ define em_expr(E, e) as:
         local site is em_site of [E, e.line, em_desc of [E, e.a], em_desc of [E, e.b]]
         local cs is em_operands of [E, [e.a, e.b]]
         return "(" + (em_binop_fn of (e.op)) + " of [" + cs[0] + ", " + cs[1] + ", " + site + "])"
-    throw of ["INTERNAL", "unknown expression " + k]
+    throw of (["INTERNAL", "unknown expression " + k])
 
-# Truth test of e as EigenScript code that is 1 or 0.
+# Truth test of e as EigenScript code that is a bool.
 define em_cond(E, e) as:
     if e.k == "Bin" and (e.op == "==" or e.op == "~=" or e.op == "<" or e.op == "<=" or e.op == ">" or e.op == ">="):
         return em_expr of [E, e]
     if e.k == "Un" and e.op == "not":
         return em_expr of [E, e]
     if e.k == "True":
-        return "1"
+        return "true"
     if e.k == "False" or e.k == "Nil":
-        return "0"
+        return "false"
     return "(lr_t of (" + (em_expr of [E, e]) + "))"
 
 define em_andor(E, e) as:
@@ -634,7 +634,7 @@ define em_adjust(E, exprs, n) as:
 define em_pin(E, codes) as:
     local out is []
     for c in codes:
-        if em_is_tmp of (c) or c == "null" or c == "0" or c == "1":
+        if em_is_tmp of (c) or c == "null" or c == "true" or c == "false":
             append of [out, c]
         else:
             local t is em_tmp of (E)
@@ -650,7 +650,7 @@ define em_assign_to(E, target, code, site_line) as:
             local site is em_site of [E, site_line, "", ""]
             em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
         return null
-    throw of ["INTERNAL", "assign target"]
+    throw of (["INTERNAL", "assign target"])
 
 define em_stat(E, s) as:
     local k is s.k

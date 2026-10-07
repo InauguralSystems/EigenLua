@@ -1,4 +1,29 @@
-# EigenLua front end: divergence ledger (round 1)
+# EigenLua front end: divergence ledger
+
+## Round 2, step 1: re-grade on the bool runtime
+
+Runtime: EigenScript `main` at `686d3b7d14837efb7e6e2b55882190d1dd20a332` (EigenScript#1647, real `bool`; its
+`--version` still prints `0.44.0`). Lua booleans now map to EigenScript bools; comparisons, `not`, `pcall`'s status
+and `rawequal` return bools. Two latent defects surfaced with the change and were fixed: `throw of ([..., false])`
+is refused by the new VM (errors are now thrown as a dict), and function equality is by identity.
+
+`SUMMARY S=0/23 D=21/47 fail=23 diverge=4 hang=0 crash=0 unsupported=22 examined=70 assert=untrusted`
+(round 1: `S=0/23 D=13/47 ... diverge=12 ... unsupported=22`).
+
+The assert-trust probe now matches the reference for its first 14 lines (every boolean line, including `zero`,
+which raised in round 1) and stops at line 39 on `string.match`, which is still UNSUPPORTED. So every S row is still
+`FAIL assert-untrusted`:
+
+| row | tier | verdict | class | cause |
+|---|---|---|---|---|
+| all 23 S rows | S | FAIL assert-untrusted | unsupported | probe line 39 needs `string.match` (Lua patterns), implemented in step 3 |
+
+The 8 D rows that were boolean-only divergences now MATCH: err_nonstr, meta_eq, meta_lt, str_case_rev_sub,
+tbl_int_float_key, tbl_len_border, tbl_next_pairs, tbl_nil_holes. The 4 remaining DIVERGE rows are int64 and
+float-subtype gaps (int_maxinteger, int_one_vs_one, int_past53, int_wrap).
+
+# Round 1 ledger (kept for history)
+
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified.
 Graded on EigenScript v0.44.0 (release asset `eigenscript-linux-x86_64`, sha256 `145986c2…89ea`) against

@@ -5,7 +5,7 @@
 # ["SYNTAX", line, message].
 
 define lex_err(line, msg) as:
-    throw of ["SYNTAX", line, msg]
+    throw of (["SYNTAX", line, msg])
 
 define lex_is_alpha(c) as:
     return (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95

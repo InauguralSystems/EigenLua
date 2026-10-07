@@ -8,7 +8,7 @@
 #      never null, and key len(a)+1 is never in o, so len(a) is a border;
 #   h: string keys; o: every other key, encoded -> [key, value].
 # A Lua function takes one list of arguments and returns a list of results.
-# Errors are thrown as ["LUAERR", value]. The call-site stack lr_stk holds
+# Errors are thrown as {"LUAERR": 1, "v": value}. The call-site stack lr_stk holds
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
@@ -57,16 +57,16 @@ define lr_where(level) as:
     return lr_st.chunk + ":" + (str of line) + ": "
 
 define lr_throw(v) as:
-    throw of ["LUAERR", v]
+    throw of ({"LUAERR": 1, "v": v})
 
 define lr_rterr(site, msg) as:
     local line is lr_site_line of (site)
     if line < 0:
-        throw of ["LUAERR", (lr_where of (1)) + msg]
-    throw of ["LUAERR", lr_st.chunk + ":" + (str of line) + ": " + msg]
+        throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
+    throw of ({"LUAERR": 1, "v": lr_st.chunk + ":" + (str of line) + ": " + msg})
 
 define lr_argerr(n, fname, msg) as:
-    throw of ["LUAERR", (lr_where of (1)) + "bad argument #" + (str of n) + " to '" + fname + "' (" + msg + ")"]
+    throw of ({"LUAERR": 1, "v": (lr_where of (1)) + "bad argument #" + (str of n) + " to '" + fname + "' (" + msg + ")"})
 
 define lr_main(f, chunk, sites) as:
     lr_st.chunk is chunk
@@ -91,18 +91,17 @@ define lr_main(f, chunk, sites) as:
         lr_exit of 1
     lr_exit of 0
 
-# The Lua value carried by a caught EigenScript error. Only a Lua error is a
-# Lua error: a call-depth overflow is unsupported (exit 3), and anything else
-# is a runtime defect that stops the program loudly (exit 4).
+# The Lua value carried by a caught EigenScript error. A Lua error carries its
+# value. Any other error is the VM refusing what the direct translation asked
+# of it (a call-depth overflow, division by zero on a non-finite result, ...):
+# owner decision 2 says let it surface, so it becomes a Lua error string
+# naming the EigenScript error, and the row diverges where Lua would not raise.
 define lr_errobj(e) as:
-    if type of e == "list" and len of e == 2 and e[0] == "LUAERR":
-        return e[1]
-    if type of e == "dict" and e.kind == "limit" and index_of of [e.message, "stack overflow"] >= 0:
-        # EigenScript's call depth (~5000 frames, ~2000 Lua calls) is far
-        # below Lua's; which program would overflow in Lua is unknowable here
-        lr_unsup of ["call depth beyond the EigenScript VM's limit (EigenScript gap)", 0]
-    lr_stderr of ("EIGENLUA-INTERNAL: runtime error: " + (str of e) + "\n")
-    lr_exit of 4
+    if type of e == "dict" and e.LUAERR == 1:
+        return e.v
+    if type of e == "dict" and type of e.message == "str":
+        return (lr_where of (1)) + "EigenScript " + (str of e.kind) + " error: " + e.message
+    return (lr_where of (1)) + "EigenScript error: " + (str of e)
 
 # ------------------------------------------------------------ values
 
@@ -116,23 +115,25 @@ define lr_type(v) as:
         return "table"
     if t == "none":
         return "nil"
+    if t == "bool":
+        return "boolean"
     if t == "fn" or t == "builtin":
         return "function"
     return "userdata"
 
 define lr_t(v) as:
     if v == null:
-        return 0
-    if type of v == "num" and v == 0:
-        return 0
-    return 1
+        return false
+    if type of v == "bool":
+        return v
+    return true
 
 define lr_not(v) as:
     if v == null:
-        return 1
-    if type of v == "num" and v == 0:
-        return 1
-    return 0
+        return true
+    if type of v == "bool":
+        return not v
+    return false
 
 define lr_and(a, b) as:
     if lr_t of (a):
@@ -412,6 +413,10 @@ define lr_tostr(v) as:
     local t is type of v
     if t == "str":
         return v
+    if t == "bool":
+        if v:
+            return "true"
+        return "false"
     if t == "num":
         return lr_numstr of (v)
     if t == "none":
@@ -450,6 +455,10 @@ define lr_newtable as:
 # functions).
 define lr_okey(k) as:
     local t is type of k
+    if t == "bool":
+        if k:
+            return "b1"
+        return "b0"
     if t == "num":
         if k == 0:
             return "n0"
@@ -767,7 +776,7 @@ define lr_arith_num(op, x, y, site) as:
         return lr_idivnum of [x, y, site]
     if op == "^":
         return lr_pownum of [x, y, site]
-    throw of ["INTERNAL", "arith op " + op]
+    throw of (["INTERNAL", "arith op " + op])
 
 define lr_add(a, b, site) as:
     if type of a == "num" and type of b == "num":
@@ -908,22 +917,22 @@ define lr_bnot(a, site) as:
 define lr_eq(a, b, site) as:
     local ta is type of a
     if ta != type of b:
-        return 0
+        return false
     if ta == "dict":
         if a.id == b.id:
-            return 1
+            return true
         local h is lr_metafield of [a, "__eq"]
         if h == null:
             h is lr_metafield of [b, "__eq"]
         if h == null:
-            return 0
+            return false
         return lr_t of (lr_call1 of [h, [a, b], site])
-    if a == b:
-        return 1
-    return 0
+    if ta == "fn" or ta == "builtin":
+        return lr_fnid of (a) == lr_fnid of (b)
+    return a == b
 
 define lr_ne(a, b, site) as:
-    return 1 - (lr_eq of [a, b, site])
+    return not (lr_eq of [a, b, site])
 
 define lr_cmperr(a, b, site) as:
     local t1 is lr_type of (a)
@@ -936,9 +945,7 @@ define lr_lt(a, b, site) as:
     local ta is type of a
     local tb is type of b
     if (ta == "num" and tb == "num") or (ta == "str" and tb == "str"):
-        if a < b:
-            return 1
-        return 0
+        return a < b
     local h is lr_metafield of [a, "__lt"]
     if h == null:
         h is lr_metafield of [b, "__lt"]
@@ -950,9 +957,7 @@ define lr_le(a, b, site) as:
     local ta is type of a
     local tb is type of b
     if (ta == "num" and tb == "num") or (ta == "str" and tb == "str"):
-        if a <= b:
-            return 1
-        return 0
+        return a <= b
     local h is lr_metafield of [a, "__le"]
     if h == null:
         h is lr_metafield of [b, "__le"]
@@ -1143,7 +1148,7 @@ define lr_b_error(A) as:
         level is 1
     if type of msg == "str" and level > 0:
         msg is (lr_where of (level)) + msg
-    throw of ["LUAERR", msg]
+    throw of ({"LUAERR": 1, "v": msg})
 
 define lr_b_assert(A) as:
     lr_st.asserts is lr_st.asserts + 1
@@ -1156,7 +1161,7 @@ define lr_b_assert(A) as:
         msg is A[1]
     if type of msg == "str":
         msg is (lr_where of (1)) + msg
-    throw of ["LUAERR", msg]
+    throw of ({"LUAERR": 1, "v": msg})
 
 define lr_b_pcall(A) as:
     if len of A == 0:
@@ -1167,8 +1172,8 @@ define lr_b_pcall(A) as:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
         list_truncate of [lr_stk, depth]
-        return [0, lr_errobj of (e)]
-    return concat of [[1], r]
+        return [false, lr_errobj of (e)]
+    return concat of [[true], r]
 
 define lr_b_xpcall(A) as:
     local h is lr_arg of [A, 1]
@@ -1179,8 +1184,8 @@ define lr_b_xpcall(A) as:
     catch e:
         local v is lr_errobj of (e)
         list_truncate of [lr_stk, depth]
-        return [0, lr_call1 of [h, [v], 0]]
-    return concat of [[1], r]
+        return [false, lr_call1 of [h, [v], 0]]
+    return concat of [[true], r]
 
 define lr_b_select(A) as:
     local n is lr_arg of [A, 0]
@@ -1211,9 +1216,11 @@ define lr_b_rawequal(A) as:
     local a is lr_arg of [A, 0]
     local b is lr_arg of [A, 1]
     if type of a != type of b:
-        return [0]
+        return [false]
     if type of a == "dict":
         return [a.id == b.id]
+    if type of a == "fn" or type of a == "builtin":
+        return [lr_fnid of (a) == lr_fnid of (b)]
     return [a == b]
 
 define lr_b_rawlen(A) as:
@@ -1299,7 +1306,7 @@ define lr_b_collectgarbage(A) as:
     if opt == "count":
         return [0, 0]
     if opt == "isrunning":
-        return [1]
+        return [true]
     lr_unsup of ["collectgarbage(\"" + (lr_tostr of (opt)) + "\")", 0]
 
 # ------------------------------------------------------------ string library
@@ -1664,8 +1671,10 @@ define lr_io_write(A) as:
 
 define lr_os_exit(A) as:
     local c is lr_arg of [A, 0]
-    if c == null:
+    if c == null or c == true:
         c is 0
+    elif c == false:
+        c is 1
     lr_exit of c
 
 # ------------------------------------------------------------ globals
