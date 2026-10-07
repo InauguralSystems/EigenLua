@@ -35,7 +35,7 @@ A row's class is the class of its **first failure**. Its first ten failures were
 | unspecified | 0 | 0 | 0 |
 | PASS / MATCH | 73 | 2 | 71 |
 
-No row's first failure is a known front-end bug, and no front-end bug found by any peel is open. Round 3's ledger
+No row's first failure is a known front-end bug. That is a claim about **graded rows only**. Probing beyond the corpus keeps finding front-end bugs: the round-4 blind critic found seven more, all pre-existing, filed as EigenLua #13-#20 (plus a `%p` collision on #12), and math.lua's peel past 25 failures holds three of them (#15). Those open bugs are tracked as issues, not counted in this table, because no graded row's first failure is one of them. Round 3's ledger
 said the same and was wrong: the round-3 critic found six open front-end bugs (round 4 items 1-6: table.sort
 was a merge sort, `debug.traceback` did not skip levels, `os.exit` did not check its argument, no `arg`, no C-stack
 limit, unlocated VM errors), and round 4's peel found three more (gmatch past the end, the xpcall handler's frame,
