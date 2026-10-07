@@ -41,9 +41,12 @@ define lr_site_chunk(site) as:
 # The construct is not handled: say so and exit 3, never run on.
 define lr_unsup(wht, site) as:
     local line is lr_site_line of (site)
-    if line < 0:
+    local chunk is lr_site_chunk of (site)
+    if line < 0 and len of lr_stk > 0:
+        # a library function: the position of its caller
         line is lr_cur_line of (1)
-    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + wht + " at " + (lr_site_chunk of (site)) + ":" + (str of line) + "\n")
+        chunk is lr_site_chunk of (lr_stk[len of lr_stk - 1])
+    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + wht + " at " + chunk + ":" + (str of line) + "\n")
     lr_exit of 3
 
 define lr_cur_line(level) as:
