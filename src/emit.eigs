@@ -166,10 +166,8 @@ define rs_stat(R, s) as:
             rs_expr of [R, e]
     elif k == "Break":
         null
-    elif k == "Goto":
-        em_unsup of ["goto", s.line]
-    elif k == "Label":
-        em_unsup of ["label (goto target)", s.line]
+    elif k == "Goto" or k == "Label":
+        R.fn.hasgoto is 1
     else:
         throw of (["INTERNAL", "unknown statement " + k])
 
@@ -591,7 +589,7 @@ define em_closure(E, fn) as:
 
 # Emit the factory for fn into G.funcs.
 define em_function(G, fn) as:
-    local E is {"G": G, "out": [], "ind": "", "fn": fn}
+    local E is {"G": G, "out": [], "ind": "", "fn": fn, "loops": []}
     local id is str of fn.id
     em_line of [E, "define F" + id + "(U) as:"]
     em_indent of (E)
@@ -612,6 +610,8 @@ define em_function(G, fn) as:
         i is i + 1
     if fn.vararg:
         em_line of [E, "local V is list_slice of [A, " + (str of np) + ", len of A]"]
+    if fn.hasgoto:
+        em_line of [E, "local gj is 0"]
     if fn.envvar != null:
         em_declare of [E, fn.envvar, G.env]
     em_block of [E, fn.body]
@@ -621,6 +621,10 @@ define em_function(G, fn) as:
     append of [G.funcs, join of [E.out, "\n"]]
 
 define em_block(E, stats) as:
+    for s in stats:
+        if s.k == "Label":
+            em_block_labels of [E, stats]
+            return null
     for s in stats:
         em_stat of [E, s]
 
@@ -740,17 +744,21 @@ define em_stat(E, s) as:
             em_indent of (E)
             em_line of [E, "if not (" + c + "):"]
             em_line of [E, "    break"]
+        em_loop_begin of [E, "lua"]
         em_block of [E, s.body]
         em_line of [E, "null"]
         em_dedent of (E)
+        em_loop_end of (E)
     elif k == "Repeat":
         em_line of [E, "loop while 1:"]
         em_indent of (E)
+        em_loop_begin of [E, "lua"]
         em_block of [E, s.body]
         local c is em_cond of [E, s.cond]
         em_line of [E, "if " + c + ":"]
         em_line of [E, "    break"]
         em_dedent of (E)
+        em_loop_end of (E)
     elif k == "If":
         em_if of [E, s, 0]
     elif k == "NumFor":
@@ -764,7 +772,11 @@ define em_stat(E, s) as:
         else:
             em_line of [E, "return " + (em_explist of [E, s.exprs])]
     elif k == "Break":
-        em_line of [E, "break"]
+        em_break of (E)
+    elif k == "Goto":
+        em_goto of [E, s]
+    elif k == "Label":
+        null
     else:
         em_unsup of [k, s.line]
 
@@ -842,11 +854,13 @@ define em_numfor(E, s) as:
     em_line of [E, "local " + ts + " is " + tp + "[3]"]
     em_line of [E, "loop while " + ti + " * " + ts + " <= " + tl + ":"]
     em_indent of (E)
+    em_loop_begin of [E, "lua"]
     em_declare of [E, s.v, ti]
     em_line of [E, ti + " is " + ti + " + " + st]
     em_block of [E, s.body]
     em_line of [E, "null"]
     em_dedent of (E)
+    em_loop_end of (E)
 
 define em_genfor(E, s) as:
     local site is em_site of [E, s.eline, "", ""]
@@ -857,6 +871,7 @@ define em_genfor(E, s) as:
     em_line of [E, "local " + tc + " is " + vals[2]]
     em_line of [E, "loop while 1:"]
     em_indent of (E)
+    em_loop_begin of [E, "lua"]
     local tr is em_tmp of (E)
     em_line of [E, "local " + tr + " is lr_call of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
     local i is 0
@@ -874,6 +889,7 @@ define em_genfor(E, s) as:
     em_block of [E, s.body]
     em_line of [E, "null"]
     em_dedent of (E)
+    em_loop_end of (E)
 
 em_rt_parts is ["rt_pattern.eigs", "rt_format.eigs", "rt_math.eigs", "rt_utf8.eigs"]
 
@@ -888,7 +904,7 @@ define em_dirname(p) as:
     return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "env": "lr_G", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -912,7 +928,7 @@ define emit_program(ast, file, runtime) as:
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "env": "ENV", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV", "useenv": ast.useenv == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -923,3 +939,96 @@ define emit_chunk(ast, sitebase) as:
     append of [out, "    return F" + (str of ast.id) + " of ([])"]
     append of [out, "L"]
     return [(join of [out, "\n"]) + "\n", G.sites]
+
+# ---------------------------------------------------------------- goto
+# A block with labels becomes a dispatch loop over its segments (the
+# statements before the first label, then from each label to the next):
+#     local pcN is 0
+#     loop while true:
+#         if pcN <= 0: <segment 0>
+#         if pcN <= 1: <segment 1>  ...
+#         break
+# A goto to a label of the innermost loop sets pcN and continues. A jump
+# that must leave inner EigenScript loops first (a goto across a Lua loop,
+# or a Lua break whose loop is outside a dispatch loop) stores its target in
+# the function's gj and breaks; after every loop of such a function, gj is
+# checked and the jump is taken or passed outward. E.loops is the stack of
+# EigenScript loops being emitted.
+
+define em_loop_begin(E, kind) as:
+    E.G.tmp is E.G.tmp + 1
+    local L is {"k": kind, "id": E.G.tmp, "labels": {}, "pc": ""}
+    append of [E.loops, L]
+    return L
+
+define em_loop_end(E) as:
+    list_truncate of [E.loops, len of E.loops - 1]
+    if not E.fn.hasgoto or len of E.loops == 0:
+        return null
+    local O is E.loops[len of E.loops - 1]
+    em_line of [E, "if gj != 0:"]
+    em_indent of (E)
+    if O.k == "disp":
+        for key in keys of O.labels:
+            em_line of [E, "if gj == " + key + ":"]
+            em_line of [E, "    gj is 0"]
+            em_line of [E, "    " + O.pc + " is " + (str of O.labels[key])]
+            em_line of [E, "    continue"]
+    else:
+        em_line of [E, "if gj == " + (str of (0 - O.id)) + ":"]
+        em_line of [E, "    gj is 0"]
+        em_line of [E, "    break"]
+    em_line of [E, "break"]
+    em_dedent of (E)
+
+define em_break(E) as:
+    local top is E.loops[len of E.loops - 1]
+    if top.k == "lua":
+        em_line of [E, "break"]
+        return null
+    local i is len of E.loops - 1
+    loop while E.loops[i].k != "lua":
+        i is i - 1
+    em_line of [E, "gj is " + (str of (0 - E.loops[i].id))]
+    em_line of [E, "break"]
+
+define em_goto(E, s) as:
+    local D is E.G.labelloop[str of s.target]
+    local top is E.loops[len of E.loops - 1]
+    if top.id == D.id:
+        em_line of [E, D.pc + " is " + (str of D.labels[str of s.target])]
+        em_line of [E, "continue"]
+        return null
+    em_line of [E, "gj is " + (str of s.target)]
+    em_line of [E, "break"]
+
+define em_block_labels(E, stats) as:
+    local pc is em_tmp of (E)
+    em_line of [E, "local " + pc + " is 0"]
+    em_line of [E, "loop while true:"]
+    em_indent of (E)
+    local D is em_loop_begin of [E, "disp"]
+    D.pc is pc
+    local seg is 0
+    for s in stats:
+        if s.k == "Label":
+            seg is seg + 1
+            D.labels[str of s.id] is seg
+            E.G.labelloop[str of s.id] is D
+    seg is 0
+    em_line of [E, "if " + pc + " <= 0:"]
+    em_indent of (E)
+    for s in stats:
+        if s.k == "Label":
+            em_line of [E, "null"]
+            em_dedent of (E)
+            seg is seg + 1
+            em_line of [E, "if " + pc + " <= " + (str of seg) + ":"]
+            em_indent of (E)
+        else:
+            em_stat of [E, s]
+    em_line of [E, "null"]
+    em_dedent of (E)
+    em_line of [E, "break"]
+    em_dedent of (E)
+    em_loop_end of (E)
