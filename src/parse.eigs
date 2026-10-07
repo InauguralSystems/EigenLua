@@ -3,7 +3,16 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0}
+    local P is {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0, "lx": null}
+    if has_key of [tk, "rd"]:
+        P.lx is tk
+        ps_fill of [P, 0]
+    return P
+
+# A reader chunk is lexed on demand: make tokens up to index k.
+define ps_fill(P, k) as:
+    loop while k >= len of P.t and not P.lx.done:
+        lex_more of (P.lx)
 
 define ps_t(P) as:
     return P.t[P.i]
@@ -32,6 +41,8 @@ define ps_err(P, msg) as:
 # reached (lexerr tokens, lex.eigs).
 define ps_adv(P) as:
     P.i is P.i + 1
+    if P.lx != null:
+        ps_fill of [P, P.i]
     if P.t[P.i] == "lexerr":
         throw of (["SYNTAX", P.l[P.i], P.v[P.i]])
 
@@ -82,7 +93,7 @@ define lua_parse(tk) as:
     local body is ps_block of (P)
     ps_check of [P, "eof"]
     ps_close_gotos of (P)
-    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
+    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1, "bend": P.bend}
 
 define ps_block(P) as:
     ps_enterblock of (P)
@@ -91,9 +102,11 @@ define ps_block(P) as:
         local t is P.t[P.i]
         if t == "return":
             append of [stats, ps_retstat of (P)]
+            ps_lastline of (P)
             ps_leaveblock of (P)
             return stats
         if ps_block_follow of [P, 1]:
+            ps_lastline of (P)
             ps_leaveblock of (P)
             return stats
         local s is ps_statement of (P)
@@ -108,9 +121,18 @@ define ps_retstat(P) as:
     local t is P.t[P.i]
     if not (ps_block_follow of [P, 1]) and t != ";":
         exprs is ps_explist of (P)
+    # luaK_ret is coded before the optional ';'
+    local lastline is P.l[P.i - 1]
     if P.t[P.i] == ";":
         ps_next of (P)
-    return {"k": "Return", "exprs": exprs, "line": line}
+    return {"k": "Return", "exprs": exprs, "line": line, "lastline": lastline}
+
+# P.bend: the line of the last token of the block just parsed (lparser.c
+# lastline when leaveblock runs), where its to-be-closed variables close.
+define ps_lastline(P) as:
+    P.bend is 1
+    if P.i > 0:
+        P.bend is P.l[P.i - 1]
 
 # lparser.c enterlevel: statements, subexpressions and assignment targets
 # nest on the C stack, which Lua stops at LUAI_MAXCCALLS (200) calls, a few
@@ -140,13 +162,16 @@ define ps_statement1(P) as:
         local cond is ps_expr of (P)
         ps_expect of [P, "do"]
         local body is ps_loop_block of (P)
+        local bend is P.bend
+        local endl is P.l[P.i]
         ps_match of [P, "end", "while", line]
-        return {"k": "While", "cond": cond, "body": body, "line": line}
+        return {"k": "While", "cond": cond, "body": body, "line": line, "bend": bend, "endl": endl}
     if t == "do":
         ps_next of (P)
         local body is ps_block of (P)
+        local bend is P.bend
         ps_match of [P, "end", "do", line]
-        return {"k": "Do", "body": body, "line": line}
+        return {"k": "Do", "body": body, "line": line, "bend": bend}
     if t == "for":
         return ps_for of (P)
     if t == "repeat":
@@ -154,7 +179,7 @@ define ps_statement1(P) as:
         local body is ps_loop_block_until of (P)
         ps_match of [P, "until", "repeat", line]
         local cond is ps_expr of (P)
-        return {"k": "Repeat", "body": body, "cond": cond, "line": line}
+        return {"k": "Repeat", "body": body, "cond": cond, "line": line, "bend": P.l[P.i - 1], "endl": P.l[P.i - 1]}
     if t == "function":
         ps_next of (P)
         local nline is P.l[P.i]
@@ -272,16 +297,19 @@ define ps_if(P) as:
     ps_expect of [P, "then"]
     append of [blocks, ps_block of (P)]
     local els is null
+    local bends is [P.bend]
     loop while P.t[P.i] == "elseif":
         ps_next of (P)
         append of [conds, ps_expr of (P)]
         ps_expect of [P, "then"]
         append of [blocks, ps_block of (P)]
+        append of [bends, P.bend]
     if P.t[P.i] == "else":
         ps_next of (P)
         els is ps_block of (P)
+        append of [bends, P.bend]
     ps_match of [P, "end", "if", line]
-    return {"k": "If", "conds": conds, "blocks": blocks, "else": els, "line": line}
+    return {"k": "If", "conds": conds, "blocks": blocks, "else": els, "line": line, "bends": bends}
 
 define ps_for(P) as:
     local line is P.l[P.i]
@@ -299,8 +327,10 @@ define ps_for(P) as:
         ps_expect of [P, "do"]
         P.pendvars is ["(for state)", "(for state)", "(for state)", n1]
         local body is ps_loop_block of (P)
+        local bend is P.bend
+        local endl is P.l[P.i]
         ps_match of [P, "end", "for", line]
-        return {"k": "NumFor", "var": n1, "a": a, "b": b, "c": c, "body": body, "line": line}
+        return {"k": "NumFor", "var": n1, "a": a, "b": b, "c": c, "body": body, "line": line, "bend": bend, "endl": endl}
     if P.t[P.i] == "," or P.t[P.i] == "in":
         local names is [n1]
         loop while P.t[P.i] == ",":
@@ -312,8 +342,10 @@ define ps_for(P) as:
         ps_expect of [P, "do"]
         P.pendvars is concat of [["(for state)", "(for state)", "(for state)", "(for state)"], names]
         local body is ps_loop_block of (P)
+        local bend is P.bend
+        local endl is P.l[P.i]
         ps_match of [P, "end", "for", line]
-        return {"k": "GenFor", "names": names, "exprs": exprs, "body": body, "line": line, "eline": eline}
+        return {"k": "GenFor", "names": names, "exprs": exprs, "body": body, "line": line, "eline": eline, "bend": bend, "endl": endl}
     ps_err of [P, "'=' or 'in' expected"]
 
 # funcbody: '(' [parlist] ')' block end. is_method prepends "self".
@@ -352,7 +384,7 @@ define ps_body(P, is_method, line) as:
     local endline is P.l[P.i]
     ps_match of [P, "end", "function", line]
     ps_close_gotos of (P)
-    return {"k": "Func", "params": params, "vararg": vararg, "body": body, "line": line, "endline": endline, "name": ""}
+    return {"k": "Func", "params": params, "vararg": vararg, "body": body, "line": line, "endline": endline, "name": "", "bend": endline}
 
 define ps_explist(P) as:
     local es is [ps_expr of (P)]
@@ -458,6 +490,8 @@ define ps_table(P) as:
     ps_expect of [P, "{"]
     local items is []
     loop while P.t[P.i] != "}":
+        if P.lx != null:
+            ps_fill of [P, P.i + 1]
         if P.t[P.i] == "name" and P.t[P.i + 1] == "=":
             local kl is P.l[P.i]
             local key is ps_name of (P)
@@ -630,6 +664,10 @@ define ps_label(P, nm, line) as:
     # is outside the scope of the block's locals
     local j is P.i
     loop while 1:
+        if P.lx != null:
+            ps_fill of [P, j]
+            if P.t[j] == "::":
+                ps_fill of [P, j + 2]
         if P.t[j] == ";":
             j is j + 1
         elif P.t[j] == "::" and P.t[j + 1] == "name" and P.t[j + 2] == "::":

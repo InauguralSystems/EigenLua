@@ -1,17 +1,17 @@
-# EigenLua front end: divergence ledger (round 4)
+# EigenLua front end: divergence ledger (round 5)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified.
 
 - **Runtime:** EigenScript `main` at `686d3b7d14837efb7e6e2b55882190d1dd20a332` (EigenScript#1647, with the real
   `bool`). Its `--version` prints `0.44.0`.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
-- **Grader verdict, end of round 4:**
-  `SUMMARY S=2/23 D=71/83 fail=16 diverge=12 hang=1 crash=0 unsupported=4 examined=106 assert=trusted`.
-- **Before this round** (round 3, 5f2722f): `SUMMARY S=2/23 D=63/75 fail=16 diverge=12 hang=1 crash=0 unsupported=4
-  examined=98 assert=trusted`.
+- **Grader verdict, end of round 5:**
+  `SUMMARY S=2/23 D=87/99 fail=16 diverge=12 hang=1 crash=0 unsupported=4 examined=122 assert=trusted`.
+- **Before this round** (round 4, 8a30e385): `SUMMARY S=2/23 D=71/83 fail=16 diverge=12 hang=1 crash=0 unsupported=4
+  examined=106 assert=trusted`.
 
-Tier D has 83 rows. Round 3 added 23 programs and round 4 added 8, one per front-end bug fixed; each DIVERGEs on
-the round before it and MATCHes now (lists at the end). The 12 rows that do not match are the same 12 as in round 2,
+Tier D has 99 rows. Round 3 added 23 programs, round 4 added 8 and round 5 added 16 (13 for bugs fixed, each
+failing at 8a30e385 and matching now; 3 for coverage, matching at both). Lists at the end. The 12 rows that do not match are the same 12 as in round 2,
 all EigenScript gaps.
 
 ## Classes
@@ -33,14 +33,25 @@ A row's class is the class of its **first failure**. Its first ten failures were
 | out of scope | 6 | 6 | 0 |
 | front-end bug (open) | 0 | 0 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 73 | 2 | 71 |
+| PASS / MATCH | 89 | 2 | 87 |
 
-No row's first failure is a known front-end bug. That is a claim about **graded rows only**. Probing beyond the corpus keeps finding front-end bugs: the round-4 blind critic found seven more, all pre-existing, filed as EigenLua #13-#20 (plus a `%p` collision on #12), and math.lua's peel past 25 failures holds three of them (#15). Those open bugs are tracked as issues, not counted in this table, because no graded row's first failure is one of them. Round 3's ledger
-said the same and was wrong: the round-3 critic found six open front-end bugs (round 4 items 1-6: table.sort
+**Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
+known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
+front-end bugs. Probe-found bugs, by issue:
+- round-4 blind critic: EigenLua#13 (load reader), #14 (positions in C functions), #15 (three number bugs), #16
+  (traceback of a thread), #17 (os.exit close), #18 (load mode), #19 (table.move hang), #20 (`<close>` with labels),
+  #12 (`%p` substitute). All fixed in round 5, each with a D row (section below).
+- round-5 probes: `print` built its whole line before writing (found while probing the C stack for #11, fixed, D row
+  `print_partial.lua`); a pcall's C-stack restore after a resume inside it (#11, fixed, `cstack_yield_resume.lua`);
+  reader errors skipped the message handler in force (#13, fixed); a round-5 regression in the lexer's raw-text list
+  (fixed before the end of the round, D row `lex_near_raw.lua`).
+- open limitations, not wrong answers: load speed (#7, attributed to `gaps/vm-op-cost.eigs`; a short `load` is still
+  about 0.24 ms), and binary chunks (out of scope).
+Earlier rounds' ledgers made the same claim about graded rows and were each followed by more probe-found bugs:
+after round 3's, the round-3 critic found six open front-end bugs (round 4 items 1-6: table.sort
 was a merge sort, `debug.traceback` did not skip levels, `os.exit` did not check its argument, no `arg`, no C-stack
 limit, unlocated VM errors), and round 4's peel found three more (gmatch past the end, the xpcall handler's frame,
-an unlocated UNSUPPORTED line). All are fixed. Open front-end limitation: the compile speed of `load`
-(constructs.lua). Rows peeled in round 4 (section below) were peeled to their end or 25 failures; the other S rows
+an unlocated UNSUPPORTED line). All are fixed. Rows peeled in round 4 (section below) were peeled to their end or 25 failures; the other S rows
 keep round 3's ten.
 
 ## How the S rows were peeled
@@ -76,7 +87,10 @@ Each is run as `eigenscript gaps/<file>`. This is its stdout on 686d3b7d.
 | `list-literal-cap.eigs` | A list literal holds at most 1024 elements. Round 2 split long literals; round 3 removed that workaround. | `1024` / `eval: parse error in code string` | None graded. |
 | `nesting-limits.eigs` | 64 indentation levels and 128 compile-nesting levels, against Lua's ~200. | `eval: parse error in code string` / `eval: compile error in code string` | None graded (errors.lua's deeper testrep cases would reach it). |
 | `subscript-nesting.eigs` | Each subscript in one expression leaks a nesting level. Round 2 kept subscripts out of loaded chunks to dodge this; round 3 removed that workaround. | `300` / `eval: parse error in code string` | None graded. |
-| `no-string-identity.eigs` | A string has no identity, so `%p` of a string cannot name one object (equal short strings hash alike; each %p of a long string is a fresh number). | `true` / `str` | S: pm (413, 416, 426); literals (225-228, also unspecified). |
+| `no-string-identity.eigs` | A string has no identity. `%p` of a string names its value (round 5, EigenLua#12): one string always formats alike, as in Lua, but an equal long string built elsewhere formats like the original. | `true` / `str` | S: literals (230: `getadd(sd) ~= a1`). pm.lua 413/416/426 and literals 225-228 now hold. |
+| `vm-op-cost.eigs` | Speed: the VM's cost per basic operation (0.25 us per character looked at, 0.18 us per call, 0.68 us per dict literal, 17 us per eval of a 7-line chunk) floors a front end written in EigenScript at about 534 us per constructs.lua chunk, 1.8 x the 300 us per load the row's budget allows (EigenLua#7). | four timings (vary by about 20%) | S: constructs (time, after its OOS line 306). |
+| `handler-after-overflow.eigs` | A catch runs only after the VM has unwound; nothing runs at the raise point, so an xpcall handler after a call-depth overflow has the whole stack again (EigenLua#11 item 3). | `[true, 0, true, 4094]` | S: errors (549-557, CD). |
+| `pipe-read-line.eigs` | `read_line` on a pipe drops a "\r" before "\n" and hides a missing final newline (EigenLua#10). Run with a pipe on stdin. | `["a", 1, "b", 1, null]` for both `a\r\nb` and `a\r\nb\n` | None graded (the grader feeds an empty pipe). |
 
 ## Round 4: peel to the row's end, with a count check
 
@@ -97,11 +111,11 @@ round 3's method:
 | closure.lua | 37 WK (37-40 blanked, the HANG); 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C; 273-278 OOS (`upvaluejoin` through pcall) | END | 59 = 59, stdout same |
 | cstack.lua | 105 TL (1000 suspended coroutines); 108 C | END | 8 = 8; stdout differs only in the digit line `final count:` of the xpcall(loop, loop) test (CD; the grader ignores digit lines) |
 | errors.lua | 239 OOS (236-240 blanked: `setuservalue`, raised inside a loaded chunk); 280, 287 OOS (`string.dump`); 282, 289 C; 557 CD (the handler of a stack overflow runs on a fresh EigenScript stack, so its own `pcall(loop)` overflows normally instead of "error in error handling"); 651, 658, 659 NEST; 655, 656 NEST (64 indentation levels, `nesting-limits`) | END | 277 vs 475. The 198 extra are line 552 (CD, the 557 case: the handler fails and is re-run 200 times). With 549-557 also blanked: 274 = 274, stdout differs only in three CD digit lines. Before round 4's traceback and xpcall fixes this check gave 275 vs 2453 (the critic's finding). |
-| literals.lua | 11 NUL (via the `dostring` helper); 12 C; 27 NUL; 126 NUL (`string.char(0)`); 127 SYN; 225, 226, 227, 228 unspecified (`%p` of equal long strings, `no-string-identity`) | END | 614 = 614, stdout same |
+| literals.lua | 11 NUL (via the `dostring` helper); 12 C; 27 NUL; 126 NUL (`string.char(0)`); 127 SYN; 225-228 unspecified then (round 5: they hold; 230 is `no-string-identity`) | END | 614 = 614, stdout same |
 | locals.lua | 88 I64 (88-105 blanked: `until p <= 0` waits for overflow); 262 OOS (`getinfo(2).name`); 463 C of OOS (the `__close` handlers' `getinfo(2).name == "pcall"`); 493 OOS (traceback names); 797, 804 OOS (`sethook`); 806 C | END | 164 vs 160: the four `getinfo(2).name` asserts at 429, 435, 444, 452 (OOS) raise, so the assert after each is skipped. With those blanked: 160 = 160, stdout same |
 | math.lua | 13 I64; 29, 30 INF; 41 FLT; 99-103 INF; 104 C; 116-120 I64; 137, 138, 144, 145 FLT (`1 // 0.0` is integer division by zero here); 155, 159 I64; 176 INF; 188 I64; 211, 216 I64 | 25 failures | not reached |
 | nextvar.lua | 77 I64; 78, 79 C; 534 I64; 536 C; 628, 631 FLT (`checkfloat`); 629, 632 C; 640 I64; 641 C; 690, 692, 694, 698, 703, 704 I64 (`checkfor` over maxinteger). The round-3 HANG no longer happens: these loops now end (and fail) | END | count-unspecified: 3 reference runs gave 9839, 9843, 9800; cand 9814; stdout same |
-| pm.lua | `utf8.charpattern` replaced by a NUL-free pattern (NUL); 27, 29, 31, 33, 35 NUL; 118 NUL; 131 NUL (`abc` is cut at its NUL); 141, 143, 145, 146, 147 C; 234 NUL; **344 FE (fixed: gmatch past the end)**; 397, 398, 399, 400, 401, 402, 403, 406 NUL; 413, 416, 426 `no-string-identity` (%p of a string and of the same string returned by gsub) | 25 failures | not reached |
+| pm.lua | `utf8.charpattern` replaced by a NUL-free pattern (NUL); 27, 29, 31, 33, 35 NUL; 118 NUL; 131 NUL (`abc` is cut at its NUL); 141, 143, 145, 146, 147 C; 234 NUL; **344 FE (fixed: gmatch past the end)**; 397, 398, 399, 400, 401, 402, 403, 406 NUL; 413, 416, 426 `no-string-identity` in round 4 (round 5: they hold, `%p` names the string value) | 25 failures | not reached |
 | sort.lua | 50, 51, 54 I64 (`checkerror("too many results", unpack, {}, 0, maxI)`); 57, 64, 65, 66 I64; 68, 69, 70 I64; 128 I64; 130, 134 C; 136, 139, 142 I64; 137, 140, 143 C; 174-177 I64 (`checkmove` over maxI); 182, 183 I64 | 25 failures | not reached |
 | tpack.lua | 51, 53, 54, 55 NUL; 68, 69, 70 NUL; 75 I64; 76, 77, 78 C; 81 I64; 82, 84, 85, 86 C; 89, 90 NUL; 97 I64; 99, 100, 101 C; 117, 118 NUL; 161 NUL | 25 failures | not reached |
 | utf8.lua | `utf8.charpattern` replaced by a NUL-free pattern (NUL; lines 22, 83, 248); 218, 236 NUL (`check` of strings holding U+0000, via the helper); 247-256 blanked for the count check (the gmatch loop over a string holding U+0000; with the NUL-free pattern the reference itself fails there) | END | 847 = 847, stdout same |
@@ -123,8 +137,8 @@ fails correctly.
 |---|---|---|---|---|
 | bitwise.lua | FAIL | 3 (1326) | EigenScript gap | 18 I64 (`0xFFFFFFFFFFFFFFFF` must be -1); 20, 21, 22 I64; 43 I64 (`%d` of maxinteger); 44 C; 47 I64; 53 I64 (`1 << 63`); 61, 63 I64 (shift by maxinteger). |
 | calls.lua | FAIL | 28 (20114) | EigenScript gap | 119 TC (`deep(30000)`); 111 CD; 120 C; 122 TC; 123 C; 176 TC (tail calls through 100 `__call`s); 313 NUL; 314 OOS (`getinfo(f).source`); 331 OOS (`string.dump`); 332 C. |
-| closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
-| constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1 ms each through the EigenScript-hosted compiler. **Open front-end limitation (speed), not a wrong answer.** |
+| closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
+| constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
 | coroutine.lua | UNSUPPORTED | 107 (309) | out of scope | 349 OOS (`debug.sethook`); 352 C; 417 WK (`collectgarbage()` must clear a weak entry). Then it runs to the end (301 asserts). Round 2's first failure, line 238 (`getinfo(2).what` inside `__close` during unwinding), was a front-end bug, not out of scope as round 2 filed it; it is fixed. |
 | cstack.lua | FAIL | 261 (1206) | EigenScript gap | 105 TL (1000 suspended coroutines). With that block blanked the file passes, with the same count as the reference on the same copy (8). |
 | db.lua | UNSUPPORTED | 0 | out of scope | 16 OOS (`gethook`); 33, 34 OOS (`getinfo` option checks); 42, 45, 47 OOS (`name`, `func`, `activelines`); 55 OOS (`string.dump`); 56, 57 C; 91 OOS (`name`, `namewhat`). Line 38 (`getinfo(print).short_src == "[C]"`) was a front-end bug, fixed. |
@@ -133,7 +147,7 @@ fails correctly.
 | gc.lua | FAIL | 5010 (5169) | out of scope | 194 OOS (`gcinfo`); 201 OOS (`collectgarbage("step")`); 217 OOS (waits for `gcinfo()` to grow: a hang); 261 WK; 262 C; 277 WK; 278 C; 293 WK; 298 C; 301 WK. |
 | gengc.lua | FAIL | 18 (19) | EigenScript gap | 122 WK. Then it runs to the end. |
 | goto.lua | **PASS** | 65 | | |
-| literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225, 226, 227, 228 unspecified (`%p` of two equal long strings: whether the compiler shares one string object is not specified, and an EigenScript string has no identity). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
+| literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
 | locals.lua | FAIL | 2175 (2735) | EigenScript gap | 88-104 I64 (`until p <= 0` waits for overflow; past 2^53 the loaded chunk's `a == 2^i` fails); 262 OOS (`getinfo(2).name`); 463 C of 451 OOS (`getinfo(2).name` in `__close`); 493 OOS (`traceback` function names); 797, 804 OOS (`sethook`); 574, 576 C. Then it runs to the end. |
 | math.lua | FAIL | 3 (floor 28124) | EigenScript gap | 13 I64; 29, 30 INF; 41 FLT (`math.type(0.0)`); 99, 100, 101, 102, 103 INF; 104 C. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
@@ -216,6 +230,73 @@ Also fixed, without a D row: EIGENLUA-UNSUPPORTED from a stub called through pca
 (closure.lua:273; the exit-3 path cannot match the reference), and an uncaught error now prints lua.c's traceback
 on stderr (Tier D ignores stderr).
 
+## Front-end bugs fixed in round 5
+
+Each issue row's D program fails at round 4 (8a30e385; `tools/grade.sh --candidate <8a30e385 checkout> --only
+<the 16>` gives `D=3/16 diverge=10 hang=1 unsupported=2`) and MATCHes now.
+
+| D program | bug | issue |
+|---|---|---|
+| err_c_function_unlocated.lua | an error raised by the runtime while a C function runs (next, sort's compare, ipairs' index, math.max/min) took the Lua caller's position | #14 |
+| num_str2num_edges.lua | `tonumber('+10', 2)` was nil; a long hex float numeral saturated to 0 (now strtod's correctly rounded value; 5.4.9's luaconf.h makes lua_strx2number strtod); "has no integer representation" had no varinfo | #15 |
+| load_reader_protected.lua | reader errors escaped load (now nil, msg, through the message handler in force); the reader was drained before parsing (now pieces are read on demand) | #13 |
+| load_mode_binary.lua | mode 't' accepted a chunk starting with byte 27 | #18 |
+| os_exit_close.lua | `os.exit(c, true)` did not close pending to-be-closed variables | #17 |
+| debug_traceback_thread.lua | `debug.traceback(co)` walked the caller's stack; default level 0 for another thread | #16 |
+| tbl_move_overflow.lua | `table.move({}, minI, -1, 1)` hung (HANG at 8a30e385): the overflow checks are now exact on 32-bit limbs of the C constant | #19 |
+
+**Owner decision (2026-10-07) on #19's limb arithmetic:** it is kept and is not a rule-2 shim. ltablib.c's checks compare Lua values against the C constant LUA_MAXINTEGER, and the limbs emulate that constant's int64 arithmetic exactly. No Lua value is re-represented: arguments past 2^53 still round and diverge (`no-int64`). A plain double translation would make the row HANG (2^63 + -2^63 = 0), which hides a gap rather than showing it.
+| tbc_goto_labels.lua | `<close>` in a block with labels was UNSUPPORTED | #20 |
+| debug_getinfo_source_close.lua | `getinfo(f).source` was `"@"..short_src` for string chunks; `getinfo(2).currentline` in `__close` on the normal path was the declaration line | #8 |
+| str_format_p_string.lua | `%p` of a string was a substitute value (colliding hash; a fresh number per call for long strings); it now names the string value | #12 |
+| meta_cstack_kinds.lua | C-stack depth per boundary kind (the probe's load-reader line failed at 8a30e385, #13) | #11 |
+| cstack_yield_resume.lua | a pcall catching an error after a resume inside it restored its pre-yield C-stack level | #11 |
+| print_partial.lua | `print` wrote nothing when a later `__tostring` failed | #11 probe |
+| lex_near_raw.lua | (round-5 regression guard: the near text of number and string tokens) | #13 |
+| tbl_library.lua, builtin_values.lua | coverage, MATCH at both; planted `table.insert` and `math.type` bugs diverge | #2, #3 |
+
+Not fixed: #9 is a speed item (below), #7 and #10 are attributed to gaps (`vm-op-cost.eigs`, `pipe-read-line.eigs`).
+
+### #9: the upvalue query's cost
+
+Lua functions answer `debug.getupvalue` when called with null instead of an argument list (`if A == null`), which
+replaced `if type of A == "dict"`. Loop of 100000 calls of `local function f(x) return x + 1 end`, valgrind
+instruction counts with startup subtracted: 2942.65M with the test, 2902.57M with the test deleted (+1.38%),
+3086.07M at 8a30e385 (+6.3% over no test). Paired CPU time, 1000000 calls, 5 runs: median ratio new / 8a30e385 =
+0.9475 (this VM's timings vary by about 15%, so the instruction counts are the measurement).
+
+### #11: C boundaries (LUAI_MAXCCALLS)
+
+Every way the runtime calls Lua code from "C" goes through one of three counted paths: `lr_call` with site 0
+(a library function calling back, lua_call/lua_pcall: +1), `lr_ccall` (a metamethod, luaT_callTM, or the generic
+for's iterator, OP_TFORCALL: +1), and a resume (the coroutine counts from its resumer's level + 1). Probed against
+the reference's depth at "C stack overflow" (meta_cstack_kinds.lua, meta_cstack_limit.lua), all match:
+
+| boundary | path |
+|---|---|
+| pcall, xpcall, xpcall's handler | lr_call site 0 (handler: lr_ccall at the erring line) |
+| `__index`/`__newindex` functions, arithmetic/bitwise/`__unm`/`__concat`/`__len`/`__eq`/`__lt`/`__le`, `__close` | lr_callmm -> lr_ccall |
+| generic for iterator | lr_ccall |
+| `__call` | none (precall's tryfuncTM, as in ldo.c) |
+| `__tostring`/`__name` (tostring, print, format `%s`, error messages) | lr_call site 0 |
+| gsub with a function or table (`__index`), sort's comparator, math.max/min's `__lt` | lr_call site 0 / lr_callmm |
+| `__pairs`, ipairs/concat/unpack/insert/remove/move through `__index`/`__newindex` | lr_call site 0 / lr_callmm site 0 |
+| load's reader, require's searchers and loader, dofile | lr_call site 0 |
+| coroutine.resume/wrap | resume level (lua_resume) |
+| `__gc`, hooks | none: no finalizers (`no-weak-refs`), hooks out of scope |
+
+Yield and resume: the count is now exact. Frames entered before a yield do not decrement below the resume's
+level (their C frames are gone in the reference), and a pcall that catches an error after a resume inside it
+restores the resume's level, not its own (ldo.c precover). D row cstack_yield_resume.lua.
+
+VM-error locations: a VM error (an EigenScript error, not a Lua one) has no reference position to match, since in
+each case the reference raises nothing (`no-nonfinite`, `call-depth`). The remaining approximations:
+- raised by an operator: located at the operator's line (lr_arith), the error point (err_eigs_located.lua);
+- raised inside a library function: located at its call site, as luaL_where(1) would be (`math.sqrt(-1)`,
+  `no-nonfinite`);
+- a call-depth overflow: located at the line that made the call that overflowed (`gaps/call-depth.eigs`);
+- an xpcall handler after a call-depth overflow runs with the whole stack again (`gaps/handler-after-overflow.eigs`).
+
 ## What remains UNSUPPORTED (exit 3)
 
 - **debug:** `sethook`/`gethook`, `getlocal`/`setlocal`, `getregistry`, `getuservalue`/`setuservalue`, `upvaluejoin`,
@@ -225,4 +306,3 @@ on stderr (Tier D ignores stderr).
   `os.time` with a table. Out of scope.
 - **Other:** `string.dump` and binary chunks; `package.loadlib` and a C searcher that finds a library (C modules);
   `loadfile` from stdin.
-- A to-be-closed variable in a block that also holds goto labels. No graded row has one.

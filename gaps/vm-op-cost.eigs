@@ -1,0 +1,57 @@
+# EigenScript gap (speed, EigenLua#7): the VM's cost per basic operation puts
+# a floor under a Lua front end written in EigenScript. constructs.lua loads
+# about 200000 chunks of about 230 characters and 60 tokens each; the grader
+# allows it 20 x the reference's 2.3 s, so about 300 us per load in all.
+# This program measures, on the VM alone (no EigenLua code):
+#   - one look at each character of such a chunk (ord of s[i], one compare),
+#     the least any lexer does per character;
+#   - one call of a one-statement function, the least a recursive-descent
+#     parser or an emitter does per token or node (several per token);
+#   - one dict literal of four fields (a token, a node, a site);
+#   - eval of the smallest chunk the emitter writes (7 lines).
+# Measured on 686d3b7d (this machine, 2026-10-07; timings vary by about
+# 20%): 0.20-0.25 us per character, 0.18-0.34 us per call, 0.7-1 us per
+# dict literal, 15-17 us per eval. With a lexer of about 5 operations per
+# character and a parser and emitter of about 10 calls and 3 dicts per
+# token, one 230-character chunk needs at least
+# 230 x 5 x 0.25 + 60 x (10 x 0.18 + 3 x 0.68) + 17 = 534 us, about 1.8 x
+# the 300 us budget, before any real work. EigenLua's front end takes
+# about 1.2 ms on such a chunk (lex 0.39, parse 0.39, emit 0.39, eval 0.08)
+# and 0.24 ms on "return 1". Expected: a VM fast enough for a compiler
+# written in it (or an AOT arm). Actual: the numbers this prints.
+define scan(s) as:
+    local n is len of s
+    local i is 0
+    local k is 0
+    loop while i < n:
+        local c is ord of s[i]
+        if c == 32:
+            k is k + 1
+        i is i + 1
+    return k
+
+define one(x) as:
+    return x
+
+define us(t, n) as:
+    return (floor of ((clock_unix of null - t) * 100000000 / n)) / 100
+
+unobserved:
+    chunk is "    local k10 <const> = 10\n    if (not((nil and k10) or not(true and nil))) then IX = true end\n    return (not((nil and k10) or not(true and nil)))\n"
+    t is clock_unix of null
+    for j in range of 2000:
+        scan of (chunk)
+    print of ["us per character scanned", us of [t, 2000 * len of chunk]]
+    t is clock_unix of null
+    for j in range of 200000:
+        one of (j)
+    print of ["us per call", us of [t, 200000]]
+    t is clock_unix of null
+    for j in range of 200000:
+        d is {"t": "name", "v": j, "l": 1, "r": null}
+    print of ["us per dict literal", us of [t, 200000]]
+    code is "define L(ENV) as:\n    define F0(U) as:\n        define f0(A) as:\n            return [1]\n        return f0\n    return F0 of ([])\nL"
+    t is clock_unix of null
+    for j in range of 20000:
+        x is eval of code
+    print of ["us per eval of a 7-line chunk", us of [t, 20000]]

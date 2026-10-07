@@ -40,6 +40,14 @@ define lr_site_chunk(site) as:
         return sd[3]
     return lr_st.chunk
 
+# The source of a site's chunk (lua_Debug.source): "@file", "=name" or
+# the chunk text itself.
+define lr_site_source(site) as:
+    local sd is lr_st.sites[site]
+    if len of sd > 4:
+        return sd[4]
+    return lr_st.source
+
 # The construct is not handled: say so and exit 3, never run on.
 define lr_unsup(wht, site) as:
     local line is lr_site_line of (site)
@@ -72,8 +80,10 @@ define lr_throw(v) as:
 
 define lr_rterr(site, msg) as:
     local line is lr_site_line of (site)
+    # ldebug.c luaG_runerror: a position only when the running function is
+    # Lua; site 0 is an operation done by a library (C) function
     if line < 0:
-        throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
+        throw of ({"LUAERR": 1, "v": msg})
     # "site": raised by Lua code there (a message handler runs at that line)
     throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg, "site": site})
 
@@ -116,8 +126,47 @@ define lr_globalfuncname(f) as:
                     return lib + "." + k
     return null
 
+# lua.c msghandler: a message (a value with __tostring as is, another
+# non-string named by its type) with a traceback from the error point.
+define lr_msgh(v) as:
+    local msg is ""
+    local trace is true
+    if type of v == "str":
+        msg is v
+    elif type of v == "num":
+        msg is lr_tostr of (v)
+    else:
+        local h is lr_metafield of [v, "__tostring"]
+        if h != null and type of v == "dict":
+            msg is lr_tostr of (v)
+            trace is false
+        else:
+            msg is "(error object is a " + (lr_type of (v)) + " value)"
+    local lvl is 1
+    if len of lr_fstk > 0 and lr_upvals of (lr_fstk[len of lr_fstk - 1]) == null:
+        lvl is 0
+    if trace:
+        msg is (lr_d_traceback of ([msg, lvl]))[0]
+    return msg
+
+# The message handler in force (ldo.c L->errfunc): lua.c's for the main
+# chunk, none inside pcall or a coroutine body, xpcall's own handler. An
+# error raised by lua_error passes through it even where a protected call
+# inside the library catches it (load's reader, luaD_protectedparser).
+define lr_errfunc(v, site) as:
+    local ef is lr_co_cur[0].ef
+    if len of ef == 0:
+        return v
+    local h is ef[len of ef - 1]
+    if h == null:
+        return v
+    if h == "MAIN":
+        return lr_msgh of (v)
+    return lr_xp_handle of [h, v, 0, site]
+
 define lr_main(f, chunk, sites) as:
     lr_st.chunk is lr_chunkid of ("@" + chunk)
+    lr_st.source is "@" + chunk
     lr_st.sites is sites
     lr_init_lib of null
     # lua.c createargtable: arg[0] is the script, arg[-1] the interpreter
@@ -127,29 +176,13 @@ define lr_main(f, chunk, sites) as:
     if type of a0 == "str" and a0 != "":
         lr_rawset of [argt, -1, a0, 0]
     lr_rawset of [lr_G, "arg", argt, 0]
+    append of [lr_co_cur[0].ef, "MAIN"]
     try:
         lr_call of [f, [], 0]
     catch e:
-        local v is lr_errobj of (e)
-        local msg is ""
-        local trace is true
-        if type of v == "str":
-            msg is v
-        elif type of v == "num":
-            msg is lr_tostr of (v)
-        else:
-            local h is lr_metafield of [v, "__tostring"]
-            if h != null and type of v == "dict":
-                msg is lr_tostr of (v)
-                trace is false
-            else:
-                msg is "(error object is a " + (lr_type of (v)) + " value)"
-        # lua.c msghandler: the message with a traceback from the error point
-        local lvl is 1
-        if len of lr_fstk > 0 and lr_upvals of (lr_fstk[len of lr_fstk - 1]) == null:
-            lvl is 0
-        if trace:
-            msg is (lr_d_traceback of ([msg, lvl]))[0]
+        if type of e == "dict" and e.EXIT == 1:
+            lr_exit of (e.code)
+        local msg is lr_msgh of (lr_errobj of (e))
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
     lr_exit of 0
@@ -315,6 +348,49 @@ define lr_isdigit(c) as:
     local o is ord of c
     return o >= 48 and o <= 57
 
+# strtod on a hexadecimal numeral (luaconf.h makes lua_strx2number strtod
+# under C99): the significant hex digits ds (no leading zero) times
+# 2^e, correctly rounded to a double (round half to even). Thirteen
+# digits are exact; the 14th and 15th join them in one addition, and
+# any nonzero digit past them adds a half (a sticky bit), which rounds
+# like the exact value since the sum is at least 2^56.
+define lr_hexd(ds, e) as:
+    local k is len of ds
+    loop while k > 0 and ds[k - 1] == 0:
+        k is k - 1
+        e is e + 4
+    if k == 0:
+        return 0
+    local m is 0
+    local i is 0
+    loop while i < k and i < 13:
+        m is m * 16 + ds[i]
+        i is i + 1
+    if k > 13:
+        local r is 0
+        loop while i < 15:
+            r is r * 16
+            if i < k:
+                r is r + ds[i]
+            i is i + 1
+        loop while i < k:
+            if ds[i] != 0:
+                r is r + 0.5
+                i is k
+            i is i + 1
+        m is m * 256 + r
+        e is e + 4 * (k - 15)
+    # m * 2^e in steps that stay finite until the true result is not
+    loop while e > 0:
+        local s is min of [e, 512]
+        m is m * (pow of [2, s])
+        e is e - s
+    loop while e < 0 and m != 0:
+        local s is min of [0 - e, 512]
+        m is m / (pow of [2, s])
+        e is e + s
+    return m
+
 # Lua's string->number conversion (lobject.c l_str2d / l_str2int), or null.
 define lr_str2num(s) as:
     local n is len of s
@@ -336,20 +412,27 @@ define lr_str2num(s) as:
         local m is 0
         local ex is 0
         local any is 0
+        local isf is 0
+        local ds is []
         loop while i < n and lr_hexval of (s[i]) >= 0:
             m is m * 16 + (lr_hexval of (s[i]))
+            if len of ds > 0 or s[i] != "0":
+                append of [ds, lr_hexval of (s[i])]
             any is 1
             i is i + 1
         if i < n and s[i] == ".":
+            isf is 1
             i is i + 1
             loop while i < n and lr_hexval of (s[i]) >= 0:
-                m is m * 16 + (lr_hexval of (s[i]))
+                if len of ds > 0 or s[i] != "0":
+                    append of [ds, lr_hexval of (s[i])]
                 ex is ex - 4
                 any is 1
                 i is i + 1
         if any == 0:
             return null
         if i < n and (s[i] == "p" or s[i] == "P"):
+            isf is 1
             i is i + 1
             local es is 1
             if i < n and (s[i] == "+" or s[i] == "-"):
@@ -365,9 +448,11 @@ define lr_str2num(s) as:
             ex is ex + es * ev
         if i != n:
             return null
+        # a hex integer wraps modulo 2^64 in Lua (gaps/no-int64.eigs); a hex
+        # float is strtod's
         local v is m
-        if ex != 0:
-            v is m * (pow of [2, ex])
+        if isf:
+            v is lr_hexd of [ds, ex]
         if neg:
             return 0 - v
         return v
@@ -585,7 +670,7 @@ define lr_next(t, k) as:
         if k != null:
             j is (list_index_of of [hk, k]) + 1
             if j == 0:
-                lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+                lr_throw of ("invalid key to 'next'")
         if j < len of hk:
             return [hk[j], t.h[hk[j]]]
         k is null
@@ -594,7 +679,7 @@ define lr_next(t, k) as:
     if k != null:
         j2 is (list_index_of of [ok, lr_okey of (k)]) + 1
         if j2 == 0:
-            lr_throw of ((lr_where of (1)) + "invalid key to 'next'")
+            lr_throw of ("invalid key to 'next'")
     if j2 < len of ok:
         local p is t.o[ok[j2]]
         return [p[0], p[1]]
@@ -680,6 +765,16 @@ define lr_gset(name, v, site) as:
 # as lua_resume restarts the count, so a count never drops below the base.
 lr_cc is {"n": 1, "base": 1}
 
+# A protected call that caught an error restores the count it began with
+# (ldo.c luaD_rawrunprotected). If its coroutine yielded and was resumed
+# inside it, its C frame is gone: the error is caught while unrolling,
+# whose own protected run began at the resume's level (ldo.c precover).
+define lr_ccrestore(ccn, ccg) as:
+    if lr_co_cur[0].rg != ccg:
+        lr_cc.n is lr_cc.base
+    else:
+        lr_cc.n is ccn
+
 define lr_ccinc(site) as:
     lr_cc.n is lr_cc.n + 1
     if lr_cc.n >= 200:
@@ -710,7 +805,7 @@ define lr_call(f, args, site) as:
             # a Lua function that failed (most often a call-depth overflow on
             # entry) is dropped: the error belongs to the calling line
             local lua is lr_upvals of (f) != null
-            if lua and not (type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1)):
+            if lua and not (type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1 or e.EXIT == 1)):
                 list_truncate of [lr_stk, len of lr_stk - 1]
                 list_truncate of [lr_fstk, len of lr_fstk - 1]
             lr_eserr of [e, site, lua]
@@ -742,7 +837,7 @@ define lr_ccall(f, args, site) as:
 # unwinding pass through unchanged. `here`: Lua code at that site raised it
 # (not a C function called there), so a message handler runs at that line.
 define lr_eserr(e, site, here) as:
-    if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1):
+    if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1 or e.EXIT == 1):
         throw of (e)
     local pos is ""
     if site != 0:
@@ -825,7 +920,14 @@ define lr_arith_meta(op, a, b, site) as:
             bad is a
             desc is sd[1]
         elif type of b == "num":
-            lr_rterr of [site, "number has no integer representation"]
+            # ldebug.c luaG_tointerror: the first operand with no integer
+            # value is named (varinfo)
+            local dn is sd[2]
+            if lr_toint of (a) == null:
+                dn is sd[1]
+            if dn != "":
+                dn is " (" + dn + ")"
+            lr_rterr of [site, "number" + dn + " has no integer representation"]
     elif lr_arnum of (a) == null:
         bad is a
         desc is sd[1]
@@ -1221,9 +1323,25 @@ define lr_stub(name) as:
 
 define lr_b_print(A) as:
     local parts is []
+    local meta is false
     for v in A:
-        append of [parts, lr_tostr of (v)]
-    print of (join of [parts, "\t"])
+        if type of v == "dict":
+            meta is true
+    if not meta:
+        for v in A:
+            append of [parts, lr_tostr of (v)]
+        print of (join of [parts, "\t"])
+        return []
+    # lbaselib.c luaB_print writes each value as it converts it, so a
+    # __tostring that fails leaves the values before it written
+    local i is 0
+    for v in A:
+        local s is lr_tostr of (v)
+        if i > 0:
+            write of "\t"
+        write of s
+        i is i + 1
+    write of "\n"
     return []
 
 define lr_b_type(A) as:
@@ -1252,22 +1370,44 @@ define lr_b_tonumber(A) as:
         lr_argerr of [1, "tonumber", "string expected, got " + (lr_typearg of [A, 0])]
     if bs < 2 or bs > 36:
         lr_argerr of [2, "tonumber", "base out of range"]
-    local s is str_lower of (trim of v)
+    # lbaselib.c b_str2int: spaces, an optional sign, alphanumeric digits
+    # below the base, spaces, and nothing else (the value wraps modulo
+    # 2^64 in Lua: gaps/no-int64.eigs)
+    local s is v
+    local n is len of s
+    local i is 0
+    loop while i < n and lr_isspace of (s[i]):
+        i is i + 1
     local neg is 0
-    if len of s > 0 and s[0] == "-":
+    if i < n and s[i] == "-":
         neg is 1
-        s is s[1:]
-    if len of s == 0:
-        return [null]
+        i is i + 1
+    elif i < n and s[i] == "+":
+        i is i + 1
     local acc is 0
-    for i in range of (len of s):
-        local d is lr_hexval of (s[i])
+    local nd is 0
+    loop while i < n:
         local o is ord of s[i]
-        if o >= 97 and o <= 122:
+        local d is -1
+        if o >= 48 and o <= 57:
+            d is o - 48
+        elif o >= 97 and o <= 122:
             d is o - 87
-        if d < 0 or d >= bs:
+        elif o >= 65 and o <= 90:
+            d is o - 55
+        if d < 0:
+            break
+        if d >= bs:
             return [null]
         acc is acc * bs + d
+        nd is nd + 1
+        i is i + 1
+    if nd == 0:
+        return [null]
+    loop while i < n and lr_isspace of (s[i]):
+        i is i + 1
+    if i != n:
+        return [null]
     if neg:
         return [0 - acc]
     return [acc]
@@ -1297,19 +1437,25 @@ define lr_b_pcall(A) as:
         lr_argerr of [1, "pcall", "value expected"]
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
+    local ef is lr_co_cur[0].ef
+    local nef is len of ef
+    append of [ef, null]
     local r is null
     try:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
+        list_truncate of [ef, nef]
         local rr is lr_co_cur[0]
         rr.nny is nny
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         return [false, lr_errobj of (e)]
+    list_truncate of [ef, nef]
     return concat of [[true], r]
 
 define lr_b_xpcall(A) as:
@@ -1319,11 +1465,15 @@ define lr_b_xpcall(A) as:
         lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
+    local ef is lr_co_cur[0].ef
+    local nef is len of ef
+    append of [ef, h]
     local r is null
     try:
         r is lr_call of [lr_arg of [A, 0], list_slice of [A, 2, len of A], 0]
     catch e:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
         local rr is lr_co_cur[0]
         rr.nny is nny
@@ -1334,10 +1484,12 @@ define lr_b_xpcall(A) as:
         if type of e == "dict" and type of e.site == "num":
             hs is e.site
         local hv is lr_xp_handle of [h, v, 0, hs]
+        list_truncate of [ef, nef]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         return [false, hv]
+    list_truncate of [ef, nef]
     return concat of [[true], r]
 
 # The message handler sees each error, its own included (ldebug.c
@@ -1348,6 +1500,7 @@ define lr_xp_handle(h, v, n, site) as:
         return "error in error handling"
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
     try:
         # called from the erring Lua frame (at its line), else from C; it
@@ -1366,11 +1519,11 @@ define lr_xp_handle(h, v, n, site) as:
     catch e:
         local rr is lr_co_cur[0]
         rr.nny is nny
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         local hs is 0
         if type of e == "dict" and type of e.site == "num":
             hs is e.site
@@ -1718,6 +1871,34 @@ define lr_t_unpack(A) as:
     append of [out, lr_index of [t, j, 0]]
     return out
 
+# An integer in [-2^63, 2^63) as [hi, lo]: hi signed, lo in [0, 2^32),
+# value hi * 2^32 + lo, every part exact. ltablib.c's overflow checks are
+# int64 arithmetic on the C constant LUA_MAXINTEGER, which no double holds
+# (math.maxinteger maps to 2^63, gaps/no-int64.eigs); on limbs they are
+# computed exactly.
+define lr_i64(x) as:
+    local hi is floor of (x / 4294967296)
+    return [hi, x - hi * 4294967296]
+
+# a + b on limbs (no int64 overflow by the callers' checks).
+define lr_i64add(a, b) as:
+    local lo is a[1] + b[1]
+    local hi is a[0] + b[0]
+    if lo >= 4294967296:
+        lo is lo - 4294967296
+        hi is hi + 1
+    return [hi, lo]
+
+define lr_i64neg(a) as:
+    if a[1] == 0:
+        return [0 - a[0], 0]
+    return [-1 - a[0], 4294967296 - a[1]]
+
+define lr_i64lt(a, b) as:
+    return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
+
+lr_i64max is [2147483647, 4294967295]
+
 # table.move (ltablib.c tmove), through metamethods like lua_geti/lua_seti.
 define lr_t_move(A) as:
     local a1 is lr_arg of [A, 0]
@@ -1731,11 +1912,14 @@ define lr_t_move(A) as:
     if lr_arg of [A, 4] != null:
         a2 is A[4]
     if e >= f:
-        if not (f > 0 or e < 9223372036854775807 + f):
+        # f > 0 || e < LUA_MAXINTEGER + f
+        if not (f > 0 or lr_i64lt of [lr_i64 of (e), lr_i64add of [lr_i64max, lr_i64 of (f)]]):
             lr_argerr of [3, "move", "too many elements to move"]
-        local n is e - f + 1
-        if not (t <= 9223372036854775807 - n + 1):
+        # n = e - f + 1; t <= LUA_MAXINTEGER - n + 1
+        local nl is lr_i64add of [lr_i64add of [lr_i64 of (e), lr_i64neg of (lr_i64 of (f))], [0, 1]]
+        if lr_i64lt of [lr_i64add of [lr_i64add of [lr_i64max, lr_i64neg of (nl)], [0, 1]], lr_i64 of (t)]:
             lr_argerr of [4, "move", "destination wrap around"]
+        local n is e - f + 1
         if t > e or t <= f or (len of A > 4 and not (lr_eq of [a1, a2, 0])):
             local i is 0
             loop while i < n:
@@ -1930,7 +2114,12 @@ define lr_os_exit(A) as:
             c is 1
     else:
         c is lr_optint of [A, 0, "exit", 0]
-    lr_exit of (c - 256 * (floor of (c / 256)))
+    c is c - 256 * (floor of (c / 256))
+    # lua_close (a true second argument) closes the pending to-be-closed
+    # variables first: unwind to lr_main, closing them on the way
+    if lr_t of (lr_arg of [A, 1]):
+        throw of ({"EXIT": 1, "code": c, "ev": null})
+    lr_exit of (c)
 
 # os.clock: processor time is not observable here; the seconds since the
 # program started stand in (its value is out of scope, GAPS.md).
@@ -1990,17 +2179,26 @@ define lr_need_compiler as:
         load_file of (lr_st.srcdir + "/emit.eigs")
         lr_st.compiler is 1
 
-# Compile Lua source text into a function whose globals index env:
-# [fn], or [null, message] on a syntax error.
-define lr_compile(text, chunkid, env) as:
+# Compile Lua source into a function whose globals index env: [fn], or
+# [null, message] on a syntax error. src is the text, or a lexer stream
+# (lex_stream) for a reader chunk; a Lua error raised by the reader is the
+# message (ldo.c luaD_protectedparser).
+define lr_compile(src, source, env) as:
+    local chunkid is lr_chunkid of (source)
     lr_need_compiler of null
     local code is null
+    local depth is len of lr_stk
+    local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
+    local nny is lr_co_cur[0].nny
     try:
-        local tk is lua_lex of (text)
+        local tk is src
+        if type of src == "str":
+            tk is lua_lex of (src)
         local ast is lua_parse of (tk)
         local r is emit_chunk of [ast, len of lr_st.sites]
         for st in r[1]:
-            append of [lr_st.sites, [st[0], st[1], st[2], chunkid]]
+            append of [lr_st.sites, [st[0], st[1], st[2], chunkid, source]]
         code is r[0]
     catch e:
         if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
@@ -2010,14 +2208,37 @@ define lr_compile(text, chunkid, env) as:
         if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
             lr_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + chunkid + ":" + (str of e[2]) + "\n")
             lr_exit of 3
+        if type of e == "dict" and e.LUAERR == 1:
+            local hs is 0
+            if type of e.site == "num":
+                hs is e.site
+            local ev is lr_errfunc of [e.v, hs]
+            local rr is lr_co_cur[0]
+            rr.nny is nny
+            list_truncate of [lr_stk, depth]
+            list_truncate of [lr_fstk, depth]
+            lr_ccrestore of [ccn, ccg]
+            return [null, ev]
         throw of (e)
     local L is eval of code
     local cell is [env]
     return [L of (cell)]
 
+# ldo.c checkmode: the first character tells a binary chunk (LUA_SIGNATURE)
+# from text; null when the mode allows it.
+define lr_loadmode(first, mode) as:
+    local kind is "text"
+    if len of first > 0 and ord of first[0] == 27:
+        kind is "binary"
+    if index_of of [mode, kind[0]] < 0:
+        return "attempt to load a " + kind + " chunk (mode is '" + mode + "')"
+    if kind == "binary":
+        lr_unsup of ["loading a binary chunk", 0]
+    return null
+
 define lr_b_load(A) as:
     # lbaselib.c luaB_load: a string (or number) chunk, else a reader
-    # function; the mode is checked when loading starts
+    # function; the mode is checked on the first character
     local chunk is lr_arg of [A, 0]
     local mode is "bt"
     if lr_arg of [A, 2] != null:
@@ -2025,31 +2246,59 @@ define lr_b_load(A) as:
     local env is lr_G
     if len of A >= 4:
         env is A[3]
-    local text is ""
-    local name is ""
     if type of chunk == "str" or type of chunk == "num":
-        text is lr_tostr of (chunk)
-        name is text
+        local text is lr_tostr of (chunk)
+        local name is text
         if lr_arg of [A, 1] != null:
             name is lr_checkstr of [A, 1, "load"]
-    else:
-        name is "=(load)"
-        if lr_arg of [A, 1] != null:
-            name is lr_checkstr of [A, 1, "load"]
-        if type of chunk != "fn" and type of chunk != "builtin":
-            lr_argerr of [1, "load", "function expected, got " + (lr_typearg of [A, 0])]
-        local parts is []
-        loop while 1:
-            local piece is lr_call1 of [chunk, [], 0]
-            if piece == null or piece == "":
-                break
-            if type of piece != "str" and type of piece != "num":
-                return [null, (lr_where of (1)) + "reader function must return a string"]
-            append of [parts, lr_tostr of (piece)]
-        text is join of [parts, ""]
-    if index_of of [mode, "t"] < 0:
-        return [null, "attempt to load a text chunk (mode is '" + mode + "')"]
-    return lr_compile of [text, lr_chunkid of (name), env]
+        local me is lr_loadmode of [text, mode]
+        if me != null:
+            return [null, me]
+        return lr_compile of [text, name, env]
+    local name is "=(load)"
+    if lr_arg of [A, 1] != null:
+        name is lr_checkstr of [A, 1, "load"]
+    if type of chunk != "fn" and type of chunk != "builtin":
+        lr_argerr of [1, "load", "function expected, got " + (lr_typearg of [A, 0])]
+    # lbaselib.c generic_reader: nil or "" ends the chunk
+    define rd(x) as:
+        local piece is lr_call1 of [chunk, [], 0]
+        if piece == null:
+            return null
+        if type of piece != "str" and type of piece != "num":
+            lr_throw of ((lr_where of (1)) + "reader function must return a string")
+        return lr_tostr of (piece)
+    # the first read is protected too (luaD_protectedparser)
+    local first is null
+    local depth is len of lr_stk
+    local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
+    local nny is lr_co_cur[0].nny
+    try:
+        first is rd of null
+    catch e:
+        if type of e == "dict" and e.LUAERR == 1:
+            local hs is 0
+            if type of e.site == "num":
+                hs is e.site
+            local ev is lr_errfunc of [e.v, hs]
+            local rr is lr_co_cur[0]
+            rr.nny is nny
+            list_truncate of [lr_stk, depth]
+            list_truncate of [lr_fstk, depth]
+            lr_ccrestore of [ccn, ccg]
+            return [null, ev]
+        throw of (e)
+    if first == "":
+        first is null
+    local f0 is ""
+    if first != null:
+        f0 is first
+    local me is lr_loadmode of [f0, mode]
+    if me != null:
+        return [null, me]
+    lr_need_compiler of null
+    return lr_compile of [lex_stream of [rd, first], name, env]
 
 define lr_b_loadfile(A) as:
     local fname is lr_arg of [A, 0]
@@ -2071,7 +2320,7 @@ define lr_b_loadfile(A) as:
             text is ""
         else:
             text is "--" + text[nl:]
-    return lr_compile of [text, lr_chunkid of ("@" + fname), env]
+    return lr_compile of [text, "@" + fname, env]
 
 define lr_b_dofile(A) as:
     local r is lr_b_loadfile of ([lr_arg of [A, 0]])
@@ -2228,15 +2477,26 @@ define lr_tbc_close(tb, err, site) as:
 # luaD_pcall, lua_closethread), so __close is called from C: site 0.
 define lr_tbc_unwind(tb, e, site) as:
     if not tb[1]:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and e.EXIT == 1:
+            # os.exit(c, true): lua_close closes the main thread's pending
+            # variables with no error, and an error in one is passed to the
+            # next (ldo.c luaD_closeprotected); a coroutine's are not closed
+            if lr_co_cur[0].main:
+                try:
+                    lr_tbc_close of [tb, e.ev, 0]
+                catch e2:
+                    if type of e2 == "dict" and e2.EXIT == 1:
+                        throw of (e2)
+                    e.ev is lr_errobj of (e2)
+        elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
         else:
             lr_tbc_close of [tb, lr_errobj of (e), 0]
     throw of (e)
 
 # ------------------------------------------------------------ debug upvalues
-# A Lua function answers a call with a dict (instead of its argument list)
-# with [cells, names]: its upvalue cells and their names, in Lua's upvalue
+# A Lua function answers a call with null (instead of its argument list)
+# with [cells, names, ...]: its upvalue cells and their names, in Lua's upvalue
 # order (first reference). Only functions the emitter wrote (named f<id>)
 # are asked. A cell gets an id the first time upvalueid asks for one.
 
@@ -2251,7 +2511,7 @@ define lr_upvals(f) as:
     local s is str of f
     if len of s < 6 or s[0:5] != "<fn f" or not (lr_isdigit of (s[5])):
         return null
-    return f of ({"UPQ": 1})
+    return f of (null)
 
 define lr_d_getupvalue(A) as:
     local f is lr_arg of [A, 0]
@@ -2290,16 +2550,21 @@ define lr_d_upvalueid(A) as:
 # function. Only 'currentline', 'short_src', 'source' and 'what' are filled.
 
 define lr_d_frame(level) as:
-    local n is len of lr_stk
+    return lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
+
+# Level `level` of a thread whose call-site stack is stk (main: the main
+# thread, whose bottom level is the C call of the main chunk).
+define lr_d_framet(level, stk, main) as:
+    local n is len of stk
     if level == 0:
         return {"c": true}
-    if level < 0 or level > n or (level == n and not lr_co_cur[0].main):
+    if level < 0 or level > n or (level == n and not main):
         return null
-    local site is lr_stk[n - level]
+    local site is stk[n - level]
     if site == 0:
         return {"c": true}
-    local main is lr_co_cur[0].main and n - level == 1
-    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "main": main}
+    local ismain is main and n - level == 1
+    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "source": lr_site_source of (site), "main": ismain}
 
 define lr_d_getinfo(A) as:
     local a0 is lr_arg of [A, 0]
@@ -2322,7 +2587,7 @@ define lr_d_getinfo(A) as:
             return [t]
         lr_rawset of [t, "currentline", fr.line, 0]
         lr_rawset of [t, "short_src", fr.chunk, 0]
-        lr_rawset of [t, "source", "@" + fr.chunk, 0]
+        lr_rawset of [t, "source", fr.source, 0]
         if fr.main:
             lr_rawset of [t, "what", "main", 0]
         else:
@@ -2344,7 +2609,7 @@ define lr_d_getinfo(A) as:
         return [t]
     local ch is lr_site_chunk of (u[2])
     lr_rawset of [t, "short_src", ch, 0]
-    lr_rawset of [t, "source", "@" + ch, 0]
+    lr_rawset of [t, "source", lr_site_source of (u[2]), 0]
     if u[3]:
         lr_rawset of [t, "what", "main", 0]
         lr_rawset of [t, "linedefined", 0, 0]
@@ -2360,17 +2625,17 @@ define lr_d_getinfo(A) as:
 # function is named by its global name, else "main chunk", else
 # "function <src:line>" for a Lua function, else "?". Names from the calling
 # code (namewhat) are out of scope (GAPS.md).
-define lr_tb_last() as:
-    local n is len of lr_stk
-    if lr_co_cur[0].main:
+define lr_tb_last(stk, main) as:
+    local n is len of stk
+    if main:
         return n
     return n - 1
 
-define lr_tb_fname(level, fr) as:
-    local n is len of lr_stk
+define lr_tb_fname(level, fr, stk, fstk) as:
+    local n is len of stk
     local f is null
     if n - 1 - level >= 0:
-        f is lr_fstk[n - 1 - level]
+        f is fstk[n - 1 - level]
     local g is lr_globalfuncname of (f)
     if g != null:
         return "function '" + g + "'"
@@ -2384,25 +2649,46 @@ define lr_tb_fname(level, fr) as:
     return "function <" + (lr_site_chunk of (u[2])) + ":" + (str of (lr_site_line of (u[2]))) + ">"
 
 define lr_d_traceback(A) as:
+    # ldblib.c db_traceback: the levels of thread L1 (the running one by
+    # default); the default level is 1 for the running thread, else 0
     local first is 0
+    local co is lr_co_cur
     if lr_isthread of (lr_arg of [A, 0]):
         first is 1
+        co is A[0]
     local msg is lr_arg of [A, first]
     if msg != null and type of msg != "str" and type of msg != "num":
         return [msg]
-    local level is lr_optint of [A, first + 1, "traceback", 1]
+    local stk is lr_stk
+    local fstk is lr_fstk
+    local dl is 1
+    local sh is 0
+    if co[0].id != lr_co_cur[0].id:
+        stk is co[0].stk
+        fstk is co[0].fstk
+        dl is 0
+        # a coroutine that died raising in a Lua function: that function is
+        # its level 0, at the line it raised at
+        local n is len of stk
+        if co[0].status == "dead" and co[0].errsite != null and n > 0 and lr_upvals of (fstk[n - 1]) != null:
+            stk is concat of [stk, [co[0].errsite]]
+            fstk is concat of [fstk, [null]]
+            sh is 1
+    local main is co[0].main
+    local level is lr_optint of [A, first + 1, "traceback", dl]
+    level is level + sh
     local parts is []
     if msg != null:
         append of [parts, lr_tostr of (msg)]
         append of [parts, "\n"]
     append of [parts, "stack traceback:"]
-    local last is lr_tb_last of null
+    local last is lr_tb_last of [stk, main]
     local limit2show is -1
     if last - level > 21:
         limit2show is 10
     local k is level
     loop while k >= 0 and k <= last:
-        local fr is lr_d_frame of (k)
+        local fr is lr_d_framet of [k, stk, main]
         if fr == null:
             break
         k is k + 1
@@ -2415,7 +2701,7 @@ define lr_d_traceback(A) as:
                 append of [parts, "\n\t[C]: in "]
             else:
                 append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in "]
-            append of [parts, lr_tb_fname of [k - 1, fr]]
+            append of [parts, lr_tb_fname of [k - 1, fr, stk, fstk]]
         limit2show is limit2show - 1
     return [join of [parts, ""]]
 

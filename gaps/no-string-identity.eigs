@@ -1,18 +1,19 @@
 # EigenScript gap: a string is a value with no object identity, so Lua's
 # lua_topointer of a string (string.format("%p", s), manual 6.4.1: "a unique
-# string identifier") cannot be the same for one long string and different
-# for an equal copy. EigenLua hashes a short string's bytes (Lua interns
-# those, so equal is identical) and gives each %p of a long string a fresh
-# number, so even one long string formats differently twice. Not a #1286 row.
-# Lua:  local s = string.rep("a", 100); local r = string.gsub(s, "b", "c")
-#       print(string.format("%p", s) == string.format("%p", r)) -> true
-#       (and string.format("%p", s) == string.format("%p", s) -> true)
+# string identifier") cannot tell one long string from an equal copy made
+# elsewhere. EigenLua's direct translation names the value: equal strings get
+# one id (src/rt_format.eigs lr_fx_strptr), so a string formats alike every
+# time (Lua agrees), and an equal long string built by concatenation formats
+# like the original (Lua gives it its own address). Not a #1286 row.
+# Lua:  local s1 = string.rep("0123456789", 5)
+#       local sd = "0123456789" .. string.rep("0123456789", 4)
+#       print(string.format("%p", s1) ~= string.format("%p", sd)) -> true
 # Expected: an identity (address or id) for a string value, or a builtin
 # telling one string from an equal copy.
 # Actual 686d3b7d: equal strings are indistinguishable, and the builtin index
 # has no identity/address entry:
 #   eigenscript --api | grep -ciE 'address|ptr|id_of|same_object'  ->  0
-# Rows: pm.lua (413, 416, 426), literals.lua (225-228, unspecified), S.
+# Rows: literals.lua (230: getadd(sd) ~= a1), S.
 a is "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 b is "aaaaaaaaaaaaaaaaaaaaaaaaa" + "aaaaaaaaaaaaaaaaaaaaaaaaa"
 print of (a == b)

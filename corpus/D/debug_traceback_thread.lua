@@ -1,0 +1,25 @@
+-- surface: debug.traceback(thread, msg, level) walks that thread's stack (ldblib.c db_traceback): a suspended coroutine from its yield, a coroutine that died raising from the raising function, a finished or fresh one has no levels; the default level is 0 for another thread and 1 for the running one
+-- g and f are globals: traceback names called functions by global name (names from the calling code are out of scope)
+function g() coroutine.yield(1) end
+function f(x) g() return x end
+local co = coroutine.create(function(a) f(a) end)
+coroutine.resume(co, 1)
+print(debug.traceback(co, "msg"))
+print(debug.traceback(co))
+print(debug.traceback(co, "lvl1", 1))
+print(debug.traceback(co, nil, 2))
+print(debug.traceback(co, {}) ~= nil)
+local dead = coroutine.create(function() local t = nil; return t.x end)
+print(coroutine.resume(dead))
+print(debug.traceback(dead, "dead"))
+local done = coroutine.create(function() return 1 end)
+coroutine.resume(done)
+print(debug.traceback(done, "done"))
+local fresh = coroutine.create(print)
+print(debug.traceback(fresh, "fresh"))
+local inner
+inner = coroutine.create(function()
+  print(debug.traceback(coroutine.running(), "self"))
+  print(debug.traceback(co, "other from coroutine"))
+end)
+coroutine.resume(inner)

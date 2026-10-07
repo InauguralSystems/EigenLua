@@ -22,7 +22,7 @@ lr_co_nid is {"n": 0}
 
 define lr_co_new(f, main) as:
     lr_co_nid.n is lr_co_nid.n + 1
-    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0}]
+    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0, "ef": [], "rg": 0}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]
@@ -45,10 +45,17 @@ define lr_co_runner(co) as:
             local vals is lr_call of [r.f, r.transfer, 0]
             res is concat of [[true], vals]
         catch e:
-            if type of e == "dict" and e.COCLOSE == 1:
+            if type of e == "dict" and e.EXIT == 1:
+                # os.exit(c, true) inside the coroutine: on to the main thread
+                r.exitx is e
+                res is [true]
+            elif type of e == "dict" and e.COCLOSE == 1:
                 res is [true]
             else:
                 res is [false, lr_errobj of (e)]
+                # the line a Lua function raised at stays its current line
+                if type of e == "dict" and type of e.site == "num":
+                    r.errsite is e.site
                 r.err is res
         r.status is "dead"
         r.result is res
@@ -77,6 +84,8 @@ define lr_co_resume(co, args) as:
     pr.fstk is lr_fstk
     r.status is "running"
     r.transfer is args
+    # resumes so far (lr_ccrestore)
+    r.rg is r.rg + 1
     r.resumer is task_self of null
     lr_co_cur is co
     lr_stk is r.stk
@@ -95,6 +104,8 @@ define lr_co_resume(co, args) as:
     lr_cc.n is ccn
     lr_cc.base is ccb
     pr.status is "running"
+    if r.exitx != null:
+        throw of (r.exitx)
     return r.result
 
 define lr_co_check(A, fname) as:
