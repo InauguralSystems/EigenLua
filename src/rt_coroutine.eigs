@@ -16,11 +16,13 @@
 # because an assignment inside a function binds a new local unless the
 # global already exists when the function is compiled.
 lr_stk is []
+# lr_fstk parallels lr_stk: the function each entry called.
+lr_fstk is []
 lr_co_nid is {"n": 0}
 
 define lr_co_new(f, main) as:
     lr_co_nid.n is lr_co_nid.n + 1
-    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "main": main, "err": null, "nny": 0}]
+    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]
@@ -68,11 +70,13 @@ define lr_co_resume(co, args) as:
     r.depth is pr.depth + 1
     pr.status is "normal"
     pr.stk is lr_stk
+    pr.fstk is lr_fstk
     r.status is "running"
     r.transfer is args
     r.resumer is task_self of null
     lr_co_cur is co
     lr_stk is r.stk
+    lr_fstk is r.fstk
     if r.tid == null:
         r.tid is task_spawn of (lr_co_runner of (co))
         task_detach of r.tid
@@ -81,6 +85,7 @@ define lr_co_resume(co, args) as:
     task_recv of null
     lr_co_cur is prv
     lr_stk is pr.stk
+    lr_fstk is pr.fstk
     pr.status is "running"
     return r.result
 
@@ -112,6 +117,7 @@ define lr_co_yield(A) as:
     r.result is concat of [[true], A]
     r.status is "suspended"
     r.stk is lr_stk
+    r.fstk is lr_fstk
     task_send of [r.resumer, 1]
     task_recv of null
     if r.closing == true:

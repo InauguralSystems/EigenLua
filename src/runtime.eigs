@@ -14,6 +14,8 @@
 
 lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null, "curf": null}
 lr_stk is []
+# lr_fstk parallels lr_stk: the function each entry called.
+lr_fstk is []
 lr_fnreg is []
 
 # ------------------------------------------------------------ process edges
@@ -657,8 +659,10 @@ define lr_call(f, args, site) as:
         if site == 0:
             lr_st.curf is f
         append of [lr_stk, site]
+        append of [lr_fstk, f]
         local r is f of (args)
         list_truncate of [lr_stk, len of lr_stk - 1]
+        list_truncate of [lr_fstk, len of lr_fstk - 1]
         lr_st.curf is pf
         return r
     local h is lr_metafield of [f, "__call"]
@@ -1215,6 +1219,7 @@ define lr_b_pcall(A) as:
         local rr is lr_co_cur[0]
         rr.nny is nny
         list_truncate of [lr_stk, depth]
+        list_truncate of [lr_fstk, depth]
         return [false, lr_errobj of (e)]
     return concat of [[true], r]
 
@@ -1237,6 +1242,7 @@ define lr_b_xpcall(A) as:
         local v is lr_errobj of (e)
         local hv is lr_xp_handle of [h, v, 0]
         list_truncate of [lr_stk, depth]
+        list_truncate of [lr_fstk, depth]
         return [false, hv]
     return concat of [[true], r]
 
@@ -1256,6 +1262,7 @@ define lr_xp_handle(h, v, n) as:
         if type of e == "dict" and e.COCLOSE == 1:
             throw of (e)
         list_truncate of [lr_stk, depth]
+        list_truncate of [lr_fstk, depth]
         return lr_xp_handle of [h, lr_errobj of (e), n + 1]
 
 define lr_b_select(A) as:
@@ -2173,7 +2180,7 @@ define lr_d_frame(level) as:
     local n is len of lr_stk
     if level == 0:
         return {"c": true}
-    if level < 0 or level > n:
+    if level < 0 or level > n or (level == n and not lr_co_cur[0].main):
         return null
     local site is lr_stk[n - level]
     if site == 0:
@@ -2235,7 +2242,34 @@ define lr_d_getinfo(A) as:
         lr_rawset of [t, "lastlinedefined", u[4], 0]
     return [t]
 
-# debug.traceback: the message and one "chunk:line:" entry per Lua level.
+# debug.traceback (lauxlib.c luaL_traceback): the first LEVELS1 (10) and last
+# LEVELS2 (11) levels, the rest replaced by "...\t(skipping N levels)". A
+# function is named by its global name, else "main chunk", else
+# "function <src:line>" for a Lua function, else "?". Names from the calling
+# code (namewhat) are out of scope (GAPS.md).
+define lr_tb_last() as:
+    local n is len of lr_stk
+    if lr_co_cur[0].main:
+        return n
+    return n - 1
+
+define lr_tb_fname(level, fr) as:
+    local n is len of lr_stk
+    local f is null
+    if n - 1 - level >= 0:
+        f is lr_fstk[n - 1 - level]
+    local g is lr_globalfuncname of (f)
+    if g != null:
+        return "function '" + g + "'"
+    if fr.c:
+        return "?"
+    if fr.main:
+        return "main chunk"
+    local u is lr_upvals of (f)
+    if u == null:
+        return "?"
+    return "function <" + (lr_site_chunk of (u[2])) + ":" + (str of (lr_site_line of (u[2]))) + ">"
+
 define lr_d_traceback(A) as:
     local first is 0
     if lr_isthread of (lr_arg of [A, 0]):
@@ -2249,18 +2283,27 @@ define lr_d_traceback(A) as:
         append of [parts, lr_tostr of (msg)]
         append of [parts, "\n"]
     append of [parts, "stack traceback:"]
+    local last is lr_tb_last of null
+    local limit2show is -1
+    if last - level > 21:
+        limit2show is 10
     local k is level
-    loop while 1:
+    loop while k >= 0 and k <= last:
         local fr is lr_d_frame of (k)
         if fr == null:
             break
-        if fr.c:
-            append of [parts, "\n\t[C]: in ?"]
-        elif fr.main:
-            append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in main chunk"]
-        else:
-            append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in function <?>"]
         k is k + 1
+        if limit2show == 0:
+            local nskip is last - k - 11 + 1
+            append of [parts, "\n\t...\t(skipping " + (str of nskip) + " levels)"]
+            k is k + nskip
+        else:
+            if fr.c:
+                append of [parts, "\n\t[C]: in "]
+            else:
+                append of [parts, "\n\t" + fr.chunk + ":" + (str of fr.line) + ": in "]
+            append of [parts, lr_tb_fname of [k - 1, fr]]
+        limit2show is limit2show - 1
     return [join of [parts, ""]]
 
 # debug.getmetatable/setmetatable: no __metatable protection; only tables
