@@ -638,25 +638,47 @@ define em_function(G, fn) as:
     append of [G.funcs, join of [E.out, "\n"]]
 
 define em_block(E, stats) as:
-    for s in stats:
-        if s.k == "Label":
-            for s2 in stats:
-                if s2.k == "Local" and list_contains of [s2.attribs, "close"]:
-                    em_unsup of ["to-be-closed variable in a block with labels", s2.line]
-            em_block_labels of [E, stats]
-            return null
-    em_stats of [E, stats, 0, null]
+    em_block_tail of [E, stats, null]
 
 # A block whose last act, inside every to-be-closed region it opens, is to
-# set tail.v to the truth of tail.cond: a repeat-until condition sees the
-# body's locals and runs before they are closed.
+# set tail.v to the truth of tail.cond (when tail is not null): a
+# repeat-until condition sees the body's locals and runs before they are
+# closed.
 define em_block_tail(E, stats, tail) as:
+    local haslabel is false
     for s in stats:
         if s.k == "Label":
-            em_block of [E, stats]
+            haslabel is true
+    if not haslabel:
+        em_stats of [E, stats, 0, tail]
+        return null
+    local p is -1
+    local i is 0
+    loop while i < len of stats and p < 0:
+        if stats[i].k == "Local" and list_contains of [stats[i].attribs, "close"]:
+            p is i
+        i is i + 1
+    if p < 0:
+        em_block_labels of [E, stats]
+        if tail != null:
             em_line of [E, tail.v + " is " + (em_cond of [E, tail.cond])]
-            return null
-    em_stats of [E, stats, 0, tail]
+        return null
+    # A to-be-closed local in a block with labels: the rest of the block
+    # after it is one region (a nested block, with its own labels), closed
+    # on normal exit, on a goto or break that leaves it, and on an error.
+    # Labels at the end of the block (only void statements follow, so no
+    # local is in scope there) stay outside the region: a goto to one
+    # leaves the region. A repeat-until body has none (its condition sees
+    # the locals).
+    local q is len of stats
+    if tail == null:
+        loop while q > p + 1 and stats[q - 1].k == "Label":
+            q is q - 1
+    local st2 is list_slice of [stats, 0, p + 1]
+    append of [st2, {"k": "TbcRest", "s": stats[p], "rest": list_slice of [stats, p + 1, q], "tail": tail, "line": stats[p].line}]
+    for s in list_slice of [stats, q, len of stats]:
+        append of [st2, s]
+    em_block_labels of [E, st2]
 
 # Statements from index i; a to-be-closed local wraps the rest of its block.
 define em_stats(E, stats, i, tail) as:
@@ -684,6 +706,26 @@ define em_tbc_region(E, s, stats, from, tail) as:
     em_indent of (E)
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
     em_stats of [E, stats, from, tail]
+    list_truncate of [E.tbc, len of E.tbc - 1]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
+    em_dedent of (E)
+    em_line of [E, "catch " + tb + "e:"]
+    em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + site + "]"]
+
+# The region of a to-be-closed local s in a block with labels: rest is the
+# rest of its block, emitted as a block of its own.
+define em_tbc_rest(E, r) as:
+    local s is r.s
+    local k is list_index_of of [s.attribs, "close"]
+    local v is s.vars[k]
+    local tb is em_tmp of (E)
+    local site is em_site of [E, s.line, "", ""]
+    em_line of [E, "local " + tb + " is [" + (em_var_ref of (v)) + ", false]"]
+    em_line of [E, "lr_tbc_check of [" + tb + "[0], " + (em_strlit of (v.name)) + ", " + site + "]"]
+    em_line of [E, "try:"]
+    em_indent of (E)
+    append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
+    em_block_tail of [E, r.rest, r.tail]
     list_truncate of [E.tbc, len of E.tbc - 1]
     em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
     em_dedent of (E)
@@ -858,6 +900,8 @@ define em_stat(E, s) as:
         em_goto of [E, s]
     elif k == "Label":
         null
+    elif k == "TbcRest":
+        em_tbc_rest of [E, s]
     else:
         em_unsup of [k, s.line]
 

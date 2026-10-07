@@ -75,6 +75,7 @@ str_len.lua unspecified-audit: ok
 str_nul_lazy.lua unspecified-audit: ok
 str_unpack_signext.lua unspecified-audit: ok
 tbc_genfor_close.lua unspecified-audit: ok
+tbc_goto_labels.lua unspecified-audit: ok
 tbc_repeat_until.lua unspecified-audit: ok
 tbc_unwind_frame.lua unspecified-audit: ok
 tbl_int_float_key.lua unspecified-audit: ok
