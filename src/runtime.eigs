@@ -691,12 +691,15 @@ define lr_call1(f, args, site) as:
         return r[0]
     return null
 
-define lr_mcall(o, name, args, site) as:
-    local f is lr_index of [o, name, site]
+# o:m(args) once the method f = o.m has been looked up; a call error names
+# the method (the site's second description).
+define lr_mcall(f, o, args, site) as:
+    if type of f != "fn" and lr_metafield of [f, "__call"] == null:
+        lr_rterr of [site, "attempt to call a " + (lr_type of (f)) + " value (" + lr_st.sites[site][2] + ")"]
     return lr_call of [f, concat of [[o], args], site]
 
-define lr_mcall1(o, name, args, site) as:
-    local r is lr_mcall of [o, name, args, site]
+define lr_mcall1(f, o, args, site) as:
+    local r is lr_mcall of [f, o, args, site]
     if len of r > 0:
         return r[0]
     return null
@@ -1393,17 +1396,16 @@ define lr_s_byte(A) as:
     return out
 
 define lr_s_char(A) as:
-    local parts is []
+    local bs is []
     local i is 0
     for v in A:
         local c is lr_checkint of [A, i, "char"]
         if c < 0 or c > 255:
             lr_argerr of [i + 1, "char", "value out of range"]
-        if c == 0:
-            lr_unsup of ["string.char(0): a NUL byte (EigenScript strings are NUL-terminated)", 0]
-        append of [parts, chr of c]
+        append of [bs, c]
         i is i + 1
-    return [join of [parts, ""]]
+    # direct translation: a NUL byte ends the EigenScript string
+    return [str_from_bytes of (bs)]
 
 # string.format: %d %i %s %% and %c, with no flags, width or precision.
 # Any other conversion is unsupported (exit 3), never approximated.

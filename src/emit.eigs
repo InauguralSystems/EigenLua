@@ -263,6 +263,18 @@ define em_strlit(s) as:
     append of [parts, "\""]
     return join of [parts, ""]
 
+# A string literal holding NUL bytes is built from its bytes with
+# str_from_bytes, the direct translation; EigenScript ends a string at its
+# first NUL (gaps/nul-in-string.eigs), so such a row diverges.
+define em_nulstr(e) as:
+    local s is e.v
+    local bs is []
+    for i in range of (len of s):
+        append of [bs, str of (ord of s[i])]
+    for p in e.z:
+        bs[p] is "0"
+    return "(str_from_bytes of (" + (em_listlit of (bs)) + "))"
+
 define em_numlit(E, v) as:
     local s is str of v
     if (num of s) == v and index_of of [s, "e"] < 0 and index_of of [s, "n"] < 0:
@@ -394,18 +406,21 @@ define em_call(E, e, want_list) as:
     if want_list:
         fnname is "lr_call"
     if e.k == "MCall":
-        local site is em_site of [E, e.line, "method '" + e.m + "'", ""]
+        # Lua evaluates the receiver, looks the method up, then evaluates the
+        # arguments; an index error names the receiver, a call error the method
+        local site is em_site of [E, e.line, em_desc of [E, e.o], "method '" + e.m + "'"]
         local oc is em_expr of [E, e.o]
-        local opos is len of E.out
-        local args is em_explist of [E, e.args]
-        if not (em_pure of (e.o)) and not (em_is_tmp of (oc)) and opos < len of E.out:
+        if not (em_pure of (e.o)) and not (em_is_tmp of (oc)):
             local t0 is em_tmp of (E)
-            list_insert_at of [E.out, opos, E.ind + "local " + t0 + " is " + oc]
+            em_line of [E, "local " + t0 + " is " + oc]
             oc is t0
+        local tm is em_tmp of (E)
+        em_line of [E, "local " + tm + " is lr_index of [" + oc + ", " + (em_strlit of (e.m)) + ", " + site + "]"]
+        local args is em_explist of [E, e.args]
         local mn is "lr_mcall1"
         if want_list:
             mn is "lr_mcall"
-        em_line of [E, "local " + t + " is " + mn + " of [" + oc + ", " + (em_strlit of (e.m)) + ", " + args + ", " + site + "]"]
+        em_line of [E, "local " + t + " is " + mn + " of [" + tm + ", " + oc + ", " + args + ", " + site + "]"]
         return t
     local site is em_site of [E, e.line, em_desc of [E, e.f], ""]
     local fc is em_expr of [E, e.f]
@@ -435,8 +450,7 @@ define em_expr(E, e) as:
         return em_numlit of [E, e.v]
     if k == "Str":
         if e.z:
-            local site is em_site of [E, e.line, "", ""]
-            return "(lr_unsup of [\"string with an embedded NUL byte\", " + site + "])"
+            return em_nulstr of (e)
         return em_strlit of (e.v)
     if k == "Vararg":
         return "(lr_at of [V, 0])"
@@ -618,14 +632,19 @@ define em_adjust(E, exprs, n) as:
             j is j + 1
         return out
     local codes is em_operands of [E, exprs]
-    local i is 0
-    for c in codes:
-        if i < n:
+    if m > n:
+        # surplus expressions are evaluated for their effects, after the kept
+        # ones: pin the kept values first so the order stays left to right
+        local kept is em_pin of [E, list_slice of [codes, 0, n]]
+        for c in kept:
             append of [out, c]
-        else:
-            # surplus expressions are evaluated for their effects
-            em_line of [E, c]
-        i is i + 1
+        local i is n
+        loop while i < m:
+            em_line of [E, codes[i]]
+            i is i + 1
+        return out
+    for c in codes:
+        append of [out, c]
     loop while len of out < n:
         append of [out, "null"]
     return out

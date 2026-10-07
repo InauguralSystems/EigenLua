@@ -4,6 +4,7 @@ co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
+err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
 err_pcall.lua unspecified-audit: ok
 err_xpcall.lua unspecified-audit: ok
@@ -20,7 +21,9 @@ meta_index.lua unspecified-audit: ok
 meta_len.lua unspecified-audit: ok
 meta_lt.lua unspecified-audit: ok
 meta_newindex.lua unspecified-audit: ok
+method_lookup_order.lua unspecified-audit: ok
 multi_assign.lua unspecified-audit: ok
+multi_assign_order.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
 num_print.lua unspecified-audit: ok
 ops_matrix.lua unspecified-audit: ok
@@ -39,6 +42,7 @@ str_format_num.lua unspecified-audit: ok
 str_gsub.lua unspecified-audit: ok
 str_high_bytes.lua unspecified-audit: ok
 str_len.lua unspecified-audit: ok
+str_nul_lazy.lua unspecified-audit: ok
 tbl_int_float_key.lua unspecified-audit: ok
 tbl_len_border.lua unspecified-audit: ok
 tbl_next_pairs.lua unspecified-audit: ok

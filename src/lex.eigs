@@ -1,6 +1,6 @@
 # EigenLua lexer: Lua 5.4 source text -> token lists (manual 3.1).
 # lua_lex returns {"t": types, "v": values, "l": lines, "f": float-literal flags,
-# "z": string-has-NUL flags}. Token type is "name", "string", "number",
+# "z": NUL positions of each string token, or 0}. Token type is "name", "string", "number",
 # "eof", or the keyword / punctuation text itself. A lexical error raises
 # ["SYNTAX", line, message].
 
@@ -267,9 +267,11 @@ define lex_number(src, i, line) as:
         text is text + "0"
     return [j, num of text, isf]
 
-# Short string at i. Returns [next_index, text, line, has_nul]. A NUL byte
-# cannot live in an EigenScript string (NUL-terminated, EigenScript gap); it
-# is replaced by byte 1 and has_nul is set so the emitter refuses the literal.
+# Short string at i. Returns [next_index, text, line, nuls]. A NUL byte cannot
+# live in an EigenScript string (NUL-terminated, EigenScript gap): it is held
+# as byte 1 in text and nuls lists its positions (0 when there is none); the
+# emitter builds the literal with str_from_bytes, the direct translation,
+# which ends the string at the first NUL.
 define lex_string(src, i, line) as:
     local n is len of src
     local q is src[i]
@@ -373,7 +375,9 @@ define lex_string(src, i, line) as:
                 lex_err of [line, "invalid escape sequence '\\" + e + "'"]
             for b in bytes:
                 if b == 0:
-                    nul is 1
+                    if type of nul != "list":
+                        nul is []
+                    append of [nul, len of (join of [parts, ""])]
                     append of [parts, chr of 1]
                 else:
                     append of [parts, chr of b]
