@@ -40,7 +40,9 @@ define lr_co_runner(co) as:
             # resume starts the body with ccall, which checks the C stack
             if lr_cc.n >= 200:
                 lr_throw of ("C stack overflow")
-            local vals is lr_calln of [r.f, r.transfer, 0]
+            # the body runs at the resume's level: undo the count lr_call adds
+            lr_cc.n is lr_cc.n - 1
+            local vals is lr_call of [r.f, r.transfer, 0]
             res is concat of [[true], vals]
         catch e:
             if type of e == "dict" and e.COCLOSE == 1:

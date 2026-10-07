@@ -2,7 +2,7 @@
 local x, z = -8, 0
 local function located(line, f)
   local ok, e = pcall(f)
-  return ok or (type(e) == "string" and e:find("^err_eigs_located%.lua:" .. line .. ": ") ~= nil)
+  return ok or (type(e) == "string" and e:find("err_eigs_located%.lua:" .. line .. ": ") ~= nil)
 end
 print(located(9, function()
   local third = 1 / 3

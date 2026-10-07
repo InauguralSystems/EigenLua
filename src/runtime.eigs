@@ -683,17 +683,39 @@ define lr_ccdec() as:
         lr_cc.n is lr_cc.n - 1
 
 define lr_call(f, args, site) as:
-    if site == 0:
-        lr_ccinc of 0
-        local r0 is lr_calln of [f, args, 0]
-        lr_ccdec of null
-        return r0
-    return lr_calln of [f, args, site]
+    local tf is type of f
+    if tf == "fn":
+        local pf is lr_st.curf
+        if site == 0:
+            lr_st.curf is f
+            lr_ccinc of 0
+        append of [lr_stk, site]
+        append of [lr_fstk, f]
+        local r is null
+        try:
+            r is f of (args)
+        catch e:
+            lr_eserr of [e, site]
+        list_truncate of [lr_stk, len of lr_stk - 1]
+        list_truncate of [lr_fstk, len of lr_fstk - 1]
+        if site == 0:
+            lr_ccdec of null
+        lr_st.curf is pf
+        return r
+    local h is lr_metafield of [f, "__call"]
+    if h != null:
+        return lr_call of [h, concat of [[f], args], site]
+    local sd is lr_st.sites[site]
+    local desc is ""
+    if sd[1] != "":
+        desc is " (" + sd[1] + ")"
+    lr_rterr of [site, "attempt to call a " + (lr_tname of (f)) + " value" + desc]
 
-# A call through C with a Lua call site (the generic for's iterator).
+# A call through C with a Lua call site (the generic for's iterator, a
+# metamethod).
 define lr_ccall(f, args, site) as:
     lr_ccinc of site
-    local r is lr_calln of [f, args, site]
+    local r is lr_call of [f, args, site]
     lr_ccdec of null
     return r
 
@@ -711,32 +733,6 @@ define lr_eserr(e, site) as:
     if type of e == "dict" and type of e.message == "str":
         throw of ({"LUAERR": 1, "v": pos + "EigenScript " + (str of e.kind) + " error: " + e.message})
     throw of ({"LUAERR": 1, "v": pos + "EigenScript error: " + (str of e)})
-
-define lr_calln(f, args, site) as:
-    local tf is type of f
-    if tf == "fn":
-        local pf is lr_st.curf
-        if site == 0:
-            lr_st.curf is f
-        append of [lr_stk, site]
-        append of [lr_fstk, f]
-        local r is null
-        try:
-            r is f of (args)
-        catch e:
-            lr_eserr of [e, site]
-        list_truncate of [lr_stk, len of lr_stk - 1]
-        list_truncate of [lr_fstk, len of lr_fstk - 1]
-        lr_st.curf is pf
-        return r
-    local h is lr_metafield of [f, "__call"]
-    if h != null:
-        return lr_calln of [h, concat of [[f], args], site]
-    local sd is lr_st.sites[site]
-    local desc is ""
-    if sd[1] != "":
-        desc is " (" + sd[1] + ")"
-    lr_rterr of [site, "attempt to call a " + (lr_tname of (f)) + " value" + desc]
 
 # Call metamethod h for event ev ("add", "index", ...): Lua names it in the
 # error when it cannot be called. It is one C-stack level (luaT_callTM).
