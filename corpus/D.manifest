@@ -10,6 +10,7 @@ co_wrap.lua unspecified-audit: ok
 debug_getinfo_func.lua unspecified-audit: ok
 debug_traceback_levels.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
+err_eigs_located.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok

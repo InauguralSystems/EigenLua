@@ -697,6 +697,21 @@ define lr_ccall(f, args, site) as:
     lr_ccdec of null
     return r
 
+# An EigenScript error escaping into Lua code becomes a Lua error located at
+# the Lua site it escaped from, keeping its text; Lua errors and coroutine
+# unwinding pass through unchanged.
+define lr_eserr(e, site) as:
+    if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1):
+        throw of (e)
+    local pos is ""
+    if site != 0:
+        local line is lr_site_line of (site)
+        if line >= 0:
+            pos is (lr_site_chunk of (site)) + ":" + (str of line) + ": "
+    if type of e == "dict" and type of e.message == "str":
+        throw of ({"LUAERR": 1, "v": pos + "EigenScript " + (str of e.kind) + " error: " + e.message})
+    throw of ({"LUAERR": 1, "v": pos + "EigenScript error: " + (str of e)})
+
 define lr_calln(f, args, site) as:
     local tf is type of f
     if tf == "fn":
@@ -705,7 +720,11 @@ define lr_calln(f, args, site) as:
             lr_st.curf is f
         append of [lr_stk, site]
         append of [lr_fstk, f]
-        local r is f of (args)
+        local r is null
+        try:
+            r is f of (args)
+        catch e:
+            lr_eserr of [e, site]
         list_truncate of [lr_stk, len of lr_stk - 1]
         list_truncate of [lr_fstk, len of lr_fstk - 1]
         lr_st.curf is pf
@@ -807,7 +826,10 @@ define lr_arith(op, a, b, site) as:
     local y is lr_arnum of (b)
     if x == null or y == null or (type of a == "str" and lr_metafield of [b, lr_arith_ev of (op)] != null and type of b == "dict") or (type of b == "str" and type of a == "dict"):
         return lr_arith_meta of [op, a, b, site]
-    return lr_arith_num of [op, x, y, site]
+    try:
+        return lr_arith_num of [op, x, y, site]
+    catch e:
+        lr_eserr of [e, site]
 
 define lr_arith_num(op, x, y, site) as:
     if op == "+":
