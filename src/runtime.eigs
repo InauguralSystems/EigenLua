@@ -12,11 +12,14 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null, "curf": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
 lr_fnreg is []
+# lr_fnids parallels lr_fnreg: each function's id, from lr_st.nid, the one
+# id space of tables, functions, threads and strings (tostring, %p)
+lr_fnids is []
 
 # ------------------------------------------------------------ process edges
 
@@ -530,22 +533,24 @@ define lr_tostr(v) as:
             return r
         local nm is lr_metafield of [v, "__name"]
         if type of nm == "str":
-            return nm + ": 0x" + (hex of [v.id, 8])
+            return nm + ": 0x" + (str_lower of (hex of [v.id, 8]))
         if v.ud == true:
-            return "userdata: 0x" + (hex of [v.id, 8])
-        return "table: 0x" + (hex of [v.id, 8])
+            return "userdata: 0x" + (str_lower of (hex of [v.id, 8]))
+        return "table: 0x" + (str_lower of (hex of [v.id, 8]))
     if t == "fn" or t == "builtin":
-        return "function: 0x" + (hex of [lr_fnid of (v), 8])
+        return "function: 0x" + (str_lower of (hex of [lr_fnid of (v), 8]))
     if t == "list":
-        return "thread: 0x" + (hex of [v[0].id, 8])
+        return "thread: 0x" + (str_lower of (hex of [v[0].id, 8]))
     return "userdata"
 
 define lr_fnid(f) as:
     local i is list_index_of of [lr_fnreg, f]
     if i < 0:
         append of [lr_fnreg, f]
-        i is len of lr_fnreg - 1
-    return i + 1
+        lr_st.nid is lr_st.nid + 1
+        append of [lr_fnids, lr_st.nid]
+        return lr_st.nid
+    return lr_fnids[i]
 
 # ------------------------------------------------------------ tables
 

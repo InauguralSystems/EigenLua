@@ -62,6 +62,7 @@ os_exit_args.lua unspecified-audit: ok
 os_exit_close.lua unspecified-audit: ok
 print_partial.lua unspecified-audit: ok
 require_searchers.lua unspecified-audit: ok
+ptr_id_space.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok

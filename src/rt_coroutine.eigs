@@ -18,11 +18,14 @@
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
-lr_co_nid is {"n": 0}
-
+# A thread's id comes from the one id space of every reference value
+# (lr_st.nid, runtime.eigs); the main thread, made before lr_st, is 1.
 define lr_co_new(f, main) as:
-    lr_co_nid.n is lr_co_nid.n + 1
-    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0, "ef": [], "rg": 0}]
+    local id is 1
+    if not main:
+        lr_st.nid is lr_st.nid + 1
+        id is lr_st.nid
+    return [{"id": id, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0, "ef": [], "rg": 0}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]
