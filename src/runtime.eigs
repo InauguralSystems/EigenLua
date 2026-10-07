@@ -1045,6 +1045,19 @@ define lr_arg(A, i) as:
         return A[i]
     return null
 
+# ltablib.c checktab: a table, or a value whose metatable gives the access.
+define lr_checktab(A, i, fname) as:
+    local v is lr_arg of [A, i]
+    if type of v == "dict" and v.ud != true:
+        return v
+    if lr_metafield of [v, "__index"] != null or lr_metafield of [v, "__newindex"] != null or lr_metafield of [v, "__len"] != null:
+        return v
+    lr_argerr of [i + 1, fname, "table expected, got " + (lr_typearg of [A, i])]
+
+define lr_checkany(A, i, fname) as:
+    if i >= len of A:
+        lr_argerr of [i + 1, fname, "value expected"]
+
 define lr_checktable(A, i, fname) as:
     local v is lr_arg of [A, i]
     if type of v != "dict":
@@ -1147,9 +1160,7 @@ define lr_b_tonumber(A) as:
 
 define lr_b_error(A) as:
     local msg is lr_arg of [A, 0]
-    local level is lr_arg of [A, 1]
-    if level == null:
-        level is 1
+    local level is lr_optint of [A, 1, "error", 1]
     if type of msg == "str" and level > 0:
         msg is (lr_where of (level)) + msg
     throw of ({"LUAERR": 1, "v": msg})
@@ -1183,6 +1194,8 @@ define lr_b_pcall(A) as:
 
 define lr_b_xpcall(A) as:
     local h is lr_arg of [A, 1]
+    if type of h != "fn" and type of h != "builtin":
+        lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
     local r is null
     try:
@@ -1212,7 +1225,7 @@ define lr_xp_handle(h, v, n) as:
 
 define lr_b_select(A) as:
     local n is lr_arg of [A, 0]
-    if n == "#":
+    if type of n == "str" and len of n > 0 and n[0] == "#":
         return [len of A - 1]
     local i is lr_checkint of [A, 0, "select"]
     if i < 0:
@@ -1228,14 +1241,19 @@ define lr_b_select(A) as:
 
 define lr_b_rawget(A) as:
     local t is lr_checktable of [A, 0, "rawget"]
+    lr_checkany of [A, 1, "rawget"]
     return [lr_rawget of [t, lr_arg of [A, 1]]]
 
 define lr_b_rawset(A) as:
     local t is lr_checktable of [A, 0, "rawset"]
+    lr_checkany of [A, 1, "rawset"]
+    lr_checkany of [A, 2, "rawset"]
     lr_rawset of [t, lr_arg of [A, 1], lr_arg of [A, 2], 0]
     return [t]
 
 define lr_b_rawequal(A) as:
+    lr_checkany of [A, 0, "rawequal"]
+    lr_checkany of [A, 1, "rawequal"]
     local a is lr_arg of [A, 0]
     local b is lr_arg of [A, 1]
     if type of a != type of b:
@@ -1254,19 +1272,20 @@ define lr_b_rawlen(A) as:
         return [len of v.a]
     if type of v == "str":
         return [len of v]
-    lr_argerr of [1, "rawlen", "table or string expected"]
+    lr_argerr of [1, "rawlen", "table or string expected, got " + (lr_typearg of [A, 0])]
 
 define lr_b_setmetatable(A) as:
     local t is lr_checktable of [A, 0, "setmetatable"]
     local mt is lr_arg of [A, 1]
-    if mt != null and type of mt != "dict":
-        lr_argerr of [2, "setmetatable", "nil or table expected"]
+    if (mt != null and type of mt != "dict") or len of A < 2:
+        lr_argerr of [2, "setmetatable", "nil or table expected, got " + (lr_typearg of [A, 1])]
     if t.mt != null and lr_rawget of [t.mt, "__metatable"] != null:
         lr_throw of ((lr_where of (1)) + "cannot change a protected metatable")
     t.mt is mt
     return [t]
 
 define lr_b_getmetatable(A) as:
+    lr_checkany of [A, 0, "getmetatable"]
     local mt is lr_metatable of (lr_arg of [A, 0])
     if mt == null:
         return [null]
@@ -1288,8 +1307,9 @@ define lr_b_pairs(A) as:
     if h != null:
         local r is lr_call of [h, [t], 0]
         return [lr_at of [r, 0], lr_at of [r, 1], lr_at of [r, 2]]
+    lr_checkany of [A, 0, "pairs"]
     if type of t != "dict":
-        lr_argerr of [1, "pairs", "table expected, got " + (lr_typearg of [A, 0])]
+        return [lr_b_next, t, null]
     local ks is []
     for i in range of (len of t.a):
         if t.a[i] != null:
@@ -1310,15 +1330,14 @@ define lr_b_pairs(A) as:
     return [pairs_iter, t, null]
 
 define lr_ipairs_iter(A) as:
-    local i is A[1] + 1
+    local i is (lr_checkint of [A, 1, "ipairs"]) + 1
     local v is lr_index of [A[0], i, 0]
     if v == null:
         return [null]
     return [i, v]
 
 define lr_b_ipairs(A) as:
-    if len of A == 0:
-        lr_argerr of [1, "ipairs", "table expected, got no value"]
+    lr_checkany of [A, 0, "ipairs"]
     return [lr_ipairs_iter, A[0], 0]
 
 # collectgarbage: EigenScript manages memory itself, so there is no cycle
@@ -1366,7 +1385,7 @@ define lr_strindex(i, n) as:
 define lr_s_sub(A) as:
     local s is lr_checkstr of [A, 0, "sub"]
     local n is len of s
-    local i is lr_optint of [A, 1, "sub", 1]
+    local i is lr_checkint of [A, 1, "sub"]
     local j is lr_optint of [A, 2, "sub", -1]
     if i < 0:
         i is n + i + 1
@@ -1394,15 +1413,18 @@ define lr_s_lower(A) as:
 define lr_s_rep(A) as:
     local s is lr_checkstr of [A, 0, "rep"]
     local n is lr_checkint of [A, 1, "rep"]
-    local sep is lr_arg of [A, 2]
+    local sep is ""
+    if lr_arg of [A, 2] != null:
+        sep is lr_checkstr of [A, 2, "rep"]
     if n <= 0:
         return [""]
+    # lstrlib.c MAXSIZE is INT_MAX on this host
+    if len of s + len of sep > 2147483647 / n:
+        lr_throw of ((lr_where of (1)) + "resulting string too large")
     local parts is []
     for i in range of n:
         append of [parts, s]
-    if sep == null:
-        return [join of [parts, ""]]
-    return [join of [parts, lr_checkstr of [A, 2, "rep"]]]
+    return [join of [parts, sep]]
 
 define lr_s_reverse(A) as:
     local s is lr_checkstr of [A, 0, "reverse"]
@@ -1513,7 +1535,7 @@ define lr_t_concat(A) as:
         elif type of v == "num":
             append of [parts, lr_numstr of (v)]
         else:
-            lr_throw of ((lr_where of (1)) + "invalid value (at index " + (str of k) + ") in table for 'concat'")
+            lr_throw of ((lr_where of (1)) + "invalid value (" + (lr_tname of (v)) + ") at index " + (lr_numstr of (k)) + " in table for 'concat'")
         k is k + 1
     return [join of [parts, sep]]
 
@@ -1550,6 +1572,9 @@ define lr_t_move(A) as:
     local f is lr_checkint of [A, 1, "move"]
     local e is lr_checkint of [A, 2, "move"]
     local t is lr_checkint of [A, 3, "move"]
+    lr_checktab of [A, 0, "move"]
+    if lr_arg of [A, 4] != null:
+        lr_checktab of [A, 4, "move"]
     local a2 is a1
     if lr_arg of [A, 4] != null:
         a2 is A[4]
@@ -1577,6 +1602,8 @@ define lr_t_sort(A) as:
     local t is lr_checktable of [A, 0, "sort"]
     local cmp is lr_arg of [A, 1]
     local n is lr_len of [t, 0]
+    if n > 1 and cmp != null and type of cmp != "fn" and type of cmp != "builtin":
+        lr_argerr of [2, "sort", "function expected, got " + (lr_typearg of [A, 1])]
     local xs is []
     for i in range of n:
         append of [xs, lr_index of [t, i + 1, 0]]
@@ -1633,23 +1660,27 @@ define lr_m_sqrt(A) as:
     local x is lr_checknum of [A, 0, "sqrt"]
     return [sqrt of x]
 
+# math.max/min (lmathlib.c 5.4.9) compare with lua_compare, so any values
+# that Lua can order are accepted.
 define lr_m_max(A) as:
-    local m is lr_checknum of [A, 0, "max"]
+    if len of A < 1:
+        lr_argerr of [1, "max", "value expected"]
+    local m is A[0]
     local i is 1
     loop while i < len of A:
-        local x is lr_checknum of [A, i, "max"]
-        if x > m:
-            m is x
+        if lr_lt of [m, A[i], 0]:
+            m is A[i]
         i is i + 1
     return [m]
 
 define lr_m_min(A) as:
-    local m is lr_checknum of [A, 0, "min"]
+    if len of A < 1:
+        lr_argerr of [1, "min", "value expected"]
+    local m is A[0]
     local i is 1
     loop while i < len of A:
-        local x is lr_checknum of [A, i, "min"]
-        if x < m:
-            m is x
+        if lr_lt of [A[i], m, 0]:
+            m is A[i]
         i is i + 1
     return [m]
 
@@ -1665,15 +1696,18 @@ define lr_m_type(A) as:
         return ["integer"]
     return ["float"]
 
+# math.tointeger: lua_tointegerx, so a numeric string converts too.
 define lr_m_tointeger(A) as:
-    local x is lr_arg of [A, 0]
-    if type of x == "num" and lr_isint of (x):
+    local x is lr_arnum of (lr_arg of [A, 0])
+    if x != null and lr_isint of (x):
         return [x]
+    lr_checkany of [A, 0, "tointeger"]
     return [null]
 
 define lr_m_fmod(A) as:
-    local a is lr_checknum of [A, 0, "fmod"]
+    # C evaluates the two luaL_checknumber calls right to left
     local b is lr_checknum of [A, 1, "fmod"]
+    local a is lr_checknum of [A, 0, "fmod"]
     if b == 0:
         if lr_isint of (a) and lr_isint of (b):
             lr_argerr of [2, "fmod", "zero"]
@@ -1774,34 +1808,38 @@ define lr_compile(text, chunkid, env) as:
     return [lr_regfn of [L of (cell), [cell], ["_ENV"]]]
 
 define lr_b_load(A) as:
+    # lbaselib.c luaB_load: a string (or number) chunk, else a reader
+    # function; the mode is checked when loading starts
     local chunk is lr_arg of [A, 0]
-    local name is lr_arg of [A, 1]
-    local mode is lr_arg of [A, 2]
+    local mode is "bt"
+    if lr_arg of [A, 2] != null:
+        mode is lr_checkstr of [A, 2, "load"]
     local env is lr_G
     if len of A >= 4:
         env is A[3]
     local text is ""
-    if type of chunk == "str":
-        text is chunk
-        if name == null:
-            name is chunk
-    elif type of chunk == "fn":
-        if name == null:
-            name is "=(load)"
+    local name is ""
+    if type of chunk == "str" or type of chunk == "num":
+        text is lr_tostr of (chunk)
+        name is text
+        if lr_arg of [A, 1] != null:
+            name is lr_checkstr of [A, 1, "load"]
+    else:
+        name is "=(load)"
+        if lr_arg of [A, 1] != null:
+            name is lr_checkstr of [A, 1, "load"]
+        if type of chunk != "fn" and type of chunk != "builtin":
+            lr_argerr of [1, "load", "function expected, got " + (lr_typearg of [A, 0])]
         local parts is []
         loop while 1:
             local piece is lr_call1 of [chunk, [], 0]
             if piece == null or piece == "":
                 break
-            if type of piece != "str":
-                return [null, "reader function must return a string"]
-            append of [parts, piece]
+            if type of piece != "str" and type of piece != "num":
+                return [null, (lr_where of (1)) + "reader function must return a string"]
+            append of [parts, lr_tostr of (piece)]
         text is join of [parts, ""]
-    else:
-        lr_argerr of [1, "load", "string expected, got " + (lr_typearg of [A, 0])]
-    if type of name != "str":
-        name is lr_checkstr of [A, 1, "load"]
-    if mode != null and index_of of [lr_checkstr of [A, 2, "load"], "t"] < 0:
+    if index_of of [mode, "t"] < 0:
         return [null, "attempt to load a text chunk (mode is '" + mode + "')"]
     return lr_compile of [text, lr_chunkid of (name), env]
 

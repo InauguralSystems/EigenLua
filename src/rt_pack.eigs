@@ -198,8 +198,11 @@ define lr_pk_order(bytes, little) as:
         return out
     return bytes
 
-define lr_s_pack(A) as:
-    local fmt is lr_checkstr of [A, 0, "pack"]
+define lr_s_pack(A0) as:
+    local fmt is lr_checkstr of [A0, 0, "pack"]
+    # str_pack pushes a nil marker after its arguments, so the first missing
+    # argument reads as nil
+    local A is concat of [A0, [null]]
     local h is {"little": true, "maxalign": 1}
     local out is []
     local total is 0

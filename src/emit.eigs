@@ -931,7 +931,7 @@ define em_numfor(E, s) as:
     em_loop_end of (E)
 
 define em_genfor(E, s) as:
-    local site is em_site of [E, s.eline, "", ""]
+    local site is em_site of [E, s.eline, "for iterator 'for iterator'", ""]
     local vals is em_pin of [E, em_adjust of [E, s.exprs, 3]]
     local tf is vals[0]
     local tst is vals[1]
