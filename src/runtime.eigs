@@ -317,6 +317,49 @@ define lr_isdigit(c) as:
     local o is ord of c
     return o >= 48 and o <= 57
 
+# strtod on a hexadecimal numeral (luaconf.h makes lua_strx2number strtod
+# under C99): the significant hex digits ds (no leading zero) times
+# 2^e, correctly rounded to a double (round half to even). Thirteen
+# digits are exact; the 14th and 15th join them in one addition, and
+# any nonzero digit past them adds a half (a sticky bit), which rounds
+# like the exact value since the sum is at least 2^56.
+define lr_hexd(ds, e) as:
+    local k is len of ds
+    loop while k > 0 and ds[k - 1] == 0:
+        k is k - 1
+        e is e + 4
+    if k == 0:
+        return 0
+    local m is 0
+    local i is 0
+    loop while i < k and i < 13:
+        m is m * 16 + ds[i]
+        i is i + 1
+    if k > 13:
+        local r is 0
+        loop while i < 15:
+            r is r * 16
+            if i < k:
+                r is r + ds[i]
+            i is i + 1
+        loop while i < k:
+            if ds[i] != 0:
+                r is r + 0.5
+                i is k
+            i is i + 1
+        m is m * 256 + r
+        e is e + 4 * (k - 15)
+    # m * 2^e in steps that stay finite until the true result is not
+    loop while e > 0:
+        local s is min of [e, 512]
+        m is m * (pow of [2, s])
+        e is e - s
+    loop while e < 0 and m != 0:
+        local s is min of [0 - e, 512]
+        m is m / (pow of [2, s])
+        e is e + s
+    return m
+
 # Lua's string->number conversion (lobject.c l_str2d / l_str2int), or null.
 define lr_str2num(s) as:
     local n is len of s
@@ -338,20 +381,27 @@ define lr_str2num(s) as:
         local m is 0
         local ex is 0
         local any is 0
+        local isf is 0
+        local ds is []
         loop while i < n and lr_hexval of (s[i]) >= 0:
             m is m * 16 + (lr_hexval of (s[i]))
+            if len of ds > 0 or s[i] != "0":
+                append of [ds, lr_hexval of (s[i])]
             any is 1
             i is i + 1
         if i < n and s[i] == ".":
+            isf is 1
             i is i + 1
             loop while i < n and lr_hexval of (s[i]) >= 0:
-                m is m * 16 + (lr_hexval of (s[i]))
+                if len of ds > 0 or s[i] != "0":
+                    append of [ds, lr_hexval of (s[i])]
                 ex is ex - 4
                 any is 1
                 i is i + 1
         if any == 0:
             return null
         if i < n and (s[i] == "p" or s[i] == "P"):
+            isf is 1
             i is i + 1
             local es is 1
             if i < n and (s[i] == "+" or s[i] == "-"):
@@ -367,9 +417,11 @@ define lr_str2num(s) as:
             ex is ex + es * ev
         if i != n:
             return null
+        # a hex integer wraps modulo 2^64 in Lua (gaps/no-int64.eigs); a hex
+        # float is strtod's
         local v is m
-        if ex != 0:
-            v is m * (pow of [2, ex])
+        if isf:
+            v is lr_hexd of [ds, ex]
         if neg:
             return 0 - v
         return v
@@ -827,7 +879,14 @@ define lr_arith_meta(op, a, b, site) as:
             bad is a
             desc is sd[1]
         elif type of b == "num":
-            lr_rterr of [site, "number has no integer representation"]
+            # ldebug.c luaG_tointerror: the first operand with no integer
+            # value is named (varinfo)
+            local dn is sd[2]
+            if lr_toint of (a) == null:
+                dn is sd[1]
+            if dn != "":
+                dn is " (" + dn + ")"
+            lr_rterr of [site, "number" + dn + " has no integer representation"]
     elif lr_arnum of (a) == null:
         bad is a
         desc is sd[1]
@@ -1254,22 +1313,44 @@ define lr_b_tonumber(A) as:
         lr_argerr of [1, "tonumber", "string expected, got " + (lr_typearg of [A, 0])]
     if bs < 2 or bs > 36:
         lr_argerr of [2, "tonumber", "base out of range"]
-    local s is str_lower of (trim of v)
+    # lbaselib.c b_str2int: spaces, an optional sign, alphanumeric digits
+    # below the base, spaces, and nothing else (the value wraps modulo
+    # 2^64 in Lua: gaps/no-int64.eigs)
+    local s is v
+    local n is len of s
+    local i is 0
+    loop while i < n and lr_isspace of (s[i]):
+        i is i + 1
     local neg is 0
-    if len of s > 0 and s[0] == "-":
+    if i < n and s[i] == "-":
         neg is 1
-        s is s[1:]
-    if len of s == 0:
-        return [null]
+        i is i + 1
+    elif i < n and s[i] == "+":
+        i is i + 1
     local acc is 0
-    for i in range of (len of s):
-        local d is lr_hexval of (s[i])
+    local nd is 0
+    loop while i < n:
         local o is ord of s[i]
-        if o >= 97 and o <= 122:
+        local d is -1
+        if o >= 48 and o <= 57:
+            d is o - 48
+        elif o >= 97 and o <= 122:
             d is o - 87
-        if d < 0 or d >= bs:
+        elif o >= 65 and o <= 90:
+            d is o - 55
+        if d < 0:
+            break
+        if d >= bs:
             return [null]
         acc is acc * bs + d
+        nd is nd + 1
+        i is i + 1
+    if nd == 0:
+        return [null]
+    loop while i < n and lr_isspace of (s[i]):
+        i is i + 1
+    if i != n:
+        return [null]
     if neg:
         return [0 - acc]
     return [acc]

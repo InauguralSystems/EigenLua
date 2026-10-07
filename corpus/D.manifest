@@ -46,6 +46,7 @@ multi_assign.lua unspecified-audit: ok
 multi_assign_order.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
 num_print.lua unspecified-audit: ok
+num_str2num_edges.lua unspecified-audit: ok
 ops_matrix.lua unspecified-audit: ok
 os_exit_args.lua unspecified-audit: ok
 require_searchers.lua unspecified-audit: ok

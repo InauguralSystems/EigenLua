@@ -250,6 +250,49 @@ define lex_number(src, i, line) as:
         lex_err of [line, "malformed number near '" + text + "'"]
     return [j, r[0], r[1]]
 
+# strtod on a hexadecimal numeral (luaconf.h makes lua_strx2number strtod
+# under C99): the significant hex digits ds (no leading zero) times
+# 2^e, correctly rounded to a double (round half to even). Thirteen
+# digits are exact; the 14th and 15th join them in one addition, and
+# any nonzero digit past them adds a half (a sticky bit), which rounds
+# like the exact value since the sum is at least 2^56.
+define lex_hexd(ds, e) as:
+    local k is len of ds
+    loop while k > 0 and ds[k - 1] == 0:
+        k is k - 1
+        e is e + 4
+    if k == 0:
+        return 0
+    local m is 0
+    local i is 0
+    loop while i < k and i < 13:
+        m is m * 16 + ds[i]
+        i is i + 1
+    if k > 13:
+        local r is 0
+        loop while i < 15:
+            r is r * 16
+            if i < k:
+                r is r + ds[i]
+            i is i + 1
+        loop while i < k:
+            if ds[i] != 0:
+                r is r + 0.5
+                i is k
+            i is i + 1
+        m is m * 256 + r
+        e is e + 4 * (k - 15)
+    # m * 2^e in steps that stay finite until the true result is not
+    loop while e > 0:
+        local s is min of [e, 512]
+        m is m * (pow of [2, s])
+        e is e - s
+    loop while e < 0 and m != 0:
+        local s is min of [0 - e, 512]
+        m is m / (pow of [2, s])
+        e is e + s
+    return m
+
 # lobject.c l_str2int/l_str2d on a numeral's whole text: [value, is_float]
 # or null.
 define lex_str2num(s) as:
@@ -261,15 +304,19 @@ define lex_str2num(s) as:
         local mant is 0
         local exp is 0
         local any is 0
+        local ds is []
         loop while j < n and lex_is_xdigit of (ord of s[j]):
             mant is mant * 16 + (lex_xval of (ord of s[j]))
+            if len of ds > 0 or s[j] != "0":
+                append of [ds, lex_xval of (ord of s[j])]
             any is 1
             j is j + 1
         if j < n and s[j] == ".":
             isf is 1
             j is j + 1
             loop while j < n and lex_is_xdigit of (ord of s[j]):
-                mant is mant * 16 + (lex_xval of (ord of s[j]))
+                if len of ds > 0 or s[j] != "0":
+                    append of [ds, lex_xval of (ord of s[j])]
                 exp is exp - 4
                 any is 1
                 j is j + 1
@@ -292,9 +339,11 @@ define lex_str2num(s) as:
             exp is exp + sg * e
         if j != n:
             return null
+        # a hex integer wraps modulo 2^64 in Lua (gaps/no-int64.eigs); a hex
+        # float is strtod's
         local val is mant
-        if exp != 0:
-            val is mant * (pow of [2, exp])
+        if isf:
+            val is lex_hexd of [ds, exp]
         return [val, isf]
     local nd is 0
     loop while j < n and lex_is_digit of (ord of s[j]):
