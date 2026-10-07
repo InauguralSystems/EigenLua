@@ -1679,6 +1679,92 @@ define lr_b_dofile(A) as:
         lr_throw of (r[1])
     return lr_call of [r[0], [], 0]
 
+# require (loadlib.c): package.loaded, then package.preload, then a Lua file
+# on package.path. C loaders are out of scope (GAPS.md).
+define lr_b_require(A) as:
+    local name is lr_checkstr of [A, 0, "require"]
+    local loaded is lr_rawget of [lr_pkglib, "loaded"]
+    local have is lr_index of [loaded, name, 0]
+    if lr_t of (have):
+        return [have]
+    local msg is []
+    local loader is null
+    local extra is null
+    local pre is lr_index of [lr_pkglib, "preload", 0]
+    local pf is null
+    if type of pre == "dict":
+        pf is lr_index of [pre, name, 0]
+    if pf != null:
+        loader is pf
+        extra is ":preload:"
+    else:
+        append of [msg, "\n\tno field package.preload['" + name + "']"]
+        local path is lr_index of [lr_pkglib, "path", 0]
+        if type of path != "str":
+            lr_throw of ((lr_where of (1)) + "'package.path' must be a string")
+        local sp is lr_searchpath of [name, path, ".", "/"]
+        if sp[0] == null:
+            append of [msg, sp[1]]
+        else:
+            local r is lr_b_loadfile of ([sp[0]])
+            if r[0] == null:
+                lr_throw of ((lr_where of (1)) + "error loading module '" + name + "' from file '" + sp[0] + "':\n\t" + r[1])
+            loader is r[0]
+            extra is sp[0]
+    if loader == null:
+        lr_throw of ((lr_where of (1)) + "module '" + name + "' not found:" + (join of [msg, ""]))
+    local res is lr_call1 of [loader, [name, extra], 0]
+    if res != null:
+        lr_setindex of [loaded, name, res, 0]
+    elif lr_index of [loaded, name, 0] == null:
+        lr_setindex of [loaded, name, true, 0]
+    return [lr_index of [loaded, name, 0], extra]
+
+# [filename, null] or [null, "\n\tno file '...'..."]
+define lr_searchpath(name, path, sep, rep) as:
+    if sep != "":
+        name is str_replace of [name, sep, rep]
+    local msg is []
+    for tmpl in split of [path, ";"]:
+        if tmpl != "":
+            local fn is str_replace of [tmpl, "?", name]
+            if file_exists of fn:
+                return [fn, null]
+            append of [msg, "\n\tno file '" + fn + "'"]
+    return [null, join of [msg, ""]]
+
+define lr_p_searchpath(A) as:
+    local name is lr_checkstr of [A, 0, "searchpath"]
+    local path is lr_checkstr of [A, 1, "searchpath"]
+    local sep is "."
+    local rep is "/"
+    if lr_arg of [A, 2] != null:
+        sep is lr_checkstr of [A, 2, "searchpath"]
+    if lr_arg of [A, 3] != null:
+        rep is lr_checkstr of [A, 3, "searchpath"]
+    return lr_searchpath of [name, path, sep, rep]
+
+# warn (lauxlib.c warnf*): off at start as in lua.c; "@on"/"@off" control
+# it; when on, the message goes to stderr.
+define lr_b_warn(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "warn", "string expected, got no value"]
+    local parts is []
+    local i is 0
+    for v in A:
+        append of [parts, lr_checkstr of [A, i, "warn"]]
+        i is i + 1
+    local msg is join of [parts, ""]
+    if len of A == 1 and len of msg > 0 and msg[0] == "@":
+        if msg == "@on":
+            lr_st.warn is true
+        elif msg == "@off":
+            lr_st.warn is false
+        return []
+    if lr_st.warn == true:
+        lr_stderr of ("Lua warning: " + msg + "\n")
+    return []
+
 # ------------------------------------------------------------ globals
 
 define lr_lib(fns, stubs, trap) as:
@@ -1715,17 +1801,23 @@ lr_rawset of [lr_mathlib, "mininteger", -9223372036854775808, 0]
 lr_iolib is lr_lib of [{"write": lr_io_write}, lr_stubs of ["io.", "close flush input lines open output popen read tmpfile type"], {"stdin": "io.stdin", "stdout": "io.stdout", "stderr": "io.stderr"}]
 lr_oslib is lr_lib of [{"exit": lr_os_exit}, lr_stubs of ["os.", "clock date difftime execute getenv remove rename setlocale time tmpname"], {}]
 lr_colib is lr_lib of [{}, lr_stubs of ["coroutine.", "close create isyieldable resume running status wrap yield"], {}]
-lr_utf8lib is lr_lib of [{}, lr_stubs of ["utf8.", "char codepoint codes len offset"], {"charpattern": "utf8.charpattern (contains a NUL byte)"}]
+lr_utf8lib is lr_lib of [{"char": lr_utf8_char, "codepoint": lr_utf8_codepoint, "codes": lr_utf8_codes, "len": lr_utf8_len, "offset": lr_utf8_offset}, {}, {}]
+# UTF8PATT holds a NUL byte; the direct translation ends it there
+lr_rawset of [lr_utf8lib, "charpattern", str_from_bytes of ([91, 0, 45, 127, 194, 45, 253, 93, 91, 128, 45, 191, 93, 42]), 0]
 lr_dbglib is lr_lib of [{}, lr_stubs of ["debug.", "debug gethook getinfo getlocal getmetatable getregistry getupvalue getuservalue sethook setlocal setmetatable setupvalue setuservalue traceback upvalueid upvaluejoin setcstacklimit"], {}]
-lr_pkglib is lr_lib of [{}, lr_stubs of ["package.", "loadlib searchpath"], {"config": "package.config", "cpath": "package.cpath", "loaded": "package.loaded", "path": "package.path", "preload": "package.preload", "searchers": "package.searchers"}]
+lr_pkglib is lr_lib of [{"searchpath": lr_p_searchpath}, lr_stubs of ["package.", "loadlib"], {"searchers": "package.searchers"}]
+lr_rawset of [lr_pkglib, "path", "/usr/local/share/lua/5.4/?.lua;/usr/local/share/lua/5.4/?/init.lua;/usr/local/lib/lua/5.4/?.lua;/usr/local/lib/lua/5.4/?/init.lua;./?.lua;./?/init.lua", 0]
+lr_rawset of [lr_pkglib, "cpath", "/usr/local/lib/lua/5.4/?.so;/usr/local/lib/lua/5.4/loadall.so;./?.so", 0]
+lr_rawset of [lr_pkglib, "config", "/\n;\n?\n!\n-\n", 0]
+lr_rawset of [lr_pkglib, "preload", lr_newtable of null, 0]
 lr_basefns is {"print": lr_b_print, "type": lr_b_type, "tostring": lr_b_tostring, "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
 for k in keys of lr_basefns:
     lr_rawset of [lr_G, k, lr_basefns[k], 0]
 lr_rawset of [lr_G, "load", lr_b_load, 0]
 lr_rawset of [lr_G, "loadfile", lr_b_loadfile, 0]
 lr_rawset of [lr_G, "dofile", lr_b_dofile, 0]
-for k in ["require", "warn"]:
-    lr_rawset of [lr_G, k, lr_stub of (k), 0]
+lr_rawset of [lr_G, "require", lr_b_require, 0]
+lr_rawset of [lr_G, "warn", lr_b_warn, 0]
 lr_rawset of [lr_G, "_G", lr_G, 0]
 lr_rawset of [lr_G, "_VERSION", "Lua 5.4", 0]
 lr_rawset of [lr_G, "string", lr_strlib, 0]
@@ -1737,3 +1829,8 @@ lr_rawset of [lr_G, "coroutine", lr_colib, 0]
 lr_rawset of [lr_G, "utf8", lr_utf8lib, 0]
 lr_rawset of [lr_G, "debug", lr_dbglib, 0]
 lr_rawset of [lr_G, "package", lr_pkglib, 0]
+lr_pkgloaded is lr_newtable of null
+for k in ["string", "table", "math", "io", "os", "coroutine", "utf8", "debug", "package"]:
+    lr_rawset of [lr_pkgloaded, k, lr_rawget of [lr_G, k], 0]
+lr_rawset of [lr_pkgloaded, "_G", lr_G, 0]
+lr_rawset of [lr_pkglib, "loaded", lr_pkgloaded, 0]

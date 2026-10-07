@@ -65,7 +65,10 @@ define lua_parse(tk) as:
     local body is ps_block of (P)
     ps_check of [P, "eof"]
     ps_close_breaks of (P)
-    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
+    local useenv is 0
+    if list_contains of [P.v, "_ENV"]:
+        useenv is 1
+    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1, "useenv": useenv}
 
 define ps_block(P) as:
     local stats is []

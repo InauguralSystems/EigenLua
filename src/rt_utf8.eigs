@@ -1,0 +1,189 @@
+# EigenLua runtime: the utf8 library, a port of lutf8lib.c (Lua 5.4.9).
+# Strings are byte strings; a byte past the end reads as 0, like the C
+# string's terminator.
+
+lr_u8_MAXUNICODE is 1114111
+lr_u8_MAXUTF is 2147483647
+
+define lr_u8_byte(s, i) as:
+    if i < len of s:
+        return ord of s[i]
+    return 0
+
+define lr_u8_iscont(s, i) as:
+    return bit_and of [lr_u8_byte of [s, i], 192] == 128
+
+define lr_u8_posrelat(pos, n) as:
+    if pos >= 0:
+        return pos
+    if 0 - pos > n:
+        return 0
+    return n + pos + 1
+
+# Decode at byte i: [next index, code] or null (utf8_decode).
+define lr_u8_decode(s, i, strict) as:
+    local limits is [4294967296, 128, 2048, 65536, 2097152, 67108864]
+    local c is lr_u8_byte of [s, i]
+    local res is 0
+    local nxt is i + 1
+    if c < 128:
+        res is c
+    elif c >= 254:
+        return null
+    else:
+        local count is 0
+        loop while bit_and of [c, 64] != 0:
+            count is count + 1
+            local cc is lr_u8_byte of [s, i + count]
+            if bit_and of [cc, 192] != 128:
+                return null
+            res is res * 64 + (bit_and of [cc, 63])
+            c is bit_and of [c * 2, 255]
+        res is res + (bit_and of [c, 127]) * (pow of [2, count * 5])
+        if res > lr_u8_MAXUTF or res < limits[count]:
+            return null
+        nxt is i + count + 1
+    if strict:
+        if res > lr_u8_MAXUNICODE or (res >= 55296 and res <= 57343):
+            return null
+    return [nxt, res]
+
+# luaO_utf8esc: the bytes of code point x (up to 2^31 - 1).
+define lr_u8_esc(x) as:
+    if x < 128:
+        return [x]
+    local out is []
+    local mfb is 63
+    loop while 1:
+        list_insert_at of [out, 0, 128 + (bit_and of [x, 63])]
+        x is floor of (x / 64)
+        mfb is floor of (mfb / 2)
+        if x <= mfb:
+            break
+    list_insert_at of [out, 0, (bit_and of [(255 - mfb) * 2, 255]) + x]
+    return out
+
+define lr_utf8_char(A) as:
+    local bs is []
+    local i is 0
+    loop while i < len of A:
+        local code is lr_checkint of [A, i, "char"]
+        if code < 0 or code > lr_u8_MAXUTF:
+            lr_argerr of [i + 1, "char", "value out of range"]
+        for b in lr_u8_esc of (code):
+            append of [bs, b]
+        i is i + 1
+    if len of A == 0:
+        return [""]
+    # direct translation: a NUL byte ends the EigenScript string
+    return [str_from_bytes of (bs)]
+
+define lr_utf8_len(A) as:
+    local s is lr_checkstr of [A, 0, "len"]
+    local n is len of s
+    local posi is lr_u8_posrelat of [lr_optint of [A, 1, "len", 1], n]
+    local posj is lr_u8_posrelat of [lr_optint of [A, 2, "len", -1], n]
+    local lax is lr_t of (lr_arg of [A, 3])
+    posi is posi - 1
+    if not (0 <= posi and posi <= n):
+        lr_argerr of [2, "len", "initial position out of bounds"]
+    posj is posj - 1
+    if not (posj < n):
+        lr_argerr of [3, "len", "final position out of bounds"]
+    local cnt is 0
+    loop while posi <= posj:
+        local d is lr_u8_decode of [s, posi, not lax]
+        if d == null:
+            return [null, posi + 1]
+        posi is d[0]
+        cnt is cnt + 1
+    return [cnt]
+
+define lr_utf8_codepoint(A) as:
+    local s is lr_checkstr of [A, 0, "codepoint"]
+    local n is len of s
+    local posi is lr_u8_posrelat of [lr_optint of [A, 1, "codepoint", 1], n]
+    local pose is lr_u8_posrelat of [lr_optint of [A, 2, "codepoint", posi], n]
+    local lax is lr_t of (lr_arg of [A, 3])
+    if posi < 1:
+        lr_argerr of [2, "codepoint", "out of bounds"]
+    if pose > n:
+        lr_argerr of [3, "codepoint", "out of bounds"]
+    if posi > pose:
+        return []
+    local out is []
+    local i is posi - 1
+    loop while i < pose:
+        local d is lr_u8_decode of [s, i, not lax]
+        if d == null:
+            lr_throw of ((lr_where of (1)) + "invalid UTF-8 code")
+        append of [out, d[1]]
+        i is d[0]
+    return out
+
+define lr_utf8_offset(A) as:
+    local s is lr_checkstr of [A, 0, "offset"]
+    local ln is len of s
+    local n is lr_checkint of [A, 1, "offset"]
+    local posi is 1
+    if n < 0:
+        posi is ln + 1
+    posi is lr_u8_posrelat of [lr_optint of [A, 2, "offset", posi], ln]
+    posi is posi - 1
+    if not (0 <= posi and posi <= ln):
+        lr_argerr of [3, "offset", "position out of bounds"]
+    if n == 0:
+        loop while posi > 0 and lr_u8_iscont of [s, posi]:
+            posi is posi - 1
+    else:
+        if lr_u8_iscont of [s, posi]:
+            lr_throw of ((lr_where of (1)) + "initial position is a continuation byte")
+        if n < 0:
+            loop while n < 0 and posi > 0:
+                posi is posi - 1
+                loop while posi > 0 and lr_u8_iscont of [s, posi]:
+                    posi is posi - 1
+                n is n + 1
+        else:
+            n is n - 1
+            loop while n > 0 and posi < ln:
+                posi is posi + 1
+                loop while lr_u8_iscont of [s, posi]:
+                    posi is posi + 1
+                n is n - 1
+    if n == 0:
+        return [posi + 1]
+    return [null]
+
+define lr_u8_iter(A, strict) as:
+    local s is lr_checkstr of [A, 0, "codes"]
+    local ln is len of s
+    local n is lr_arg of [A, 1]
+    if type of n != "num":
+        n is 0
+    if n < 0:
+        return []
+    if n < ln:
+        loop while lr_u8_iscont of [s, n]:
+            n is n + 1
+    if n >= ln:
+        return []
+    local d is lr_u8_decode of [s, n, strict]
+    if d == null or lr_u8_iscont of [s, d[0]]:
+        lr_throw of ((lr_where of (1)) + "invalid UTF-8 code")
+    return [n + 1, d[1]]
+
+define lr_u8_iter_strict(A) as:
+    return lr_u8_iter of [A, true]
+
+define lr_u8_iter_lax(A) as:
+    return lr_u8_iter of [A, false]
+
+define lr_utf8_codes(A) as:
+    local lax is lr_t of (lr_arg of [A, 1])
+    local s is lr_checkstr of [A, 0, "codes"]
+    if lr_u8_iscont of [s, 0]:
+        lr_argerr of [1, "codes", "invalid UTF-8 code"]
+    if lax:
+        return [lr_u8_iter_lax, s, 0]
+    return [lr_u8_iter_strict, s, 0]
