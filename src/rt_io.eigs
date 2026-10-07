@@ -1,0 +1,170 @@
+# EigenLua runtime: the in-scope part of the io library (GAPS.md: print,
+# io.write and stdin reads) as liolib.c shapes it: io.stdout, io.stderr and
+# io.stdin are file handles (full userdata: type() says "userdata",
+# io.type() says "file") with write, read, lines, flush, setvbuf and close.
+# Opening files, popen and seek are out of scope.
+
+define lr_io_mkfile(fd) as:
+    lr_st.nid is lr_st.nid + 1
+    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "mt": null, "ud": true, "fd": fd, "closed": false}
+
+define lr_io_isfile(v) as:
+    return type of v == "dict" and v.ud == true and v.fd != null
+
+define lr_io_checkfile(A, fname) as:
+    local f is lr_arg of [A, 0]
+    if not (lr_io_isfile of (f)):
+        lr_argerr of [1, fname, "FILE* expected, got " + (lr_typearg of [A, 0])]
+    if f.closed:
+        lr_throw of ((lr_where of (1)) + "attempt to use a closed file")
+    return f
+
+define lr_io_put(f, s) as:
+    if f.fd == "stderr":
+        lr_stderr of (s)
+    else:
+        write of s
+
+define lr_io_writeto(f, A, first) as:
+    local i is first
+    loop while i < len of A:
+        local v is A[i]
+        if type of v == "str":
+            lr_io_put of [f, v]
+        elif type of v == "num":
+            lr_io_put of [f, lr_numstr of (v)]
+        else:
+            lr_argerr of [i + 1 - first, "write", "string expected, got " + (lr_tname of (v))]
+        i is i + 1
+    return [f]
+
+define lr_io_write(A) as:
+    return lr_io_writeto of [lr_io_stdout, A, 0]
+
+define lr_io_f_write(A) as:
+    local f is lr_io_checkfile of [A, "write"]
+    return lr_io_writeto of [f, A, 1]
+
+# One read format from stdin (liolib.c g_read): "l", "L", "n", "a" or a
+# byte count.
+define lr_io_read1(fmt) as:
+    if type of fmt == "num":
+        if fmt == 0:
+            return ""
+        local acc is ""
+        loop while len of acc < fmt:
+            local ln is read_line of null
+            if ln == null:
+                break
+            acc is acc + ln + "\n"
+        if acc == "":
+            return null
+        return acc[0:fmt]
+    local f is fmt
+    if len of f > 0 and f[0] == "*":
+        f is f[1:]
+    local c is f[0:1]
+    if c == "l" or c == "L":
+        local ln is read_line of null
+        if ln == null:
+            return null
+        if c == "L":
+            return ln + "\n"
+        return ln
+    if c == "a":
+        local parts is []
+        loop while 1:
+            local ln is read_line of null
+            if ln == null:
+                break
+            append of [parts, ln + "\n"]
+        return join of [parts, ""]
+    if c == "n":
+        local ln is read_line of null
+        if ln == null:
+            return null
+        return lr_str2num of (ln)
+    lr_argerr of [1, "read", "invalid format"]
+
+define lr_io_readfrom(A, first) as:
+    if len of A <= first:
+        return [lr_io_read1 of ("l")]
+    local out is []
+    local i is first
+    loop while i < len of A:
+        local v is lr_io_read1 of (A[i])
+        append of [out, v]
+        if v == null:
+            return out
+        i is i + 1
+    return out
+
+define lr_io_read(A) as:
+    return lr_io_readfrom of [A, 0]
+
+define lr_io_f_read(A) as:
+    local f is lr_io_checkfile of [A, "read"]
+    if f.fd != "stdin":
+        return [null, "Bad file descriptor", 9]
+    return lr_io_readfrom of [A, 1]
+
+define lr_io_lines_iter(B) as:
+    return [lr_io_read1 of ("l")]
+
+define lr_io_lines(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        lr_unsup of ["io.lines with a file name", 0]
+    return [lr_io_lines_iter]
+
+define lr_io_f_lines(A) as:
+    lr_io_checkfile of [A, "lines"]
+    return [lr_io_lines_iter]
+
+define lr_io_f_flush(A) as:
+    local f is lr_io_checkfile of [A, "flush"]
+    if f.fd == "stdout":
+        flush of null
+    return [f]
+
+define lr_io_flush(A) as:
+    flush of null
+    return [lr_io_stdout]
+
+define lr_io_f_setvbuf(A) as:
+    lr_io_checkfile of [A, "setvbuf"]
+    return [true]
+
+define lr_io_f_close(A) as:
+    local f is lr_io_checkfile of [A, "close"]
+    # the standard files cannot be closed (liolib.c io_noclose)
+    return [null, "cannot close standard file"]
+
+define lr_io_f_tostring(A) as:
+    local f is lr_arg of [A, 0]
+    if f.closed:
+        return ["file (closed)"]
+    return ["file (0x" + (str_lower of (hex of [f.id, 8])) + ")"]
+
+define lr_io_type(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "type", "value expected"]
+    local f is A[0]
+    if not (lr_io_isfile of (f)):
+        return [null]
+    if f.closed:
+        return ["closed file"]
+    return ["file"]
+
+define lr_io_output(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        if lr_io_isfile of (A[0]):
+            return [A[0]]
+        lr_unsup of ["io.output with a file name", 0]
+    return [lr_io_stdout]
+
+define lr_io_input(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        if lr_io_isfile of (A[0]):
+            return [A[0]]
+        lr_unsup of ["io.input with a file name", 0]
+    return [lr_io_stdin]

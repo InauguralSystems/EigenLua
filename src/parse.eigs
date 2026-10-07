@@ -3,7 +3,7 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": []}
+    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": []}
 
 define ps_t(P) as:
     return P.t[P.i]
@@ -15,6 +15,12 @@ define ps_near(P) as:
     local t is P.t[P.i]
     if t == "eof":
         return "<eof>"
+    if len of t == 1 and t != "name":
+        local o is ord of t
+        if o < 32 or o >= 127:
+            return "<\\" + (str of o) + ">"
+    if P.r[P.i] != null:
+        return P.r[P.i]
     return P.v[P.i]
 
 define ps_err(P, msg) as:
@@ -22,8 +28,15 @@ define ps_err(P, msg) as:
         throw of (["SYNTAX", P.l[P.i], msg + " near <eof>"])
     throw of (["SYNTAX", P.l[P.i], msg + " near '" + (ps_near of (P)) + "'"])
 
-define ps_next(P) as:
+# Advance to the next token; a lexical error is raised when its token is
+# reached (lexerr tokens, lex.eigs).
+define ps_adv(P) as:
     P.i is P.i + 1
+    if P.t[P.i] == "lexerr":
+        throw of (["SYNTAX", P.l[P.i], P.v[P.i]])
+
+define ps_next(P) as:
+    ps_adv of (P)
 
 define ps_check(P, t) as:
     if P.t[P.i] != t:
@@ -32,11 +45,13 @@ define ps_check(P, t) as:
 define ps_tokname(t) as:
     if t == "name":
         return "<name>"
+    if t == "eof":
+        return "<eof>"
     return "'" + t + "'"
 
 define ps_expect(P, t) as:
     ps_check of [P, t]
-    P.i is P.i + 1
+    ps_adv of (P)
 
 # Expect a closing token, naming the opener when it is on another line.
 define ps_match(P, what, who, line) as:
@@ -44,12 +59,12 @@ define ps_match(P, what, who, line) as:
         if line == P.l[P.i]:
             ps_err of [P, "'" + what + "' expected"]
         ps_err of [P, "'" + what + "' expected (to close '" + who + "' at line " + (str of line) + ")"]
-    P.i is P.i + 1
+    ps_adv of (P)
 
 define ps_name(P) as:
     ps_check of [P, "name"]
     local v is P.v[P.i]
-    P.i is P.i + 1
+    ps_adv of (P)
     return v
 
 define ps_block_follow(P, with_until) as:
@@ -62,6 +77,8 @@ define ps_block_follow(P, with_until) as:
 
 define lua_parse(tk) as:
     local P is ps_new of (tk)
+    if P.t[0] == "lexerr":
+        throw of (["SYNTAX", P.l[0], P.v[0]])
     local body is ps_block of (P)
     ps_check of [P, "eof"]
     ps_close_gotos of (P)
@@ -96,8 +113,6 @@ define ps_retstat(P) as:
         exprs is ps_explist of (P)
     if P.t[P.i] == ";":
         ps_next of (P)
-    if not (ps_block_follow of [P, 1]):
-        ps_err of [P, "'<eof>' expected"]
     return {"k": "Return", "exprs": exprs, "line": line}
 
 define ps_statement(P) as:
@@ -308,7 +323,7 @@ define ps_body(P, is_method, line) as:
                     ps_next of (P)
                     go is 1
             else:
-                ps_err of [P, "<name> expected"]
+                ps_err of [P, "<name> or '...' expected"]
     ps_expect of [P, ")"]
     append of [P.va, vararg]
     append of [P.loops, 0]

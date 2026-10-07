@@ -38,8 +38,11 @@ define lr_co_runner(co) as:
             local vals is lr_call of [r.f, r.transfer, 0]
             res is concat of [[true], vals]
         catch e:
-            res is [false, lr_errobj of (e)]
-            r.err is res
+            if type of e == "dict" and e.COCLOSE == 1:
+                res is [true]
+            else:
+                res is [false, lr_errobj of (e)]
+                r.err is res
         r.status is "dead"
         r.result is res
         task_send of [r.resumer, 1]
@@ -99,6 +102,9 @@ define lr_co_yield(A) as:
     r.stk is lr_stk
     task_send of [r.resumer, 1]
     task_recv of null
+    if r.closing == true:
+        # coroutine.close: unwind the body, closing its pending variables
+        throw of ({"COCLOSE": 1})
     return r.transfer
 
 define lr_co_status(A) as:
@@ -134,7 +140,13 @@ define lr_co_close(A) as:
     local r is co[0]
     if r.status == "suspended" or r.status == "dead":
         if r.status == "suspended" and r.tid != null:
-            task_kill of r.tid
+            r.closing is true
+            local res is lr_co_resume of [co, []]
+            r.status is "dead"
+            r.err is null
+            if res[0] == false:
+                return res
+            return [true]
         r.status is "dead"
         if r.err != null:
             local e is r.err

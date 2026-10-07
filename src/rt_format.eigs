@@ -542,7 +542,7 @@ define lr_fx_checkint(A, arg) as:
     local v is A[arg]
     local x is lr_arnum of (v)
     if x == null:
-        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_type of (v))]
+        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
     if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         lr_argerr of [arg + 1, "format", "number has no integer representation"]
     return x
@@ -551,7 +551,7 @@ define lr_fx_checknum(A, arg) as:
     local v is A[arg]
     local x is lr_arnum of (v)
     if x == null:
-        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_type of (v))]
+        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
     return x
 
 define lr_s_format(A) as:

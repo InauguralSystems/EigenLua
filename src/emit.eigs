@@ -97,8 +97,6 @@ define rs_stat(R, s) as:
         local i is 0
         for nm in s.names:
             local at is s.attribs[i]
-            if at == "close":
-                em_unsup of ["local <close> attribute", s.line]
             local v is rs_new_var of [R, nm, R.fn, at]
             append of [vs, v]
             i is i + 1
@@ -589,7 +587,7 @@ define em_closure(E, fn) as:
 
 # Emit the factory for fn into G.funcs.
 define em_function(G, fn) as:
-    local E is {"G": G, "out": [], "ind": "", "fn": fn, "loops": []}
+    local E is {"G": G, "out": [], "ind": "", "fn": fn, "loops": [], "tbc": []}
     local id is str of fn.id
     em_line of [E, "define F" + id + "(U) as:"]
     em_indent of (E)
@@ -623,10 +621,52 @@ define em_function(G, fn) as:
 define em_block(E, stats) as:
     for s in stats:
         if s.k == "Label":
+            for s2 in stats:
+                if s2.k == "Local" and list_contains of [s2.attribs, "close"]:
+                    em_unsup of ["to-be-closed variable in a block with labels", s2.line]
             em_block_labels of [E, stats]
             return null
-    for s in stats:
+    em_stats of [E, stats, 0]
+
+# Statements from index i; a to-be-closed local wraps the rest of its block.
+define em_stats(E, stats, i) as:
+    loop while i < len of stats:
+        local s is stats[i]
         em_stat of [E, s]
+        if s.k == "Local" and list_contains of [s.attribs, "close"]:
+            em_tbc_region of [E, s, stats, i + 1]
+            return null
+        i is i + 1
+
+# local x <close> = v: the rest of the block runs in a try; x is closed
+# (its __close called) on normal exit, before a return, break or goto that
+# leaves it, and with the error value when an error unwinds it.
+define em_tbc_region(E, s, stats, from) as:
+    local k is list_index_of of [s.attribs, "close"]
+    local v is s.vars[k]
+    local tb is em_tmp of (E)
+    local site is em_site of [E, s.line, "", ""]
+    em_line of [E, "local " + tb + " is [" + (em_var_ref of (v)) + ", false]"]
+    em_line of [E, "lr_tbc_check of [" + tb + "[0], " + (em_strlit of (v.name)) + ", " + site + "]"]
+    em_line of [E, "try:"]
+    em_indent of (E)
+    append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
+    em_stats of [E, stats, from]
+    list_truncate of [E.tbc, len of E.tbc - 1]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
+    em_dedent of (E)
+    em_line of [E, "catch " + tb + "e:"]
+    em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + site + "]"]
+
+# Close the to-be-closed variables declared inside E.loops[depth:] (all of
+# them for depth 0), innermost first.
+define em_close_tbc(E, depth) as:
+    local i is len of E.tbc - 1
+    loop while i >= 0:
+        local t is E.tbc[i]
+        if t.ld >= depth:
+            em_line of [E, "lr_tbc_close of [" + t.t + ", null, " + t.site + "]"]
+        i is i - 1
 
 # Declare a local v with value code.
 define em_declare(E, v, code) as:
@@ -767,10 +807,18 @@ define em_stat(E, s) as:
         em_genfor of [E, s]
     elif k == "Return":
         local n is len of s.exprs
+        local rc is ""
         if n == 1 and em_is_multi of (s.exprs[0]):
-            em_line of [E, "return " + (em_multi of [E, s.exprs[0]])]
+            rc is em_multi of [E, s.exprs[0]]
         else:
-            em_line of [E, "return " + (em_explist of [E, s.exprs])]
+            rc is em_explist of [E, s.exprs]
+        if len of E.tbc > 0:
+            # the values first, then the to-be-closed variables, innermost first
+            local rt is em_tmp of (E)
+            em_line of [E, "local " + rt + " is " + rc]
+            em_close_tbc of [E, 0]
+            rc is rt
+        em_line of [E, "return " + rc]
     elif k == "Break":
         em_break of (E)
     elif k == "Goto":
@@ -852,11 +900,15 @@ define em_numfor(E, s) as:
     em_line of [E, "local " + tl + " is " + tp + "[1]"]
     em_line of [E, "local " + st + " is " + tp + "[2]"]
     em_line of [E, "local " + ts + " is " + tp + "[3]"]
-    em_line of [E, "loop while " + ti + " * " + ts + " <= " + tl + ":"]
+    local tc is em_tmp of (E)
+    em_line of [E, "local " + tc + " is " + tp + "[4]"]
+    # an integer loop counts down tc; a float loop (tc < 0) compares
+    em_line of [E, "loop while " + tc + " > 0 or (" + tc + " < 0 and " + ti + " * " + ts + " <= " + tl + "):"]
     em_indent of (E)
     em_loop_begin of [E, "lua"]
     em_declare of [E, s.v, ti]
     em_line of [E, ti + " is " + ti + " + " + st]
+    em_line of [E, tc + " is " + tc + " - 1"]
     em_block of [E, s.body]
     em_line of [E, "null"]
     em_dedent of (E)
@@ -891,7 +943,7 @@ define em_genfor(E, s) as:
     em_dedent of (E)
     em_loop_end of (E)
 
-em_rt_parts is ["rt_pattern.eigs", "rt_format.eigs", "rt_math.eigs", "rt_utf8.eigs", "rt_coroutine.eigs"]
+em_rt_parts is ["rt_pattern.eigs", "rt_format.eigs", "rt_math.eigs", "rt_utf8.eigs", "rt_coroutine.eigs", "rt_io.eigs"]
 
 define em_dirname(p) as:
     local i is len of p - 1
@@ -983,18 +1035,23 @@ define em_loop_end(E) as:
 
 define em_break(E) as:
     local top is E.loops[len of E.loops - 1]
-    if top.k == "lua":
-        em_line of [E, "break"]
-        return null
     local i is len of E.loops - 1
     loop while E.loops[i].k != "lua":
         i is i - 1
+    em_close_tbc of [E, i + 1]
+    if top.k == "lua":
+        em_line of [E, "break"]
+        return null
     em_line of [E, "gj is " + (str of (0 - E.loops[i].id))]
     em_line of [E, "break"]
 
 define em_goto(E, s) as:
     local D is E.G.labelloop[str of s.target]
     local top is E.loops[len of E.loops - 1]
+    local di is 0
+    loop while E.loops[di].id != D.id:
+        di is di + 1
+    em_close_tbc of [E, di + 1]
     if top.id == D.id:
         em_line of [E, D.pc + " is " + (str of D.labels[str of s.target])]
         em_line of [E, "continue"]
