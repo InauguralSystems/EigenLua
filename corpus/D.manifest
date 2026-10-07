@@ -71,6 +71,7 @@ tbl_len_nonint.lua unspecified-audit: ok
 tbl_next_pairs.lua unspecified-audit: ok
 tbl_nil_holes.lua unspecified-audit: ok
 tbl_remove_insert.lua unspecified-audit: ok
+tbl_sort_auxsort.lua unspecified-audit: ok
 utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>

@@ -653,11 +653,13 @@ define lr_gset(name, v, site) as:
 define lr_call(f, args, site) as:
     local tf is type of f
     if tf == "fn":
+        local pf is lr_st.curf
         if site == 0:
             lr_st.curf is f
         append of [lr_stk, site]
         local r is f of (args)
         list_truncate of [lr_stk, len of lr_stk - 1]
+        lr_st.curf is pf
         return r
     local h is lr_metafield of [f, "__call"]
     if h != null:
@@ -1628,51 +1630,103 @@ define lr_t_move(A) as:
                 j is j - 1
     return [a2]
 
-# table.sort: merge sort (stable, which Lua's is not required to be; the
-# order of equal elements is unspecified, so any order is conforming).
+# table.sort: ltablib.c sort/auxsort/partition/choosePivot, with the same
+# lua_geti/lua_seti order (set2 stores the top value first).
 define lr_t_sort(A) as:
     local t is lr_checktab of [A, 0, "sort", "rwl"]
-    local cmp is lr_arg of [A, 1]
     local n is lr_auxlen of (t)
-    if n > 1 and cmp != null and type of cmp != "fn" and type of cmp != "builtin":
-        lr_argerr of [2, "sort", "function expected, got " + (lr_typearg of [A, 1])]
-    local xs is []
-    for i in range of n:
-        append of [xs, lr_index of [t, i + 1, 0]]
-    local sorted is lr_msort of [xs, cmp]
-    for i in range of n:
-        lr_setindex of [t, i + 1, sorted[i], 0]
+    if n > 1:
+        if not (n < 2147483647):
+            lr_argerr of [1, "sort", "array too big"]
+        local cmp is lr_arg of [A, 1]
+        if cmp != null and type of cmp != "fn" and type of cmp != "builtin":
+            lr_argerr of [2, "sort", "function expected, got " + (lr_typearg of [A, 1])]
+        lr_auxsort of [t, cmp, 1, n, 0]
     return []
 
+# sort_comp: lua_compare(a, b, LUA_OPLT), or the order function.
 define lr_less(a, b, cmp) as:
     if cmp == null:
         return lr_lt of [a, b, 0]
     return lr_t of (lr_call1 of [cmp, [a, b], 0])
 
-define lr_msort(xs, cmp) as:
-    local n is len of xs
-    if n <= 1:
-        return xs
-    local mid is floor of (n / 2)
-    local l is lr_msort of [list_slice of [xs, 0, mid], cmp]
-    local r is lr_msort of [list_slice of [xs, mid, n], cmp]
-    local out is []
-    local i is 0
-    local j is 0
-    loop while i < len of l and j < len of r:
-        if lr_less of [r[j], l[i], cmp]:
-            append of [out, r[j]]
-            j is j + 1
-        else:
-            append of [out, l[i]]
-            i is i + 1
-    loop while i < len of l:
-        append of [out, l[i]]
+define lr_sorterr() as:
+    lr_throw of ((lr_where of (1)) + "invalid order function for sorting")
+
+# l_randomizePivot: clock and time summed as unsigned ints.
+define lr_sortrnd() as:
+    local c is floor of (((clock_unix of null) - lr_st.t0) * 1000000)
+    local s is floor of (clock_unix of null)
+    return (c + s) % 4294967296
+
+define lr_partition(t, cmp, lo, up, P) as:
+    local i is lo
+    local j is up - 1
+    loop while true:
         i is i + 1
-    loop while j < len of r:
-        append of [out, r[j]]
-        j is j + 1
-    return out
+        local ai is lr_index of [t, i, 0]
+        loop while lr_less of [ai, P, cmp]:
+            if i == up - 1:
+                lr_sorterr of null
+            i is i + 1
+            ai is lr_index of [t, i, 0]
+        j is j - 1
+        local aj is lr_index of [t, j, 0]
+        loop while lr_less of [P, aj, cmp]:
+            if j < i:
+                lr_sorterr of null
+            j is j - 1
+            aj is lr_index of [t, j, 0]
+        if j < i:
+            lr_setindex of [t, up - 1, ai, 0]
+            lr_setindex of [t, i, P, 0]
+            return i
+        lr_setindex of [t, i, aj, 0]
+        lr_setindex of [t, j, ai, 0]
+
+define lr_auxsort(t, cmp, lo, up, rnd) as:
+    loop while lo < up:
+        local a is lr_index of [t, lo, 0]
+        local b is lr_index of [t, up, 0]
+        if lr_less of [b, a, cmp]:
+            lr_setindex of [t, lo, b, 0]
+            lr_setindex of [t, up, a, 0]
+        if up - lo == 1:
+            return null
+        local p is floor of ((lo + up) / 2)
+        if not (up - lo < 100 or rnd == 0):
+            local r4 is floor of ((up - lo) / 4)
+            p is (rnd % (r4 * 2)) + (lo + r4)
+        local ap is lr_index of [t, p, 0]
+        local al is lr_index of [t, lo, 0]
+        if lr_less of [ap, al, cmp]:
+            lr_setindex of [t, p, al, 0]
+            lr_setindex of [t, lo, ap, 0]
+        else:
+            local au is lr_index of [t, up, 0]
+            if lr_less of [au, ap, cmp]:
+                lr_setindex of [t, p, au, 0]
+                lr_setindex of [t, up, ap, 0]
+        if up - lo == 2:
+            return null
+        local P is lr_index of [t, p, 0]
+        local x is lr_index of [t, up - 1, 0]
+        lr_setindex of [t, p, x, 0]
+        lr_setindex of [t, up - 1, P, 0]
+        p is lr_partition of [t, cmp, lo, up, P]
+        local m is 0
+        if p - lo < up - p:
+            lr_auxsort of [t, cmp, lo, p - 1, rnd]
+            m is p - lo
+            lo is p + 1
+        else:
+            lr_auxsort of [t, cmp, p + 1, up, rnd]
+            m is up - p
+            up is p - 1
+        # IdxT is unsigned: up < lo wraps to a huge (up - lo) / 128
+        if up < lo or floor of ((up - lo) / 128) > m:
+            rnd is lr_sortrnd of null
+    return null
 
 # ------------------------------------------------------------ math library
 
