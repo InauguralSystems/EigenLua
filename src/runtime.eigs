@@ -758,8 +758,6 @@ define lr_idxerr(o, k, site, depth) as:
     local desc is ""
     if depth == 0 and sd[1] != "":
         desc is " (" + sd[1] + ")"
-    elif depth == 0 and type of k == "str":
-        desc is " (field '" + k + "')"
     lr_rterr of [site, "attempt to index a " + (lr_tname of (o)) + " value" + desc]
 
 define lr_setindex(o, k, v, site) as:

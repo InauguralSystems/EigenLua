@@ -246,8 +246,16 @@ define em_desc(E, e) as:
         if e.var.fn.id != E.fn.id:
             return "upvalue '" + e.n + "'"
         return "local '" + e.n + "'"
-    if e.k == "Index" and e.key.k == "Str":
-        return "field '" + e.key.v + "'"
+    if e.k == "Paren":
+        return em_desc of [E, e.e]
+    # ldebug.c getobjname: OP_GETFIELD names its key, OP_GETI is "integer
+    # index", any other key (rname) is "?"
+    if e.k == "Index":
+        if e.key.k == "Str":
+            return "field '" + e.key.v + "'"
+        if e.key.k == "Num" and not e.key.fl and e.key.v >= 0 and e.key.v <= 255:
+            return "field 'integer index'"
+        return "field '?'"
     if e.k == "Str":
         return "constant '" + e.v + "'"
     return ""

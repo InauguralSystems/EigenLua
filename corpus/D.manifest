@@ -17,6 +17,7 @@ debug_traceback_thread.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
 err_c_function_unlocated.lua unspecified-audit: ok
 err_eigs_located.lua unspecified-audit: ok
+err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
