@@ -1,0 +1,8 @@
+-- surface: load: only files skip a first line starting with '#'; a string chunk with one is a syntax error (lauxlib.c skipcomment)
+print(load("#x\nreturn 1"))
+print(load("#!/usr/bin/lua\nreturn 2"))
+print(load("# comment"))
+local f = load("return 3 -- #x")
+print(f())
+local ok = load(" #x")
+print(ok)

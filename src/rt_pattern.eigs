@@ -1,0 +1,519 @@
+# EigenLua runtime: Lua 5.4 patterns, a port of lstrlib.c's matcher.
+#
+# The subject and the pattern are matched as lists of byte values; a
+# position is a 0-based index and -1 is C's NULL (no match). Character
+# classes follow the C locale, as the reference does. Loaded before
+# runtime.eigs, whose string table refers to the lr_s_* functions here.
+
+lr_pm_CAP_UNFINISHED is -1
+lr_pm_CAP_POSITION is -2
+lr_pm_MAXCAPTURES is 32
+lr_pm_MAXCCALLS is 200
+
+define lr_bytes(s) as:
+    local n is len of s
+    local b is []
+    local i is 0
+    loop while i < n:
+        append of [b, ord of s[i]]
+        i is i + 1
+    return b
+
+# One 256-entry table per class letter (lower case), C locale.
+define lr_pm_mktab(pred) as:
+    local t is []
+    for c in range of 256:
+        append of [t, pred of c]
+    return t
+
+define lr_pm_isalpha(c) as:
+    return (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+
+define lr_pm_isdigit(c) as:
+    return c >= 48 and c <= 57
+
+define lr_pm_isalnum(c) as:
+    return (lr_pm_isalpha of (c)) or (lr_pm_isdigit of (c))
+
+define lr_pm_ispunct(c) as:
+    return c >= 33 and c <= 126 and not (lr_pm_isalnum of (c))
+
+define lr_pm_isspace(c) as:
+    return (c >= 9 and c <= 13) or c == 32
+
+define lr_pm_tabs_build as:
+    local tabs is []
+    for i in range of 128:
+        append of [tabs, null]
+    tabs[97] is lr_pm_mktab of (lr_pm_isalpha)
+    tabs[99] is lr_pm_mktab of ((c) => c < 32 or c == 127)
+    tabs[100] is lr_pm_mktab of (lr_pm_isdigit)
+    tabs[103] is lr_pm_mktab of ((c) => c >= 33 and c <= 126)
+    tabs[108] is lr_pm_mktab of ((c) => c >= 97 and c <= 122)
+    tabs[112] is lr_pm_mktab of (lr_pm_ispunct)
+    tabs[115] is lr_pm_mktab of (lr_pm_isspace)
+    tabs[117] is lr_pm_mktab of ((c) => c >= 65 and c <= 90)
+    tabs[119] is lr_pm_mktab of (lr_pm_isalnum)
+    tabs[120] is lr_pm_mktab of ((c) => (lr_pm_isdigit of (c)) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70))
+    # %z: the NUL byte (lstrlib.c match_class, a deprecated class 5.4 keeps)
+    tabs[122] is lr_pm_mktab of ((c) => c == 0)
+    return tabs
+
+lr_pm_tabs is lr_pm_tabs_build of null
+
+define lr_pm_err(msg) as:
+    lr_throw of ((lr_where of (1)) + msg)
+
+define lr_pm_new(s, p) as:
+    local caps is []
+    for i in range of lr_pm_MAXCAPTURES:
+        append of [caps, [0, 0]]
+    return {"str": s, "s": lr_bytes of (s), "sl": len of s, "p": lr_bytes of (p), "pl": len of p, "level": 0, "cap": caps, "depth": lr_pm_MAXCCALLS}
+
+define lr_pm_reprep(ms) as:
+    ms.level is 0
+    ms.depth is lr_pm_MAXCCALLS
+
+define lr_pm_class_end(ms, p) as:
+    local pat is ms.p
+    local pl is ms.pl
+    local c is pat[p]
+    p is p + 1
+    if c == 37:
+        if p >= pl:
+            lr_pm_err of ("malformed pattern (ends with '%')")
+        return p + 1
+    if c == 91:
+        if p < pl and pat[p] == 94:
+            p is p + 1
+        loop while 1:
+            if p >= pl:
+                lr_pm_err of ("malformed pattern (missing ']')")
+            local cc is pat[p]
+            p is p + 1
+            if cc == 37 and p < pl:
+                p is p + 1
+            if p >= pl:
+                lr_pm_err of ("malformed pattern (missing ']')")
+            if pat[p] == 93:
+                return p + 1
+    return p
+
+define lr_pm_match_class(c, cl) as:
+    local lo is cl
+    if cl >= 65 and cl <= 90:
+        lo is cl + 32
+    local tab is null
+    if lo < 128:
+        tab is lr_pm_tabs[lo]
+    if tab == null:
+        return cl == c
+    if lo != cl:
+        return not tab[c]
+    return tab[c]
+
+# p at '[', ec at the closing ']'.
+define lr_pm_bracket(ms, c, p, ec) as:
+    local pat is ms.p
+    local sig is true
+    if pat[p + 1] == 94:
+        sig is false
+        p is p + 1
+    p is p + 1
+    loop while p < ec:
+        local pc is pat[p]
+        if pc == 37:
+            p is p + 1
+            if lr_pm_match_class of [c, pat[p]]:
+                return sig
+        elif p + 2 < ec and pat[p + 1] == 45:
+            if pc <= c and c <= pat[p + 2]:
+                return sig
+            p is p + 2
+        elif pc == c:
+            return sig
+        p is p + 1
+    return not sig
+
+define lr_pm_single(ms, s, p, ep) as:
+    if s >= ms.sl:
+        return false
+    local c is ms.s[s]
+    local pc is ms.p[p]
+    if pc == 46:
+        return true
+    if pc == 37:
+        return lr_pm_match_class of [c, ms.p[p + 1]]
+    if pc == 91:
+        return lr_pm_bracket of [ms, c, p, ep - 1]
+    return pc == c
+
+define lr_pm_balance(ms, s, p) as:
+    if p + 1 >= ms.pl:
+        lr_pm_err of ("malformed pattern (missing arguments to '%b')")
+    if s >= ms.sl or ms.s[s] != ms.p[p]:
+        return -1
+    local b is ms.p[p]
+    local e is ms.p[p + 1]
+    local cont is 1
+    local src is ms.s
+    local sl is ms.sl
+    s is s + 1
+    loop while s < sl:
+        local c is src[s]
+        if c == e:
+            cont is cont - 1
+            if cont == 0:
+                return s + 1
+        elif c == b:
+            cont is cont + 1
+        s is s + 1
+    return -1
+
+define lr_pm_max_expand(ms, s, p, ep) as:
+    local i is 0
+    loop while lr_pm_single of [ms, s + i, p, ep]:
+        i is i + 1
+    loop while i >= 0:
+        local res is lr_pm_match of [ms, s + i, ep + 1]
+        if res != -1:
+            return res
+        i is i - 1
+    return -1
+
+define lr_pm_min_expand(ms, s, p, ep) as:
+    loop while 1:
+        local res is lr_pm_match of [ms, s, ep + 1]
+        if res != -1:
+            return res
+        if lr_pm_single of [ms, s, p, ep]:
+            s is s + 1
+        else:
+            return -1
+
+define lr_pm_start_capture(ms, s, p, wh) as:
+    local level is ms.level
+    if level >= lr_pm_MAXCAPTURES:
+        lr_pm_err of ("too many captures")
+    ms.cap[level] is [s, wh]
+    ms.level is level + 1
+    local res is lr_pm_match of [ms, s, p]
+    if res == -1:
+        ms.level is ms.level - 1
+    return res
+
+define lr_pm_end_capture(ms, s, p) as:
+    local l is ms.level - 1
+    loop while l >= 0:
+        if ms.cap[l][1] == lr_pm_CAP_UNFINISHED:
+            break
+        l is l - 1
+    if l < 0:
+        lr_pm_err of ("invalid pattern capture")
+    ms.cap[l][1] is s - ms.cap[l][0]
+    local res is lr_pm_match of [ms, s, p]
+    if res == -1:
+        ms.cap[l][1] is lr_pm_CAP_UNFINISHED
+    return res
+
+define lr_pm_check_capture(ms, l) as:
+    l is l - 49
+    if l < 0 or l >= ms.level or ms.cap[l][1] == lr_pm_CAP_UNFINISHED:
+        lr_pm_err of ("invalid capture index %" + (str of (l + 1)))
+    return l
+
+define lr_pm_match_capture(ms, s, l) as:
+    l is lr_pm_check_capture of [ms, l]
+    local init is ms.cap[l][0]
+    local n is ms.cap[l][1]
+    if ms.sl - s >= n:
+        local src is ms.s
+        local k is 0
+        loop while k < n:
+            if src[init + k] != src[s + k]:
+                return -1
+            k is k + 1
+        return s + n
+    return -1
+
+define lr_pm_match(ms, s, p) as:
+    ms.depth is ms.depth - 1
+    if ms.depth == 0:
+        lr_pm_err of ("pattern too complex")
+    local pat is ms.p
+    local pl is ms.pl
+    loop while 1:
+        if p >= pl:
+            break
+        local pc is pat[p]
+        local dflt is false
+        if pc == 40:
+            if p + 1 < pl and pat[p + 1] == 41:
+                s is lr_pm_start_capture of [ms, s, p + 2, lr_pm_CAP_POSITION]
+            else:
+                s is lr_pm_start_capture of [ms, s, p + 1, lr_pm_CAP_UNFINISHED]
+            break
+        elif pc == 41:
+            s is lr_pm_end_capture of [ms, s, p + 1]
+            break
+        elif pc == 36 and p + 1 == pl:
+            if s != ms.sl:
+                s is -1
+            break
+        elif pc == 37 and p + 1 < pl:
+            local nc is pat[p + 1]
+            if nc == 98:
+                s is lr_pm_balance of [ms, s, p + 2]
+                if s != -1:
+                    p is p + 4
+                    continue
+                break
+            elif nc == 102:
+                p is p + 2
+                if p >= pl or pat[p] != 91:
+                    lr_pm_err of ("missing '[' after '%f' in pattern")
+                local ep is lr_pm_class_end of [ms, p]
+                local prv is 0
+                if s > 0:
+                    prv is ms.s[s - 1]
+                local cur is 0
+                if s < ms.sl:
+                    cur is ms.s[s]
+                if not (lr_pm_bracket of [ms, prv, p, ep - 1]) and (lr_pm_bracket of [ms, cur, p, ep - 1]):
+                    p is ep
+                    continue
+                s is -1
+                break
+            elif nc >= 48 and nc <= 57:
+                s is lr_pm_match_capture of [ms, s, nc]
+                if s != -1:
+                    p is p + 2
+                    continue
+                break
+            else:
+                dflt is true
+        else:
+            dflt is true
+        if dflt:
+            local ep2 is lr_pm_class_end of [ms, p]
+            local epc is 0
+            if ep2 < pl:
+                epc is pat[ep2]
+            if not (lr_pm_single of [ms, s, p, ep2]):
+                if epc == 42 or epc == 63 or epc == 45:
+                    p is ep2 + 1
+                    continue
+                s is -1
+                break
+            if epc == 63:
+                local res is lr_pm_match of [ms, s + 1, ep2 + 1]
+                if res != -1:
+                    s is res
+                    break
+                p is ep2 + 1
+                continue
+            if epc == 43:
+                s is lr_pm_max_expand of [ms, s + 1, p, ep2]
+                break
+            if epc == 42:
+                s is lr_pm_max_expand of [ms, s, p, ep2]
+                break
+            if epc == 45:
+                s is lr_pm_min_expand of [ms, s, p, ep2]
+                break
+            s is s + 1
+            p is ep2
+    ms.depth is ms.depth + 1
+    return s
+
+# Capture i of the match [s, e) as a Lua value.
+define lr_pm_onecap(ms, i, s, e) as:
+    if i >= ms.level:
+        if i != 0:
+            lr_pm_err of ("invalid capture index %" + (str of (i + 1)))
+        return ms.str[s:e]
+    local init is ms.cap[i][0]
+    local l is ms.cap[i][1]
+    if l == lr_pm_CAP_UNFINISHED:
+        lr_pm_err of ("unfinished capture")
+    if l == lr_pm_CAP_POSITION:
+        return init + 1
+    return ms.str[init:init + l]
+
+# All captures (the whole match when there are none and whole is set).
+define lr_pm_caps(ms, s, e, whole) as:
+    local n is ms.level
+    if n == 0 and whole:
+        n is 1
+    local out is []
+    for i in range of n:
+        append of [out, lr_pm_onecap of [ms, i, s, e]]
+    return out
+
+define lr_pm_nospecials(p) as:
+    for c in ["^", "$", "*", "+", "?", ".", "(", "[", "%", "-"]:
+        if index_of of [p, c] >= 0:
+            return false
+    return true
+
+define lr_posrelat(pos, n) as:
+    if pos > 0:
+        return pos
+    if pos == 0:
+        return 1
+    if pos < 0 - n:
+        return 1
+    return n + pos + 1
+
+define lr_str_find_aux(A, find) as:
+    local fname is "match"
+    if find:
+        fname is "find"
+    local s is lr_checkstr of [A, 0, fname]
+    local p is lr_checkstr of [A, 1, fname]
+    local ls is len of s
+    local init is lr_posrelat of [lr_optint of [A, 2, fname, 1], ls]
+    if init > ls + 1:
+        return [null]
+    if find and ((lr_t of (lr_arg of [A, 3])) or (lr_pm_nospecials of (p))):
+        local idx is 0
+        if len of p > 0:
+            idx is index_of of [s[init - 1:], p]
+            if idx < 0:
+                return [null]
+        return [init + idx, init + idx + len of p - 1]
+    local ms is lr_pm_new of [s, p]
+    local pi is 0
+    local anchor is ms.pl > 0 and ms.p[0] == 94
+    if anchor:
+        pi is 1
+    local s1 is init - 1
+    loop while 1:
+        lr_pm_reprep of (ms)
+        local e is lr_pm_match of [ms, s1, pi]
+        if e != -1:
+            if find:
+                return concat of [[s1 + 1, e], lr_pm_caps of [ms, null, null, false]]
+            return lr_pm_caps of [ms, s1, e, true]
+        s1 is s1 + 1
+        if anchor or s1 > ms.sl:
+            break
+    return [null]
+
+define lr_s_find(A) as:
+    return lr_str_find_aux of [A, true]
+
+define lr_s_match(A) as:
+    return lr_str_find_aux of [A, false]
+
+define lr_s_gmatch(A) as:
+    local s is lr_checkstr of [A, 0, "gmatch"]
+    local p is lr_checkstr of [A, 1, "gmatch"]
+    local ls is len of s
+    local init is lr_posrelat of [lr_optint of [A, 2, "gmatch", 1], ls]
+    # lstrlib.c gmatch: an init past the end starts after the end (ls + 1,
+    # 0-based), where not even an empty match is left
+    if init - 1 > ls:
+        init is ls + 2
+    local ms is lr_pm_new of [s, p]
+    local st is {"src": init - 1, "last": -1}
+    define gmatch_aux(B) as:
+        local src is st.src
+        loop while src <= ms.sl:
+            lr_pm_reprep of (ms)
+            local e is lr_pm_match of [ms, src, 0]
+            if e != -1 and e != st.last:
+                st.src is e
+                st.last is e
+                return lr_pm_caps of [ms, src, e, true]
+            src is src + 1
+        st.src is src
+        return [null]
+    return [gmatch_aux]
+
+define lr_pm_add_s(ms, parts, s, e, news) as:
+    local n is len of news
+    local i is 0
+    local seg is 0
+    loop while i < n:
+        if news[i] == "%":
+            append of [parts, news[seg:i]]
+            i is i + 1
+            local d is ""
+            if i < n:
+                d is news[i]
+            if d == "%":
+                append of [parts, "%"]
+            elif d == "0":
+                append of [parts, ms.str[s:e]]
+            elif d != "" and (lr_pm_isdigit of (ord of d)):
+                local v is lr_pm_onecap of [ms, (ord of d) - 49, s, e]
+                append of [parts, lr_tostr of (v)]
+            else:
+                lr_pm_err of ("invalid use of '%' in replacement string")
+            i is i + 1
+            seg is i
+        else:
+            i is i + 1
+    append of [parts, news[seg:n]]
+
+define lr_pm_add_value(ms, parts, s, e, repl, tr) as:
+    local v is null
+    if tr == "fn":
+        v is lr_call1 of [repl, lr_pm_caps of [ms, s, e, true], 0]
+    elif tr == "dict":
+        v is lr_index of [repl, lr_pm_onecap of [ms, 0, s, e], 0]
+    else:
+        lr_pm_add_s of [ms, parts, s, e, repl]
+        return null
+    if not (lr_t of (v)):
+        append of [parts, ms.str[s:e]]
+    elif type of v == "str":
+        append of [parts, v]
+    elif type of v == "num":
+        append of [parts, lr_numstr of (v)]
+    else:
+        lr_pm_err of ("invalid replacement value (a " + (lr_type of (v)) + ")")
+
+define lr_s_gsub(A) as:
+    local src is lr_checkstr of [A, 0, "gsub"]
+    local p is lr_checkstr of [A, 1, "gsub"]
+    local repl is lr_arg of [A, 2]
+    local tr is type of repl
+    if tr == "num":
+        repl is lr_numstr of (repl)
+        tr is "str"
+    if tr == "builtin":
+        tr is "fn"
+    if tr != "str" and tr != "dict" and tr != "fn":
+        lr_argerr of [3, "gsub", "string/function/table expected, got " + (lr_typearg of [A, 2])]
+    local srcl is len of src
+    local max_s is lr_optint of [A, 3, "gsub", srcl + 1]
+    local ms is lr_pm_new of [src, p]
+    local pi is 0
+    local anchor is ms.pl > 0 and ms.p[0] == 94
+    if anchor:
+        pi is 1
+    local parts is []
+    local s is 0
+    local seg is 0
+    local last is -1
+    local n is 0
+    loop while n < max_s:
+        lr_pm_reprep of (ms)
+        local e is lr_pm_match of [ms, s, pi]
+        if e != -1 and e != last:
+            n is n + 1
+            append of [parts, src[seg:s]]
+            lr_pm_add_value of [ms, parts, s, e, repl, tr]
+            s is e
+            seg is e
+            last is e
+        elif s < srcl:
+            s is s + 1
+        else:
+            break
+        if anchor:
+            break
+    append of [parts, src[seg:srcl]]
+    return [join of [parts, ""], n]

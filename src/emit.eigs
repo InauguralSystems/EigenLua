@@ -16,8 +16,8 @@
 #     Lua line and the variable descriptions Lua puts in its messages.
 # A construct the emitter does not handle raises ["UNSUP", what, line].
 
-define em_unsup(what, line) as:
-    throw of ["UNSUP", what, line]
+define em_unsup(wht, line) as:
+    throw of (["UNSUP", wht, line])
 
 # ---------------------------------------------------------------- resolver
 
@@ -46,12 +46,18 @@ define rs_lookup(R, name) as:
     return null
 
 # Mark v captured and thread it through every function from fn up to v.fn.
-define rs_capture(R, v, fn) as:
+define rs_capture(R, v, fn, line) as:
     v.cap is 1
     local g is fn
     loop while g != null and g.id != v.fn.id:
         local key is str of v.id
         if not (has_key of [g.freeidx, key]):
+            if len of g.free >= 255:
+                # lparser.c newupvalue: MAXUPVAL (255)
+                local wh is "main function"
+                if g.main != 1:
+                    wh is "function at line " + (str of g.line)
+                throw of (["SYNTAX", line, "too many upvalues (limit is 255) in " + wh + " near '" + v.name + "'"])
             g.freeidx[key] is len of g.free
             append of [g.free, v]
         g is g.parent
@@ -71,6 +77,13 @@ define rs_func(R, fn, parent) as:
         rs_declare of [R, v]
         append of [pv, v]
     fn.pvars is pv
+    if parent == null:
+        # _ENV is a variable of the main function: every global name
+        # indexes the _ENV visible where it appears (manual 2.2)
+        local ev is rs_new_var of [R, "_ENV", fn, ""]
+        ev.implicit is 1
+        rs_declare of [R, ev]
+        fn.envvar is ev
     rs_block of [R, fn.body]
     rs_pop of (R)
     R.fn is saved
@@ -89,21 +102,15 @@ define rs_stat(R, s) as:
         local vs is []
         local i is 0
         for nm in s.names:
-            local at is s.attribs[i]
-            if at == "close":
-                em_unsup of ["local <close> attribute", s.line]
-            local v is rs_new_var of [R, nm, R.fn, at]
+            local atb is s.attribs[i]
+            local v is rs_new_var of [R, nm, R.fn, atb]
             append of [vs, v]
             i is i + 1
         for v in vs:
-            if v.name == "_ENV":
-                em_unsup of ["local named _ENV", s.line]
             rs_declare of [R, v]
         s.vars is vs
     elif k == "LocalFunction":
         local v is rs_new_var of [R, s.name, R.fn, ""]
-        if s.name == "_ENV":
-            em_unsup of ["local named _ENV", s.line]
         rs_declare of [R, v]
         s.var is v
         rs_func of [R, s.func, R.fn]
@@ -111,7 +118,7 @@ define rs_stat(R, s) as:
         for t in s.targets:
             rs_expr of [R, t]
             if t.k == "Name" and t.var != null and t.var.attr != "":
-                throw of ["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"]
+                throw of (["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"])
         for e in s.exprs:
             rs_expr of [R, e]
     elif k == "CallStat":
@@ -129,10 +136,13 @@ define rs_stat(R, s) as:
         rs_expr of [R, s.cond]
         rs_pop of (R)
     elif k == "If":
+        # in source order (cond, block, cond, block): upvalues are numbered
+        # by first reference
+        local ci is 0
         for c in s.conds:
             rs_expr of [R, c]
-        for b in s.blocks:
-            rs_block of [R, b]
+            rs_block of [R, s.blocks[ci]]
+            ci is ci + 1
         if s["else"] != null:
             rs_block of [R, s["else"]]
     elif k == "NumFor":
@@ -163,12 +173,10 @@ define rs_stat(R, s) as:
             rs_expr of [R, e]
     elif k == "Break":
         null
-    elif k == "Goto":
-        em_unsup of ["goto", s.line]
-    elif k == "Label":
-        em_unsup of ["label (goto target)", s.line]
+    elif k == "Goto" or k == "Label":
+        R.fn.hasgoto is 1
     else:
-        throw of ["INTERNAL", "unknown statement " + k]
+        throw of (["INTERNAL", "unknown statement " + k])
 
 define rs_expr(R, e) as:
     local k is e.k
@@ -176,9 +184,12 @@ define rs_expr(R, e) as:
         local v is rs_lookup of [R, e.n]
         e.var is v
         if v != null and v.fn.id != R.fn.id:
-            rs_capture of [R, v, R.fn]
-        if v == null and e.n == "_ENV":
-            em_unsup of ["_ENV", e.line]
+            rs_capture of [R, v, R.fn, e.line]
+        if v == null:
+            local ev is rs_lookup of [R, "_ENV"]
+            e.envvar is ev
+            if ev.fn.id != R.fn.id:
+                rs_capture of [R, ev, R.fn, e.line]
     elif k == "Index":
         rs_expr of [R, e.o]
         rs_expr of [R, e.key]
@@ -223,7 +234,7 @@ define em_tmp(E) as:
 # A site is [line, descriptor_a, descriptor_b]; its id indexes the table.
 define em_site(E, line, da, db) as:
     append of [E.G.sites, [line, da, db]]
-    return str of (len of E.G.sites - 1)
+    return str of (E.G.sitebase + len of E.G.sites - 1)
 
 # Lua's variable description for an operand, as in its error messages.
 define em_desc(E, e) as:
@@ -238,6 +249,17 @@ define em_desc(E, e) as:
     if e.k == "Str":
         return "constant '" + e.v + "'"
     return ""
+
+# How Lua names the _ENV a global name indexes, for an index error: the
+# main chunk's _ENV is an upvalue.
+define em_envdesc(E, v) as:
+    if v.implicit == 1 or v.fn.id != E.fn.id:
+        return "upvalue '_ENV'"
+    return "local '_ENV'"
+
+# A captured variable's cell, a one-element list.
+define em_cell(E, code) as:
+    return "[" + code + "]"
 
 define em_var_ref(v) as:
     if v.cap:
@@ -262,6 +284,18 @@ define em_strlit(s) as:
     append of [parts, s[seg:n]]
     append of [parts, "\""]
     return join of [parts, ""]
+
+# A string literal holding NUL bytes is built from its bytes with
+# str_from_bytes, the direct translation; EigenScript ends a string at its
+# first NUL (gaps/nul-in-string.eigs), so such a row diverges.
+define em_nulstr(e) as:
+    local s is e.v
+    local bs is []
+    for i in range of (len of s):
+        append of [bs, str of (ord of s[i])]
+    for p in e.z:
+        bs[p] is "0"
+    return "(str_from_bytes of (" + (em_listlit of (bs)) + "))"
 
 define em_numlit(E, v) as:
     local s is str of v
@@ -361,23 +395,10 @@ define em_operands_multi(E, front, last) as:
         i is i - 1
     return [codes, tail]
 
-# A list literal; EigenScript caps a literal at 1024 elements.
+# A list literal, written as one (EigenScript refuses one of more than 1024
+# elements: gaps/list-literal-cap.eigs; such a row diverges).
 define em_listlit(codes) as:
-    local n is len of codes
-    if n <= 512:
-        return "[" + (join of [codes, ", "]) + "]"
-    local chunks is []
-    local i is 0
-    loop while i < n:
-        local j is min of [i + 512, n]
-        append of [chunks, "[" + (join of [list_slice of [codes, i, j], ", "]) + "]"]
-        i is j
-    local acc is chunks[0]
-    local k is 1
-    loop while k < len of chunks:
-        acc is "(concat of [" + acc + ", " + chunks[k] + "])"
-        k is k + 1
-    return acc
+    return "[" + (join of [codes, ", "]) + "]"
 
 # Multi-valued expression -> code for the list of its values.
 define em_multi(E, e) as:
@@ -394,18 +415,21 @@ define em_call(E, e, want_list) as:
     if want_list:
         fnname is "lr_call"
     if e.k == "MCall":
-        local site is em_site of [E, e.line, "method '" + e.m + "'", ""]
+        # Lua evaluates the receiver, looks the method up, then evaluates the
+        # arguments; an index error names the receiver, a call error the method
+        local site is em_site of [E, e.line, em_desc of [E, e.o], "method '" + e.m + "'"]
         local oc is em_expr of [E, e.o]
-        local opos is len of E.out
-        local args is em_explist of [E, e.args]
-        if not (em_pure of (e.o)) and not (em_is_tmp of (oc)) and opos < len of E.out:
+        if not (em_pure of (e.o)) and not (em_is_tmp of (oc)):
             local t0 is em_tmp of (E)
-            list_insert_at of [E.out, opos, E.ind + "local " + t0 + " is " + oc]
+            em_line of [E, "local " + t0 + " is " + oc]
             oc is t0
+        local tm is em_tmp of (E)
+        em_line of [E, "local " + tm + " is lr_index of [" + oc + ", " + (em_strlit of (e.m)) + ", " + site + "]"]
+        local args is em_explist of [E, e.args]
         local mn is "lr_mcall1"
         if want_list:
             mn is "lr_mcall"
-        em_line of [E, "local " + t + " is " + mn + " of [" + oc + ", " + (em_strlit of (e.m)) + ", " + args + ", " + site + "]"]
+        em_line of [E, "local " + t + " is " + mn + " of [" + tm + ", " + oc + ", " + args + ", " + site + "]"]
         return t
     local site is em_site of [E, e.line, em_desc of [E, e.f], ""]
     local fc is em_expr of [E, e.f]
@@ -422,28 +446,36 @@ define em_binop_fn(op) as:
     local m is {"+": "lr_add", "-": "lr_sub", "*": "lr_mul", "/": "lr_div", "%": "lr_mod", "//": "lr_idiv", "^": "lr_pow", "..": "lr_concat", "==": "lr_eq", "~=": "lr_ne", "<": "lr_lt", "<=": "lr_le", ">": "lr_gt", ">=": "lr_ge", "&": "lr_band", "|": "lr_bor", "~": "lr_bxor", "<<": "lr_shl", ">>": "lr_shr"}
     return m[op]
 
-# Single-valued expression -> EigenScript expression code (may hoist).
+# Single-valued expression -> EigenScript expression code (may hoist). A
+# deeply nested Lua expression is a deeply nested EigenScript expression
+# (EigenScript refuses deep nesting: gaps/nesting-limits.eigs).
 define em_expr(E, e) as:
     local k is e.k
     if k == "Nil":
         return "null"
     if k == "True":
-        return "1"
+        return "true"
     if k == "False":
-        return "0"
+        return "false"
     if k == "Num":
         return em_numlit of [E, e.v]
     if k == "Str":
         if e.z:
-            local site is em_site of [E, e.line, "", ""]
-            return "(lr_unsup of [\"string with an embedded NUL byte\", " + site + "])"
+            return em_nulstr of (e)
         return em_strlit of (e.v)
     if k == "Vararg":
         return "(lr_at of [V, 0])"
     if k == "Name":
         if e.var != null:
             return em_var_ref of (e.var)
+        if e.n == "_ENV":
+            return E.G.env
+        if e.envvar != null:
+            local site is em_site of [E, e.line, em_envdesc of [E, e.envvar], ""]
+            return "(lr_index of [" + (em_var_ref of (e.envvar)) + ", " + (em_strlit of (e.n)) + ", " + site + "])"
         local site is em_site of [E, e.line, "global '" + e.n + "'", ""]
+        if E.G.env != "lr_G":
+            return "(lr_index of [ENV[0], " + (em_strlit of (e.n)) + ", " + site + "])"
         return "(lr_gget of [" + (em_strlit of (e.n)) + ", " + site + "])"
     if k == "Paren":
         return em_expr of [E, e.e]
@@ -473,18 +505,18 @@ define em_expr(E, e) as:
         local site is em_site of [E, e.line, em_desc of [E, e.a], em_desc of [E, e.b]]
         local cs is em_operands of [E, [e.a, e.b]]
         return "(" + (em_binop_fn of (e.op)) + " of [" + cs[0] + ", " + cs[1] + ", " + site + "])"
-    throw of ["INTERNAL", "unknown expression " + k]
+    throw of (["INTERNAL", "unknown expression " + k])
 
-# Truth test of e as EigenScript code that is 1 or 0.
+# Truth test of e as EigenScript code that is a bool.
 define em_cond(E, e) as:
     if e.k == "Bin" and (e.op == "==" or e.op == "~=" or e.op == "<" or e.op == "<=" or e.op == ">" or e.op == ">="):
         return em_expr of [E, e]
     if e.k == "Un" and e.op == "not":
         return em_expr of [E, e]
     if e.k == "True":
-        return "1"
+        return "true"
     if e.k == "False" or e.k == "Nil":
-        return "0"
+        return "false"
     return "(lr_t of (" + (em_expr of [E, e]) + "))"
 
 define em_andor(E, e) as:
@@ -551,13 +583,16 @@ define em_table(E, e) as:
 define em_closure(E, fn) as:
     em_function of [E.G, fn]
     local cells is []
+    local names is []
     for v in fn.free:
         append of [cells, "c" + (str of v.id)]
-    return "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
+        append of [names, em_strlit of (v.name)]
+    local cl is "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
+    return cl
 
 # Emit the factory for fn into G.funcs.
 define em_function(G, fn) as:
-    local E is {"G": G, "out": [], "ind": "", "fn": fn}
+    local E is {"G": G, "out": [], "ind": "", "fn": fn, "loops": [], "tbc": []}
     local id is str of fn.id
     em_line of [E, "define F" + id + "(U) as:"]
     em_indent of (E)
@@ -567,17 +602,35 @@ define em_function(G, fn) as:
         i is i + 1
     em_line of [E, "define f" + id + "(A) as:"]
     em_indent of (E)
+    # debug.getupvalue asks a Lua function for its upvalue cells and their
+    # names by calling it with a dict (lr_upvals); a loaded chunk's main
+    # function has the one upvalue _ENV, the cell ENV
+    # [cells, names, definition site, is main, last line]
+    local dsite is em_site of [E, fn.line, "", ""]
+    local tail is ", " + dsite + ", " + (str of (fn.main == 1)) + ", " + (str of fn.endline) + "]"
+    em_line of [E, "if type of A == \"dict\":"]
+    if fn.main == 1 and G.env != "lr_G":
+        em_line of [E, "    return [[ENV], [\"_ENV\"]" + tail]
+    else:
+        local names is []
+        for v in fn.free:
+            append of [names, em_strlit of (v.name)]
+        em_line of [E, "    return [U, [" + (join of [names, ", "]) + "]" + tail]
     local np is len of fn.pvars
     i is 0
     for v in fn.pvars:
         local val is "lr_at of [A, " + (str of i) + "]"
         if v.cap:
-            em_line of [E, "local c" + (str of v.id) + " is [" + val + "]"]
+            em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, val])]
         else:
             em_line of [E, "local v" + (str of v.id) + " is " + val]
         i is i + 1
     if fn.vararg:
         em_line of [E, "local V is list_slice of [A, " + (str of np) + ", len of A]"]
+    if fn.hasgoto:
+        em_line of [E, "local gj is 0"]
+    if fn.envvar != null:
+        em_declare of [E, fn.envvar, G.env]
     em_block of [E, fn.body]
     em_line of [E, "return []"]
     em_dedent of (E)
@@ -586,12 +639,71 @@ define em_function(G, fn) as:
 
 define em_block(E, stats) as:
     for s in stats:
+        if s.k == "Label":
+            for s2 in stats:
+                if s2.k == "Local" and list_contains of [s2.attribs, "close"]:
+                    em_unsup of ["to-be-closed variable in a block with labels", s2.line]
+            em_block_labels of [E, stats]
+            return null
+    em_stats of [E, stats, 0, null]
+
+# A block whose last act, inside every to-be-closed region it opens, is to
+# set tail.v to the truth of tail.cond: a repeat-until condition sees the
+# body's locals and runs before they are closed.
+define em_block_tail(E, stats, tail) as:
+    for s in stats:
+        if s.k == "Label":
+            em_block of [E, stats]
+            em_line of [E, tail.v + " is " + (em_cond of [E, tail.cond])]
+            return null
+    em_stats of [E, stats, 0, tail]
+
+# Statements from index i; a to-be-closed local wraps the rest of its block.
+define em_stats(E, stats, i, tail) as:
+    loop while i < len of stats:
+        local s is stats[i]
         em_stat of [E, s]
+        if s.k == "Local" and list_contains of [s.attribs, "close"]:
+            em_tbc_region of [E, s, stats, i + 1, tail]
+            return null
+        i is i + 1
+    if tail != null:
+        em_line of [E, tail.v + " is " + (em_cond of [E, tail.cond])]
+
+# local x <close> = v: the rest of the block runs in a try; x is closed
+# (its __close called) on normal exit, before a return, break or goto that
+# leaves it, and with the error value when an error unwinds it.
+define em_tbc_region(E, s, stats, from, tail) as:
+    local k is list_index_of of [s.attribs, "close"]
+    local v is s.vars[k]
+    local tb is em_tmp of (E)
+    local site is em_site of [E, s.line, "", ""]
+    em_line of [E, "local " + tb + " is [" + (em_var_ref of (v)) + ", false]"]
+    em_line of [E, "lr_tbc_check of [" + tb + "[0], " + (em_strlit of (v.name)) + ", " + site + "]"]
+    em_line of [E, "try:"]
+    em_indent of (E)
+    append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
+    em_stats of [E, stats, from, tail]
+    list_truncate of [E.tbc, len of E.tbc - 1]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
+    em_dedent of (E)
+    em_line of [E, "catch " + tb + "e:"]
+    em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + site + "]"]
+
+# Close the to-be-closed variables declared inside E.loops[depth:] (all of
+# them for depth 0), innermost first.
+define em_close_tbc(E, depth) as:
+    local i is len of E.tbc - 1
+    loop while i >= 0:
+        local t is E.tbc[i]
+        if t.ld >= depth:
+            em_line of [E, "lr_tbc_close of [" + t.t + ", null, " + t.site + "]"]
+        i is i - 1
 
 # Declare a local v with value code.
 define em_declare(E, v, code) as:
     if v.cap:
-        em_line of [E, "local c" + (str of v.id) + " is [" + code + "]"]
+        em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, code])]
     else:
         em_line of [E, "local v" + (str of v.id) + " is " + code]
 
@@ -618,14 +730,19 @@ define em_adjust(E, exprs, n) as:
             j is j + 1
         return out
     local codes is em_operands of [E, exprs]
-    local i is 0
-    for c in codes:
-        if i < n:
+    if m > n:
+        # surplus expressions are evaluated for their effects, after the kept
+        # ones: pin the kept values first so the order stays left to right
+        local kept is em_pin of [E, list_slice of [codes, 0, n]]
+        for c in kept:
             append of [out, c]
-        else:
-            # surplus expressions are evaluated for their effects
-            em_line of [E, c]
-        i is i + 1
+        local i is n
+        loop while i < m:
+            em_line of [E, codes[i]]
+            i is i + 1
+        return out
+    for c in codes:
+        append of [out, c]
     loop while len of out < n:
         append of [out, "null"]
     return out
@@ -634,7 +751,7 @@ define em_adjust(E, exprs, n) as:
 define em_pin(E, codes) as:
     local out is []
     for c in codes:
-        if em_is_tmp of (c) or c == "null" or c == "0" or c == "1":
+        if em_is_tmp of (c) or c == "null" or c == "true" or c == "false":
             append of [out, c]
         else:
             local t is em_tmp of (E)
@@ -648,9 +765,15 @@ define em_assign_to(E, target, code, site_line) as:
             em_line of [E, (em_var_ref of (target.var)) + " is " + code]
         else:
             local site is em_site of [E, site_line, "", ""]
-            em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+            if target.envvar != null:
+                site is em_site of [E, site_line, em_envdesc of [E, target.envvar], ""]
+                em_line of [E, "lr_setindex of [" + (em_var_ref of (target.envvar)) + ", " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+            elif E.G.env != "lr_G":
+                em_line of [E, "lr_setindex of [ENV[0], " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+            else:
+                em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
         return null
-    throw of ["INTERNAL", "assign target"]
+    throw of (["INTERNAL", "assign target"])
 
 define em_stat(E, s) as:
     local k is s.k
@@ -665,7 +788,7 @@ define em_stat(E, s) as:
     elif k == "LocalFunction":
         local v is s.var
         if v.cap:
-            em_line of [E, "local c" + (str of v.id) + " is [null]"]
+            em_line of [E, "local c" + (str of v.id) + " is " + (em_cell of [E, "null"])]
             local fc is em_closure of [E, s.func]
             em_line of [E, "c" + (str of v.id) + "[0] is " + fc]
         else:
@@ -693,17 +816,22 @@ define em_stat(E, s) as:
             em_indent of (E)
             em_line of [E, "if not (" + c + "):"]
             em_line of [E, "    break"]
+        em_loop_begin of [E, "lua"]
         em_block of [E, s.body]
         em_line of [E, "null"]
         em_dedent of (E)
+        em_loop_end of (E)
     elif k == "Repeat":
         em_line of [E, "loop while 1:"]
         em_indent of (E)
-        em_block of [E, s.body]
-        local c is em_cond of [E, s.cond]
-        em_line of [E, "if " + c + ":"]
+        em_loop_begin of [E, "lua"]
+        local rc is em_tmp of (E)
+        em_line of [E, "local " + rc + " is false"]
+        em_block_tail of [E, s.body, {"cond": s.cond, "v": rc}]
+        em_line of [E, "if " + rc + ":"]
         em_line of [E, "    break"]
         em_dedent of (E)
+        em_loop_end of (E)
     elif k == "If":
         em_if of [E, s, 0]
     elif k == "NumFor":
@@ -712,12 +840,24 @@ define em_stat(E, s) as:
         em_genfor of [E, s]
     elif k == "Return":
         local n is len of s.exprs
+        local rc is ""
         if n == 1 and em_is_multi of (s.exprs[0]):
-            em_line of [E, "return " + (em_multi of [E, s.exprs[0]])]
+            rc is em_multi of [E, s.exprs[0]]
         else:
-            em_line of [E, "return " + (em_explist of [E, s.exprs])]
+            rc is em_explist of [E, s.exprs]
+        if len of E.tbc > 0:
+            # the values first, then the to-be-closed variables, innermost first
+            local rt is em_tmp of (E)
+            em_line of [E, "local " + rt + " is " + rc]
+            em_close_tbc of [E, 0]
+            rc is rt
+        em_line of [E, "return " + rc]
     elif k == "Break":
-        em_line of [E, "break"]
+        em_break of (E)
+    elif k == "Goto":
+        em_goto of [E, s]
+    elif k == "Label":
+        null
     else:
         em_unsup of [k, s.line]
 
@@ -728,12 +868,47 @@ define em_if(E, s, i) as:
     em_block of [E, s.blocks[i]]
     em_line of [E, "null"]
     em_dedent of (E)
-    if i + 1 < len of s.conds:
+    # elseif becomes elif (EigenScript caps nesting at 64 levels); a condition
+    # that hoists statements needs them inside an else, so it nests instead
+    local k is i + 1
+    loop while k < len of s.conds:
+        local mark is len of E.out
+        local c2 is em_cond of [E, s.conds[k]]
+        if len of E.out != mark:
+            local hoisted is list_slice of [E.out, mark, len of E.out]
+            list_truncate of [E.out, mark]
+            em_line of [E, "else:"]
+            for h in hoisted:
+                append of [E.out, "    " + h]
+            em_indent of (E)
+            em_line of [E, "if " + c2 + ":"]
+            em_indent of (E)
+            em_block of [E, s.blocks[k]]
+            em_line of [E, "null"]
+            em_dedent of (E)
+            em_if_rest of [E, s, k + 1]
+            em_dedent of (E)
+            return null
+        em_line of [E, "elif " + c2 + ":"]
+        em_indent of (E)
+        em_block of [E, s.blocks[k]]
+        em_line of [E, "null"]
+        em_dedent of (E)
+        k is k + 1
+    em_if_else of [E, s]
+
+# The rest of an if chain from condition k, after an if block.
+define em_if_rest(E, s, k) as:
+    if k < len of s.conds:
         em_line of [E, "else:"]
         em_indent of (E)
-        em_if of [E, s, i + 1]
+        em_if of [E, s, k]
         em_dedent of (E)
-    elif s["else"] != null:
+    else:
+        em_if_else of [E, s]
+
+define em_if_else(E, s) as:
+    if s["else"] != null:
         em_line of [E, "else:"]
         em_indent of (E)
         em_block of [E, s["else"]]
@@ -793,25 +968,53 @@ define em_numfor(E, s) as:
     em_line of [E, "local " + tl + " is " + tp + "[1]"]
     em_line of [E, "local " + st + " is " + tp + "[2]"]
     em_line of [E, "local " + ts + " is " + tp + "[3]"]
-    em_line of [E, "loop while " + ti + " * " + ts + " <= " + tl + ":"]
+    local tc is em_tmp of (E)
+    em_line of [E, "local " + tc + " is " + tp + "[4]"]
+    # an integer loop counts down tc; a float loop (tc < 0) compares
+    em_line of [E, "loop while " + tc + " > 0 or (" + tc + " < 0 and " + ti + " * " + ts + " <= " + tl + "):"]
     em_indent of (E)
+    em_loop_begin of [E, "lua"]
     em_declare of [E, s.v, ti]
     em_line of [E, ti + " is " + ti + " + " + st]
+    em_line of [E, tc + " is " + tc + " - 1"]
     em_block of [E, s.body]
     em_line of [E, "null"]
     em_dedent of (E)
+    em_loop_end of (E)
 
+# The explist is adjusted to four values (manual 3.3.5); the fourth is a
+# to-be-closed variable, closed when the loop ends however it ends. When it
+# is nil by construction no region is opened.
 define em_genfor(E, s) as:
-    local site is em_site of [E, s.eline, "", ""]
-    local vals is em_pin of [E, em_adjust of [E, s.exprs, 3]]
+    local site is em_site of [E, s.eline, "for iterator 'for iterator'", ""]
+    local vals is em_pin of [E, em_adjust of [E, s.exprs, 4]]
     local tf is vals[0]
     local tst is vals[1]
     local tc is em_tmp of (E)
     em_line of [E, "local " + tc + " is " + vals[2]]
+    if vals[3] == "null":
+        em_genfor_loop of [E, s, site, tf, tst, tc]
+        return null
+    local tb is em_tmp of (E)
+    local csite is em_site of [E, s.line, "", ""]
+    em_line of [E, "local " + tb + " is [" + vals[3] + ", false]"]
+    em_line of [E, "lr_tbc_check of [" + tb + "[0], \"(for state)\", " + csite + "]"]
+    em_line of [E, "try:"]
+    em_indent of (E)
+    append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": csite}]
+    em_genfor_loop of [E, s, site, tf, tst, tc]
+    list_truncate of [E.tbc, len of E.tbc - 1]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + csite + "]"]
+    em_dedent of (E)
+    em_line of [E, "catch " + tb + "e:"]
+    em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + csite + "]"]
+
+define em_genfor_loop(E, s, site, tf, tst, tc) as:
     em_line of [E, "loop while 1:"]
     em_indent of (E)
+    em_loop_begin of [E, "lua"]
     local tr is em_tmp of (E)
-    em_line of [E, "local " + tr + " is lr_call of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
+    em_line of [E, "local " + tr + " is lr_ccall of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
     local i is 0
     local t0 is em_tmp of (E)
     em_line of [E, "local " + t0 + " is lr_at of [" + tr + ", 0]"]
@@ -827,14 +1030,31 @@ define em_genfor(E, s) as:
     em_block of [E, s.body]
     em_line of [E, "null"]
     em_dedent of (E)
+    em_loop_end of (E)
+
+em_rt_parts is ["rt_pattern.eigs", "rt_format.eigs", "rt_math.eigs", "rt_utf8.eigs", "rt_coroutine.eigs", "rt_io.eigs", "rt_pack.eigs"]
+
+define em_dirname(p) as:
+    local i is len of p - 1
+    loop while i >= 0 and p[i] != "/":
+        i is i - 1
+    if i < 0:
+        return "."
+    if i == 0:
+        return "/"
+    return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
     local out is []
+    # the runtime library parts, then runtime.eigs, which builds the tables
+    for part in em_rt_parts:
+        append of [out, "load_file of " + (em_strlit of ((em_dirname of (runtime)) + "/" + part))]
     append of [out, "load_file of " + (em_strlit of (runtime))]
+    append of [out, "lr_st.srcdir is " + (em_strlit of (em_dirname of (runtime)))]
     append of [out, "S is []"]
     for st in G.sites:
         append of [out, "append of [S, [" + (str of st[0]) + ", " + (em_strlit of (st[1])) + ", " + (em_strlit of (st[2])) + "]]"]
@@ -843,3 +1063,119 @@ define emit_program(ast, file, runtime) as:
     append of [out, "unobserved:"]
     append of [out, "    lr_main of [F" + (str of ast.id) + " of ([]), " + (em_strlit of (file)) + ", S]"]
     return (join of [out, "\n"]) + "\n"
+
+# A chunk compiled at run time by load: the code of a function L(ENV) whose
+# result is the chunk's main function, its globals indexing ENV[0] (ENV is
+# the cell of its _ENV upvalue, so debug.setupvalue can replace it). Site ids
+# start at sitebase; the caller appends the returned sites to the site table.
+# Returns [code, sites].
+define emit_chunk(ast, sitebase) as:
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local R is {"G": G, "scopes": [], "fn": null}
+    rs_func of [R, ast, null]
+    em_function of [G, ast]
+    local out is ["define L(ENV) as:"]
+    for f in G.funcs:
+        for ln in split of [f, "\n"]:
+            append of [out, "    " + ln]
+    append of [out, "    return F" + (str of ast.id) + " of ([])"]
+    append of [out, "L"]
+    return [(join of [out, "\n"]) + "\n", G.sites]
+
+# ---------------------------------------------------------------- goto
+# A block with labels becomes a dispatch loop over its segments (the
+# statements before the first label, then from each label to the next):
+#     local pcN is 0
+#     loop while true:
+#         if pcN <= 0: <segment 0>
+#         if pcN <= 1: <segment 1>  ...
+#         break
+# A goto to a label of the innermost loop sets pcN and continues. A jump
+# that must leave inner EigenScript loops first (a goto across a Lua loop,
+# or a Lua break whose loop is outside a dispatch loop) stores its target in
+# the function's gj and breaks; after every loop of such a function, gj is
+# checked and the jump is taken or passed outward. E.loops is the stack of
+# EigenScript loops being emitted.
+
+define em_loop_begin(E, kind) as:
+    E.G.tmp is E.G.tmp + 1
+    local L is {"k": kind, "id": E.G.tmp, "labels": {}, "pc": ""}
+    append of [E.loops, L]
+    return L
+
+define em_loop_end(E) as:
+    list_truncate of [E.loops, len of E.loops - 1]
+    if not E.fn.hasgoto or len of E.loops == 0:
+        return null
+    local O is E.loops[len of E.loops - 1]
+    em_line of [E, "if gj != 0:"]
+    em_indent of (E)
+    if O.k == "disp":
+        for key in keys of O.labels:
+            em_line of [E, "if gj == " + key + ":"]
+            em_line of [E, "    gj is 0"]
+            em_line of [E, "    " + O.pc + " is " + (str of O.labels[key])]
+            em_line of [E, "    continue"]
+    else:
+        em_line of [E, "if gj == " + (str of (0 - O.id)) + ":"]
+        em_line of [E, "    gj is 0"]
+        em_line of [E, "    break"]
+    em_line of [E, "break"]
+    em_dedent of (E)
+
+define em_break(E) as:
+    local top is E.loops[len of E.loops - 1]
+    local i is len of E.loops - 1
+    loop while E.loops[i].k != "lua":
+        i is i - 1
+    em_close_tbc of [E, i + 1]
+    if top.k == "lua":
+        em_line of [E, "break"]
+        return null
+    em_line of [E, "gj is " + (str of (0 - E.loops[i].id))]
+    em_line of [E, "break"]
+
+define em_goto(E, s) as:
+    local D is E.G.labelloop[str of s.target]
+    local top is E.loops[len of E.loops - 1]
+    local di is 0
+    loop while E.loops[di].id != D.id:
+        di is di + 1
+    em_close_tbc of [E, di + 1]
+    if top.id == D.id:
+        em_line of [E, D.pc + " is " + (str of D.labels[str of s.target])]
+        em_line of [E, "continue"]
+        return null
+    em_line of [E, "gj is " + (str of s.target)]
+    em_line of [E, "break"]
+
+define em_block_labels(E, stats) as:
+    local pc is em_tmp of (E)
+    em_line of [E, "local " + pc + " is 0"]
+    em_line of [E, "loop while true:"]
+    em_indent of (E)
+    local D is em_loop_begin of [E, "disp"]
+    D.pc is pc
+    local seg is 0
+    for s in stats:
+        if s.k == "Label":
+            seg is seg + 1
+            D.labels[str of s.id] is seg
+            E.G.labelloop[str of s.id] is D
+    seg is 0
+    em_line of [E, "if " + pc + " <= 0:"]
+    em_indent of (E)
+    for s in stats:
+        if s.k == "Label":
+            em_line of [E, "null"]
+            em_dedent of (E)
+            seg is seg + 1
+            em_line of [E, "if " + pc + " <= " + (str of seg) + ":"]
+            em_indent of (E)
+        else:
+            em_stat of [E, s]
+    em_line of [E, "null"]
+    em_dedent of (E)
+    em_line of [E, "break"]
+    em_dedent of (E)
+    em_loop_end of (E)

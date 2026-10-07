@@ -1,9 +1,17 @@
-# EigenScript gap: the VM's call depth (~5000 frames) is far below Lua's
-# (about 200000 Lua levels; LUAI_MAXSTACK = 1e6 slots), so recursion Lua
-# completes raises "call stack overflow" here. Not a #1286 row; a VM limit.
+# EigenScript gap: the VM's call depth (4093 nested EigenScript calls of a
+# one-argument function on 686d3b7d, measured by bisection) is far below
+# Lua's (about 200000 Lua levels; LUAI_MAXSTACK = 1e6 slots), so recursion
+# Lua completes raises "call stack overflow" here. Not a #1286 row; a VM limit.
+# An EigenLua Lua-to-Lua call costs three VM frames (lr_call1, lr_call and
+# the compiled function): a Lua program overflows at 1362 Lua
+# levels (`local function d(n) if n == 0 then return 0 end return 1 + d(n - 1)
+# end`, bisected under pcall), about 3.0 frames per level. Round 3 said about
+# two frames per call; the round-3 critic measured 1363 levels. The error
+# surfaces as a located Lua error naming it.
 # Lua: d(n) = n == 0 and 0 or 1 + d(n - 1); print(d(10000)) -> 10000
 # Expected: 10000 (or a depth limit at least Lua's).
-# Actual v0.44.0:  {"kind": "limit", "message": "call stack overflow", ...}
+# Actual 686d3b7d: {"kind": "limit", "message": "call stack overflow", "line": 18}
+# Rows: calls.lua (line 162), cstack.lua (line 24) (S).
 define d(n) as:
     if n == 0:
         return 0

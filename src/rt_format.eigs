@@ -1,0 +1,659 @@
+# EigenLua runtime: string.format (lstrlib.c str_format) and the C printf
+# conversions it relies on, with glibc's results.
+#
+# Floating conversions are exact: a double is m * 2^e, so its decimal
+# expansion is computed with big integers (base 1e7 limbs, least significant
+# first) and rounded half to even on the exact digits, as glibc does.
+# Integers are 64-bit two's complement for %x %X %o %u, from the double the
+# value maps to (no int64 in EigenScript: gaps/no-int64.eigs).
+
+lr_fx_BASE is 10000000
+
+define lr_big_from(n) as:
+    local l is []
+    loop while n > 0:
+        local q is floor of (n / lr_fx_BASE)
+        local r is n - q * lr_fx_BASE
+        if r < 0:
+            q is q - 1
+            r is r + lr_fx_BASE
+        append of [l, r]
+        n is q
+    if len of l == 0:
+        append of [l, 0]
+    return l
+
+# l * k in place, for k with limb * k below 2^53.
+define lr_big_mul(l, k) as:
+    local carry is 0
+    local n is len of l
+    local i is 0
+    loop while i < n:
+        local v is l[i] * k + carry
+        carry is floor of (v / lr_fx_BASE)
+        local r is v - carry * lr_fx_BASE
+        if r < 0:
+            carry is carry - 1
+            r is r + lr_fx_BASE
+        elif r >= lr_fx_BASE:
+            carry is carry + 1
+            r is r - lr_fx_BASE
+        l[i] is r
+        i is i + 1
+    loop while carry > 0:
+        local q is floor of (carry / lr_fx_BASE)
+        append of [l, carry - q * lr_fx_BASE]
+        carry is q
+    return l
+
+define lr_big_str(l) as:
+    local n is len of l
+    loop while n > 1 and l[n - 1] == 0:
+        n is n - 1
+    local parts is [str of l[n - 1]]
+    local j is n - 2
+    loop while j >= 0:
+        local d is str of l[j]
+        loop while len of d < 7:
+            d is "0" + d
+        append of [parts, d]
+        j is j - 1
+    return join of [parts, ""]
+
+# [m, e2] with ax == m * 2^e2 exactly, m an integer below 2^53.
+define lr_fx_decompose(ax) as:
+    local b is f64_to_bytes of ax
+    local ex is (bit_and of [b[0], 127]) * 16 + (floor of (b[1] / 16))
+    local m is bit_and of [b[1], 15]
+    local k is 2
+    loop while k < 8:
+        m is m * 256 + b[k]
+        k is k + 1
+    if ex == 0:
+        return [m, -1074]
+    return [m + 4503599627370496, ex - 1075]
+
+# The exact decimal value of ax >= 0: [digits, E], ax == digits * 10^E.
+define lr_fx_digits(ax) as:
+    if ax == 0:
+        return ["0", 0]
+    local me is lr_fx_decompose of (ax)
+    local m is me[0]
+    local e2 is me[1]
+    loop while e2 < 0 and m % 2 == 0:
+        m is m / 2
+        e2 is e2 + 1
+    local big is lr_big_from of (m)
+    if e2 >= 0:
+        loop while e2 >= 20:
+            lr_big_mul of [big, 1048576]
+            e2 is e2 - 20
+        if e2 > 0:
+            lr_big_mul of [big, pow of [2, e2]]
+        return [lr_big_str of (big), 0]
+    local k is 0 - e2
+    local r is k
+    loop while r >= 10:
+        lr_big_mul of [big, 9765625]
+        r is r - 10
+    if r > 0:
+        lr_big_mul of [big, pow of [5, r]]
+    return [lr_big_str of (big), 0 - k]
+
+define lr_fx_zeros(n) as:
+    local parts is []
+    for i in range of n:
+        append of [parts, "0"]
+    return join of [parts, ""]
+
+# Decimal string D (no sign) plus one.
+define lr_fx_inc(D) as:
+    local cs is []
+    local n is len of D
+    for i in range of n:
+        append of [cs, (ord of D[i]) - 48]
+    local i is n - 1
+    loop while i >= 0:
+        if cs[i] < 9:
+            cs[i] is cs[i] + 1
+            break
+        cs[i] is 0
+        i is i - 1
+    local parts is []
+    if i < 0:
+        append of [parts, "1"]
+    for c in cs:
+        append of [parts, chr of (c + 48)]
+    return join of [parts, ""]
+
+# Keep the first `keep` digits of D, rounding half to even on the rest.
+# The result is an integer digit string (it may gain a digit by the carry).
+define lr_fx_round(D, keep) as:
+    local n is len of D
+    if keep >= n:
+        return D + (lr_fx_zeros of (keep - n))
+    if keep < 0:
+        return "0"
+    local d is (ord of D[keep]) - 48
+    local rest is false
+    local j is keep + 1
+    loop while j < n:
+        if D[j] != "0":
+            rest is true
+            break
+        j is j + 1
+    local head is D[0:keep]
+    if keep == 0:
+        head is "0"
+    local up is false
+    if d > 5:
+        up is true
+    elif d == 5:
+        if rest:
+            up is true
+        else:
+            up is ((ord of head[len of head - 1]) - 48) % 2 == 1
+    if up:
+        return lr_fx_inc of (head)
+    return head
+
+define lr_fx_strip_lead(D) as:
+    local i is 0
+    loop while i < len of D - 1 and D[i] == "0":
+        i is i + 1
+    return D[i:]
+
+# %.<p>f of ax >= 0, no sign.
+define lr_fx_f(ax, p, alt) as:
+    local de is lr_fx_digits of (ax)
+    local D is de[0]
+    local E is de[1]
+    local R is ""
+    if E + p >= 0:
+        R is D + (lr_fx_zeros of (E + p))
+    else:
+        R is lr_fx_round of [D, len of D + E + p]
+    R is lr_fx_strip_lead of (R)
+    if len of R < p + 1:
+        R is (lr_fx_zeros of (p + 1 - len of R)) + R
+    local ip is R[0:len of R - p]
+    if p == 0:
+        if alt:
+            return ip + "."
+        return ip
+    return ip + "." + R[len of R - p:]
+
+# [mantissa digits (p + 1 of them), decimal exponent] of ax >= 0.
+define lr_fx_sig(ax, p) as:
+    if ax == 0:
+        return [lr_fx_zeros of (p + 1), 0]
+    local de is lr_fx_digits of (ax)
+    local D is lr_fx_strip_lead of (de[0])
+    local X is len of D - 1 + de[1]
+    local R is lr_fx_round of [D, p + 1]
+    if len of R > p + 1:
+        X is X + 1
+        R is R[0:p + 1]
+    return [R, X]
+
+define lr_fx_expstr(X, upper) as:
+    local es is str of (abs of X)
+    if len of es < 2:
+        es is "0" + es
+    local e is "e"
+    if upper:
+        e is "E"
+    if X < 0:
+        return e + "-" + es
+    return e + "+" + es
+
+define lr_fx_e(ax, p, alt, upper) as:
+    local r is lr_fx_sig of [ax, p]
+    local R is r[0]
+    local m is R[0:1]
+    if p > 0 or alt:
+        m is m + "."
+    m is m + R[1:]
+    return m + (lr_fx_expstr of [r[1], upper])
+
+define lr_fx_stripz(s) as:
+    if index_of of [s, "."] < 0:
+        return s
+    local n is len of s
+    loop while n > 0 and s[n - 1] == "0":
+        n is n - 1
+    if n > 0 and s[n - 1] == ".":
+        n is n - 1
+    return s[0:n]
+
+define lr_fx_g(ax, p, alt, upper) as:
+    if p == 0:
+        p is 1
+    local X is 0
+    if ax != 0:
+        X is (lr_fx_sig of [ax, p - 1])[1]
+    if p > X and X >= -4:
+        local s is lr_fx_f of [ax, p - 1 - X, alt]
+        if alt:
+            return s
+        return lr_fx_stripz of (s)
+    local r is lr_fx_sig of [ax, p - 1]
+    local R is r[0]
+    local m is R[0:1]
+    if p > 1 or alt:
+        m is m + "." + R[1:]
+    if not alt:
+        m is lr_fx_stripz of (m)
+    return m + (lr_fx_expstr of [r[1], upper])
+
+# %a: glibc's hexadecimal float (normal numbers lead with 1, subnormals
+# with 0; a rounding carry is not renormalized).
+define lr_fx_a(ax, p, alt, upper) as:
+    local digs is "0123456789abcdef"
+    local lead is 0
+    local e is 0
+    local m is 0
+    if ax != 0:
+        local me is lr_fx_decompose of (ax)
+        m is me[0]
+        if m >= 4503599627370496:
+            lead is 1
+            m is m - 4503599627370496
+            e is me[1] + 52
+        else:
+            e is -1022
+    # m: 52 fraction bits = 13 hex digits
+    local hx is []
+    local v is m
+    for i in range of 13:
+        local q is floor of (v / 16)
+        list_insert_at of [hx, 0, v - q * 16]
+        v is q
+    local nd is 13
+    if p == null:
+        loop while nd > 0 and hx[nd - 1] == 0:
+            nd is nd - 1
+    elif p < 13:
+        # round the fraction to p hex digits, half to even
+        local cut is hx[p]
+        local rest is false
+        local j is p + 1
+        loop while j < 13:
+            if hx[j] != 0:
+                rest is true
+            j is j + 1
+        local lastodd is false
+        if p > 0:
+            lastodd is hx[p - 1] % 2 == 1
+        else:
+            lastodd is lead % 2 == 1
+        local up is cut > 8 or (cut == 8 and (rest or lastodd))
+        list_truncate of [hx, p]
+        if up:
+            local k is p - 1
+            loop while k >= 0:
+                if hx[k] < 15:
+                    hx[k] is hx[k] + 1
+                    break
+                hx[k] is 0
+                k is k - 1
+            if k < 0:
+                lead is lead + 1
+        nd is p
+    else:
+        loop while len of hx < p:
+            append of [hx, 0]
+        nd is p
+    local parts is ["0x", str of lead]
+    if nd > 0 or alt:
+        append of [parts, "."]
+    for i in range of nd:
+        append of [parts, digs[hx[i]]]
+    append of [parts, "p"]
+    if e >= 0:
+        append of [parts, "+"]
+    append of [parts, str of e]
+    local s is join of [parts, ""]
+    if upper:
+        return str_upper of (s)
+    return s
+
+# 64-bit two's complement of an integral n as [hi, lo] 32-bit words.
+define lr_u64(n) as:
+    local hi is floor of (n / 4294967296)
+    local lo is n - hi * 4294967296
+    if hi < 0:
+        hi is hi + 4294967296
+    return [hi, lo]
+
+# Digits of the unsigned 64-bit [hi, lo] in base b (8, 10 or 16).
+define lr_u64_digits(w, b, upper) as:
+    local digs is "0123456789abcdef"
+    if upper:
+        digs is "0123456789ABCDEF"
+    local hi is w[0]
+    local lo is w[1]
+    if hi == 0 and lo == 0:
+        return "0"
+    local out is []
+    loop while hi > 0 or lo > 0:
+        local qh is floor of (hi / b)
+        local r is hi - qh * b
+        local cur is r * 4294967296 + lo
+        local ql is floor of (cur / b)
+        local r2 is cur - ql * b
+        list_insert_at of [out, 0, digs[r2]]
+        hi is qh
+        lo is ql
+    return join of [out, ""]
+
+define lr_fx_pad(s, width, left, ch) as:
+    if len of s >= width:
+        return s
+    local pad is ""
+    for i in range of (width - len of s):
+        pad is pad + ch
+    if left:
+        return s + pad
+    return pad + s
+
+# Pad a signed numeric body: zero padding goes after the sign/prefix.
+define lr_fx_padnum(prefix, body, fl, width) as:
+    if fl.minus:
+        return lr_fx_pad of [prefix + body, width, true, " "]
+    if fl.zero:
+        return prefix + (lr_fx_pad of [body, width - len of prefix, false, "0"])
+    return lr_fx_pad of [prefix + body, width, false, " "]
+
+define lr_fx_sign(neg, fl) as:
+    if neg:
+        return "-"
+    if fl.plus:
+        return "+"
+    if fl.space:
+        return " "
+    return ""
+
+# Parse a conversion spec (flags, width, precision) in spec, the text
+# between '%' and the conversion letter.
+define lr_fx_spec(spec) as:
+    local fl is {"minus": false, "plus": false, "space": false, "alt": false, "zero": false, "width": 0, "prec": null}
+    local i is 0
+    local n is len of spec
+    loop while i < n and index_of of ["-+ #0", spec[i]] >= 0:
+        local c is spec[i]
+        if c == "-":
+            fl.minus is true
+        elif c == "+":
+            fl.plus is true
+        elif c == " ":
+            fl.space is true
+        elif c == "#":
+            fl.alt is true
+        else:
+            fl.zero is true
+        i is i + 1
+    local w is 0
+    loop while i < n and lr_isdigit of (spec[i]):
+        w is w * 10 + (ord of spec[i]) - 48
+        i is i + 1
+    fl.width is w
+    if i < n and spec[i] == ".":
+        i is i + 1
+        local pr is 0
+        loop while i < n and lr_isdigit of (spec[i]):
+            pr is pr * 10 + (ord of spec[i]) - 48
+            i is i + 1
+        fl.prec is pr
+    return fl
+
+# lstrlib.c checkformat: flags from the allowed set, then at most two
+# width digits (not starting with 0) and, if allowed, '.' and two digits.
+define lr_fx_check(spec, conv, flags, precision) as:
+    local i is 0
+    local n is len of spec
+    loop while i < n and index_of of [flags, spec[i]] >= 0:
+        i is i + 1
+    local ok is true
+    if i < n and spec[i] == "0":
+        ok is false
+    else:
+        local k is 0
+        loop while k < 2 and i < n and lr_isdigit of (spec[i]):
+            i is i + 1
+            k is k + 1
+        if i < n and spec[i] == "." and precision:
+            i is i + 1
+            local k2 is 0
+            loop while k2 < 2 and i < n and lr_isdigit of (spec[i]):
+                i is i + 1
+                k2 is k2 + 1
+        if i != n:
+            ok is false
+    if not ok:
+        lr_throw of ((lr_where of (1)) + "invalid conversion specification: '%" + spec + conv + "'")
+
+define lr_fx_int(fl, n, conv) as:
+    local neg is false
+    local body is ""
+    local prefix is ""
+    if conv == "d" or conv == "i":
+        if n < 0:
+            neg is true
+            body is lr_intdigits of (0 - n)
+        else:
+            body is lr_intdigits of (n)
+        prefix is lr_fx_sign of [neg, fl]
+    else:
+        local base is 16
+        if conv == "o":
+            base is 8
+        elif conv == "u":
+            base is 10
+        body is lr_u64_digits of [lr_u64 of (n), base, conv == "X"]
+    if fl.prec != null:
+        if fl.prec == 0 and n == 0:
+            body is ""
+        loop while len of body < fl.prec:
+            body is "0" + body
+    if fl.alt:
+        if conv == "o" and (len of body == 0 or body[0] != "0"):
+            body is "0" + body
+        elif conv == "x" and n != 0:
+            prefix is "0x"
+        elif conv == "X" and n != 0:
+            prefix is "0X"
+    if fl.prec != null:
+        local f2 is {"minus": fl.minus, "zero": false}
+        return lr_fx_padnum of [prefix, body, f2, fl.width]
+    return lr_fx_padnum of [prefix, body, fl, fl.width]
+
+define lr_fx_float(fl, x, conv) as:
+    local neg is x < 0 or (x == 0 and (f64_to_bytes of x)[0] >= 128)
+    local ax is abs of x
+    local upper is conv == "E" or conv == "G" or conv == "A"
+    local body is ""
+    local p is fl.prec
+    if conv == "f" or conv == "F":
+        if p == null:
+            p is 6
+        body is lr_fx_f of [ax, p, fl.alt]
+    elif conv == "e" or conv == "E":
+        if p == null:
+            p is 6
+        body is lr_fx_e of [ax, p, fl.alt, upper]
+    elif conv == "g" or conv == "G":
+        if p == null:
+            p is 6
+        body is lr_fx_g of [ax, p, fl.alt, upper]
+    else:
+        body is lr_fx_a of [ax, p, fl.alt, upper]
+        local pre is lr_fx_sign of [neg, fl]
+        local pfx is body[0:2]
+        return lr_fx_padnum of [pre + pfx, body[2:], fl, fl.width]
+    return lr_fx_padnum of [lr_fx_sign of [neg, fl], body, fl, fl.width]
+
+# %q (lstrlib.c addquoted / addliteral).
+define lr_fx_quoted(s) as:
+    local parts is ["\""]
+    local n is len of s
+    local i is 0
+    loop while i < n:
+        local c is s[i]
+        local o is ord of c
+        if c == "\"" or c == "\\" or c == "\n":
+            append of [parts, "\\" + c]
+        elif o < 32 or o == 127:
+            local nxt is ""
+            if i + 1 < n:
+                nxt is s[i + 1]
+            if nxt != "" and lr_isdigit of (nxt):
+                local d is str of o
+                loop while len of d < 3:
+                    d is "0" + d
+                append of [parts, "\\" + d]
+            else:
+                append of [parts, "\\" + (str of o)]
+        else:
+            append of [parts, c]
+        i is i + 1
+    append of [parts, "\""]
+    return join of [parts, ""]
+
+define lr_fx_literal(A, arg) as:
+    local v is A[arg]
+    local t is type of v
+    if t == "str":
+        return lr_fx_quoted of (v)
+    if t == "num":
+        if lr_isint of (v):
+            if v == -9223372036854775808:
+                return "0x8000000000000000"
+            return lr_numstr of (v)
+        local h is lr_fx_a of [abs of v, null, false, false]
+        if v < 0:
+            return "-" + h
+        return h
+    if t == "none" or t == "bool":
+        return lr_tostr of (v)
+    lr_argerr of [arg + 1, "format", "value has no literal form"]
+
+define lr_fx_checkint(A, arg) as:
+    local v is A[arg]
+    local x is lr_arnum of (v)
+    if x == null:
+        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
+    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+        lr_argerr of [arg + 1, "format", "number has no integer representation"]
+    return x
+
+define lr_fx_checknum(A, arg) as:
+    local v is A[arg]
+    local x is lr_arnum of (v)
+    if x == null:
+        lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
+    return x
+
+define lr_s_format(A) as:
+    local fmt is lr_checkstr of [A, 0, "format"]
+    local top is len of A
+    local parts is []
+    local n is len of fmt
+    local i is 0
+    local seg is 0
+    local arg is 0
+    loop while i < n:
+        if fmt[i] != "%":
+            i is i + 1
+            continue
+        append of [parts, fmt[seg:i]]
+        i is i + 1
+        if i < n and fmt[i] == "%":
+            append of [parts, "%"]
+            i is i + 1
+            seg is i
+            continue
+        arg is arg + 1
+        if arg >= top:
+            lr_argerr of [arg + 1, "format", "no value"]
+        local st is i
+        loop while i < n and index_of of ["-+#0 123456789.", fmt[i]] >= 0:
+            i is i + 1
+        if i - st + 1 >= 22:
+            lr_throw of ((lr_where of (1)) + "invalid format (too long)")
+        local spec is fmt[st:i]
+        local conv is ""
+        if i < n:
+            conv is fmt[i]
+        i is i + 1
+        seg is i
+        local fl is lr_fx_spec of (spec)
+        if conv == "c":
+            lr_fx_check of [spec, conv, "-", false]
+            local cc is lr_fx_checkint of [A, arg]
+            local ch is str_from_bytes of ([bit_and of [cc, 255]])
+            append of [parts, lr_fx_pad of [ch, fl.width, fl.minus, " "]]
+        elif conv == "d" or conv == "i":
+            local x is lr_fx_checkint of [A, arg]
+            lr_fx_check of [spec, conv, "-+0 ", true]
+            append of [parts, lr_fx_int of [fl, x, conv]]
+        elif conv == "u":
+            local x2 is lr_fx_checkint of [A, arg]
+            lr_fx_check of [spec, conv, "-0", true]
+            append of [parts, lr_fx_int of [fl, x2, conv]]
+        elif conv == "o" or conv == "x" or conv == "X":
+            local x3 is lr_fx_checkint of [A, arg]
+            lr_fx_check of [spec, conv, "-#0", true]
+            append of [parts, lr_fx_int of [fl, x3, conv]]
+        elif conv == "a" or conv == "A" or conv == "f" or conv == "e" or conv == "E" or conv == "g" or conv == "G":
+            local x4 is lr_fx_checknum of [A, arg]
+            lr_fx_check of [spec, conv, "-+#0 ", true]
+            append of [parts, lr_fx_float of [fl, x4, conv]]
+        elif conv == "p":
+            lr_fx_check of [spec, conv, "-", false]
+            local pv is A[arg]
+            local ps is "(null)"
+            local tp is type of pv
+            if tp == "dict":
+                ps is "0x" + (str_lower of (hex of [pv.id, 8]))
+            elif tp == "fn" or tp == "builtin":
+                ps is "0x" + (str_lower of (hex of [lr_fnid of (pv), 8]))
+            elif tp == "list":
+                ps is "0x" + (str_lower of (hex of [pv[0].id, 8]))
+            elif tp == "str":
+                ps is "0x" + (str_lower of (hex of [lr_fx_strptr of (pv), 8]))
+            append of [parts, lr_fx_pad of [ps, fl.width, fl.minus, " "]]
+        elif conv == "q":
+            if len of spec > 0:
+                lr_throw of ((lr_where of (1)) + "specifier '%q' cannot have modifiers")
+            append of [parts, lr_fx_literal of [A, arg]]
+        elif conv == "s":
+            local s is lr_tostr of (A[arg])
+            if len of spec == 0:
+                append of [parts, s]
+            else:
+                lr_fx_check of [spec, conv, "-", true]
+                if fl.prec == null and len of s >= 100:
+                    append of [parts, s]
+                else:
+                    if fl.prec != null and len of s > fl.prec:
+                        s is s[0:fl.prec]
+                    append of [parts, lr_fx_pad of [s, fl.width, fl.minus, " "]]
+        else:
+            lr_throw of ((lr_where of (1)) + "invalid conversion '%" + spec + conv + "' to 'format'")
+    append of [parts, fmt[seg:n]]
+    return [join of [parts, ""]]
+
+# %p of a string: a short string (40 bytes or fewer, LUAI_MAXSHORTLEN) is
+# interned in Lua, so equal contents give one address, here a hash of the
+# bytes; a long string is its own object, here a fresh number each time.
+lr_fx_longstr is {"n": 0}
+
+define lr_fx_strptr(s) as:
+    if len of s > 40:
+        lr_fx_longstr.n is lr_fx_longstr.n + 1
+        return 2147483648 + lr_fx_longstr.n
+    local h is 5381
+    for i in range of (len of s):
+        h is (h * 33 + (ord of s[i])) % 2147483647
+    return h

@@ -2,9 +2,12 @@
 # (EigenScript#1286 row "The string model": bytes vs text decided).
 # Lua:      #"a\0b" -> 3, string.char(0) -> a 1-byte string
 # Expected: byte strings that hold any byte, as Lua's do (len 3 below).
-# Actual v0.44.0:  str_from_bytes stops at the NUL (len 1), and chr of 0
-#           raises.
-# Rows: str_embedded_nul, str_len, str_byte_char_sub_rep (D).
+# Actual 686d3b7d: str_from_bytes stops at the NUL (len 1), and chr of 0
+#           raises. EigenLua builds a NUL literal with str_from_bytes, the
+#           direct translation, so the string ends at its first NUL.
+# Rows: str_embedded_nul, str_len, str_byte_char_sub_rep, utf8_lib (line 9:
+#       utf8.charpattern) (D); pm.lua (27), strings.lua (22), literals.lua
+#       (11), utf8.lua (57) (S).
 s is str_from_bytes of [97, 0, 98]
 print of (len of s)
 try:

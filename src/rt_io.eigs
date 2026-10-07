@@ -1,0 +1,335 @@
+# EigenLua runtime: the in-scope part of the io library (GAPS.md: print,
+# io.write and stdin reads) as liolib.c shapes it: io.stdout, io.stderr and
+# io.stdin are file handles (full userdata: type() says "userdata",
+# io.type() says "file") with write, read, lines, flush, setvbuf and close.
+# Opening files, popen and seek are out of scope.
+
+define lr_io_mkfile(fd) as:
+    lr_st.nid is lr_st.nid + 1
+    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "mt": null, "ud": true, "fd": fd, "closed": false}
+
+define lr_io_isfile(v) as:
+    return type of v == "dict" and v.ud == true and v.fd != null
+
+define lr_io_checkfile(A, fname) as:
+    local f is lr_arg of [A, 0]
+    if not (lr_io_isfile of (f)):
+        lr_argerr of [1, fname, "FILE* expected, got " + (lr_typearg of [A, 0])]
+    if f.closed:
+        lr_throw of ((lr_where of (1)) + "attempt to use a closed file")
+    return f
+
+define lr_io_put(f, s) as:
+    if f.fd == "stderr":
+        lr_stderr of (s)
+    else:
+        write of s
+
+define lr_io_writeto(f, A, first) as:
+    local i is first
+    loop while i < len of A:
+        local v is A[i]
+        if type of v == "str":
+            lr_io_put of [f, v]
+        elif type of v == "num":
+            lr_io_put of [f, lr_numstr of (v)]
+        else:
+            lr_argerr of [i + 1 - first, "write", "string expected, got " + (lr_tname of (v))]
+        i is i + 1
+    return [f]
+
+# The default input and output files (io.input, io.output).
+lr_io_cur is {"in": null, "out": null}
+
+define lr_io_write(A) as:
+    return lr_io_writeto of [lr_io_cur.out, A, 0]
+
+define lr_io_f_write(A) as:
+    local f is lr_io_checkfile of [A, "write"]
+    return lr_io_writeto of [f, A, 1]
+
+# The standard input stream, read through one persistent buffer as C's
+# FILE* is: cur is the chunk being read (pos its next byte), and chunks
+# come from q (all of stdin when it is a regular file, read at once) or,
+# on a pipe, one line at a time from read_line. EigenScript's read_line
+# drops the newline and a "\r" before it, so on a pipe a final line
+# without a newline reads as if it had one and "\r\n" reads as "\n" (an
+# EigenScript gap); a regular file is read byte for byte.
+lr_io_in is {"cur": "", "pos": 0, "q": [], "qi": 0, "eof": false, "mode": null}
+
+define lr_io_chunk as:
+    local I is lr_io_in
+    if I.mode == null:
+        local b is read_bytes of "/dev/stdin"
+        if type of b == "list":
+            I.mode is "file"
+            I.eof is true
+            local parts is split of [str_from_bytes of (b), "\n"]
+            local k is 0
+            loop while k < len of parts:
+                if k < len of parts - 1:
+                    append of [I.q, parts[k] + "\n"]
+                elif parts[k] != "":
+                    append of [I.q, parts[k]]
+                k is k + 1
+        else:
+            I.mode is "pipe"
+    if I.qi < len of I.q:
+        local c is I.q[I.qi]
+        I.q[I.qi] is null
+        I.qi is I.qi + 1
+        return c
+    if I.eof:
+        return null
+    local ln is read_line of null
+    if ln == null:
+        I.eof is true
+        return null
+    return ln + "\n"
+
+# The next byte without consuming it, or null at end of file.
+define lr_io_peek as:
+    local I is lr_io_in
+    loop while I.pos >= len of I.cur:
+        local c is lr_io_chunk of null
+        if c == null:
+            return null
+        I.cur is c
+        I.pos is 0
+    return I.cur[I.pos]
+
+# liolib.c read_line: [text, success].
+define lr_io_rline(keep) as:
+    local I is lr_io_in
+    local parts is []
+    local found is false
+    loop while (lr_io_peek of null) != null:
+        local rest is I.cur[I.pos:]
+        local k is index_of of [rest, "\n"]
+        if k >= 0:
+            if keep:
+                append of [parts, rest[0:k + 1]]
+            else:
+                append of [parts, rest[0:k]]
+            I.pos is I.pos + k + 1
+            found is true
+            break
+        append of [parts, rest]
+        I.pos is len of I.cur
+    local s is join of [parts, ""]
+    return [s, found or len of s > 0]
+
+# liolib.c read_chars: up to n bytes; [text, success].
+define lr_io_rchars(n) as:
+    local I is lr_io_in
+    local parts is []
+    local got is 0
+    loop while got < n and (lr_io_peek of null) != null:
+        local avail is len of I.cur - I.pos
+        local take is n - got
+        if take > avail:
+            take is avail
+        append of [parts, I.cur[I.pos:I.pos + take]]
+        I.pos is I.pos + take
+        got is got + take
+    return [join of [parts, ""], got > 0]
+
+define lr_io_rall as:
+    local I is lr_io_in
+    local parts is []
+    loop while (lr_io_peek of null) != null:
+        append of [parts, I.cur[I.pos:]]
+        I.pos is len of I.cur
+    return join of [parts, ""]
+
+# liolib.c read_number: at most 200 bytes that can start a numeral, then
+# lua_stringtonumber; the look-ahead byte is left unread.
+lr_io_rn is {"buf": [], "ok": true}
+
+define lr_io_nextc as:
+    if len of lr_io_rn.buf >= 200:
+        lr_io_rn.ok is false
+        return false
+    append of [lr_io_rn.buf, lr_io_peek of null]
+    lr_io_in.pos is lr_io_in.pos + 1
+    return true
+
+define lr_io_test2(set) as:
+    local c is lr_io_peek of null
+    if c != null and (c == set[0] or c == set[1]):
+        return lr_io_nextc of null
+    return false
+
+define lr_io_digits(hex) as:
+    local count is 0
+    loop while 1:
+        local c is lr_io_peek of null
+        if c == null:
+            break
+        local ok is lr_isdigit of (c)
+        if hex:
+            ok is lr_hexval of (c) >= 0
+        if not ok:
+            break
+        if not (lr_io_nextc of null):
+            break
+        count is count + 1
+    return count
+
+define lr_io_rnumber as:
+    lr_io_rn.buf is []
+    lr_io_rn.ok is true
+    loop while (lr_io_peek of null) != null and lr_isspace of (lr_io_peek of null):
+        lr_io_in.pos is lr_io_in.pos + 1
+    lr_io_test2 of ("-+")
+    local count is 0
+    local hex is false
+    if lr_io_test2 of ("00"):
+        if lr_io_test2 of ("xX"):
+            hex is true
+        else:
+            count is 1
+    count is count + (lr_io_digits of (hex))
+    if lr_io_test2 of (".."):
+        count is count + (lr_io_digits of (hex))
+    local em is "eE"
+    if hex:
+        em is "pP"
+    if count > 0 and lr_io_test2 of (em):
+        lr_io_test2 of ("-+")
+        lr_io_digits of (false)
+    if not lr_io_rn.ok:
+        return [null, false]
+    local v is lr_str2num of (join of [lr_io_rn.buf, ""])
+    return [v, v != null]
+
+# liolib.c g_read on stdin, formats from A[first].
+define lr_io_readfrom(A, first) as:
+    if len of A <= first:
+        local r0 is lr_io_rline of (false)
+        if r0[1]:
+            return [r0[0]]
+        return [null]
+    local out is []
+    local i is first
+    loop while i < len of A:
+        local fmt is A[i]
+        local r is null
+        if type of fmt == "num":
+            local n is lr_checkint of [A, i, "read"]
+            if n == 0:
+                r is ["", (lr_io_peek of null) != null]
+            else:
+                r is lr_io_rchars of (n)
+        else:
+            local p is lr_checkstr of [A, i, "read"]
+            if len of p > 0 and p[0] == "*":
+                p is p[1:]
+            local c is p[0:1]
+            if c == "n":
+                r is lr_io_rnumber of null
+            elif c == "l":
+                r is lr_io_rline of (false)
+            elif c == "L":
+                r is lr_io_rline of (true)
+            elif c == "a":
+                r is [lr_io_rall of null, true]
+            else:
+                lr_argerr of [i + 1, "read", "invalid format"]
+        if not r[1]:
+            append of [out, null]
+            return out
+        append of [out, r[0]]
+        i is i + 1
+    return out
+
+define lr_io_read(A) as:
+    if lr_io_cur.in.fd != "stdin":
+        return [null, "Bad file descriptor", 9]
+    return lr_io_readfrom of [A, 0]
+
+define lr_io_f_read(A) as:
+    local f is lr_io_checkfile of [A, "read"]
+    if f.fd != "stdin":
+        return [null, "Bad file descriptor", 9]
+    return lr_io_readfrom of [A, 1]
+
+define lr_io_lines_iter(B) as:
+    local r is lr_io_rline of (false)
+    if r[1]:
+        return [r[0]]
+    return [null]
+
+define lr_io_lines(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        lr_unsup of ["io.lines with a file name", 0]
+    return [lr_io_lines_iter]
+
+define lr_io_f_lines(A) as:
+    lr_io_checkfile of [A, "lines"]
+    return [lr_io_lines_iter]
+
+define lr_io_f_flush(A) as:
+    local f is lr_io_checkfile of [A, "flush"]
+    if f.fd == "stdout":
+        flush of null
+    return [true]
+
+define lr_io_flush(A) as:
+    if lr_io_cur.out.fd == "stdout":
+        flush of null
+    return [true]
+
+define lr_io_f_setvbuf(A) as:
+    lr_io_checkfile of [A, "setvbuf"]
+    return [true]
+
+define lr_io_f_close(A) as:
+    local f is lr_io_checkfile of [A, "close"]
+    # the standard files cannot be closed (liolib.c io_noclose)
+    return [null, "cannot close standard file"]
+
+# __gc and __close of a file handle (io_gc): only checks its argument here.
+define lr_io_f_gc(A) as:
+    local f is lr_arg of [A, 0]
+    if not (lr_io_isfile of (f)):
+        lr_argerr of [1, "__gc", "FILE* expected, got " + (lr_typearg of [A, 0])]
+    return []
+
+define lr_io_f_tostring(A) as:
+    local f is lr_arg of [A, 0]
+    if f.closed:
+        return ["file (closed)"]
+    return ["file (0x" + (str_lower of (hex of [f.id, 8])) + ")"]
+
+define lr_io_type(A) as:
+    if len of A == 0:
+        lr_argerr of [1, "type", "value expected"]
+    local f is A[0]
+    if not (lr_io_isfile of (f)):
+        return [null]
+    if f.closed:
+        return ["closed file"]
+    return ["file"]
+
+define lr_io_output(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        if lr_io_isfile of (A[0]):
+            lr_io_checkfile of [A, "output"]
+            lr_io_cur.out is A[0]
+            return [A[0]]
+        if type of A[0] == "str" or type of A[0] == "num":
+            lr_unsup of ["io.output with a file name", 0]
+        lr_argerr of [1, "output", "FILE* expected, got " + (lr_typearg of [A, 0])]
+    return [lr_io_cur.out]
+
+define lr_io_input(A) as:
+    if len of A > 0 and lr_arg of [A, 0] != null:
+        if lr_io_isfile of (A[0]):
+            lr_io_checkfile of [A, "input"]
+            lr_io_cur.in is A[0]
+            return [A[0]]
+        if type of A[0] == "str" or type of A[0] == "num":
+            lr_unsup of ["io.input with a file name", 0]
+        lr_argerr of [1, "input", "FILE* expected, got " + (lr_typearg of [A, 0])]
+    return [lr_io_cur.in]

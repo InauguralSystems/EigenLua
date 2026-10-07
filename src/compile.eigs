@@ -31,6 +31,14 @@ define drv_main(argv) as:
         drv_stderr of ("lua: cannot open " + file)
         return 1
     local src is read_text of file
+    # luaL_loadfilex skipcomment: a file's first line starting with '#' is
+    # skipped (its newline kept); a string given to load gets no such skip
+    if len of src > 0 and src[0] == "#":
+        local nl is index_of of [src, "\n"]
+        if nl < 0:
+            src is ""
+        else:
+            src is src[nl:]
     local ast is null
     try:
         local tk is lua_lex of (src)
@@ -42,7 +50,10 @@ define drv_main(argv) as:
         write_text of [argv[1], out]
     catch e:
         if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
-            drv_stderr of ("lua: " + file + ":" + (str of e[1]) + ": " + e[2])
+            if e[1] < 0:
+                drv_stderr of ("lua: " + e[2])
+            else:
+                drv_stderr of ("lua: " + file + ":" + (str of e[1]) + ": " + e[2])
             return 1
         if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
             drv_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + file + ":" + (str of e[2]))

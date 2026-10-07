@@ -5,7 +5,7 @@
 # that fails must print a located message ("<file>:<line>:" or
 # EIGENLUA-UNSUPPORTED ... at <file>:<line>) or it is reported as UNLOCATED.
 # The population is derived from the files on disk and the manifest, and
-# examined == expected (47 D + 23 S) > 0 is asserted. Prints parsed=<k>/<n>;
+# examined == expected (83 D + 23 S) > 0 is asserted. Prints parsed=<k>/<n>;
 # exit 0 iff k == n.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,7 +19,7 @@ while read -r status name _; do
   files+=("$ROOT/corpus/lua-tests/$name")
 done <"$ROOT/corpus/S.manifest"
 ns=$(( ${#files[@]} - nd ))
-[[ $nd -eq 47 && $ns -eq 23 ]] || { echo "HARNESS: population D=$nd S=$ns, want 47 and 23"; exit 2; }
+[[ $nd -eq 83 && $ns -eq 23 ]] || { echo "HARNESS: population D=$nd S=$ns, want 83 and 23"; exit 2; }
 k=0 n=0
 for f in "${files[@]}"; do
   n=$((n + 1))

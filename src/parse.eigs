@@ -3,7 +3,7 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "i": 0, "va": [1], "loops": [0]}
+    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0}
 
 define ps_t(P) as:
     return P.t[P.i]
@@ -15,15 +15,28 @@ define ps_near(P) as:
     local t is P.t[P.i]
     if t == "eof":
         return "<eof>"
+    if len of t == 1 and t != "name":
+        local o is ord of t
+        if o < 32 or o >= 127:
+            return "<\\" + (str of o) + ">"
+    if P.r[P.i] != null:
+        return P.r[P.i]
     return P.v[P.i]
 
 define ps_err(P, msg) as:
     if P.t[P.i] == "eof":
-        throw of ["SYNTAX", P.l[P.i], msg + " near <eof>"]
-    throw of ["SYNTAX", P.l[P.i], msg + " near '" + (ps_near of (P)) + "'"]
+        throw of (["SYNTAX", P.l[P.i], msg + " near <eof>"])
+    throw of (["SYNTAX", P.l[P.i], msg + " near '" + (ps_near of (P)) + "'"])
+
+# Advance to the next token; a lexical error is raised when its token is
+# reached (lexerr tokens, lex.eigs).
+define ps_adv(P) as:
+    P.i is P.i + 1
+    if P.t[P.i] == "lexerr":
+        throw of (["SYNTAX", P.l[P.i], P.v[P.i]])
 
 define ps_next(P) as:
-    P.i is P.i + 1
+    ps_adv of (P)
 
 define ps_check(P, t) as:
     if P.t[P.i] != t:
@@ -32,24 +45,26 @@ define ps_check(P, t) as:
 define ps_tokname(t) as:
     if t == "name":
         return "<name>"
+    if t == "eof":
+        return "<eof>"
     return "'" + t + "'"
 
 define ps_expect(P, t) as:
     ps_check of [P, t]
-    P.i is P.i + 1
+    ps_adv of (P)
 
 # Expect a closing token, naming the opener when it is on another line.
-define ps_match(P, what, who, line) as:
-    if P.t[P.i] != what:
+define ps_match(P, wht, whom, line) as:
+    if P.t[P.i] != wht:
         if line == P.l[P.i]:
-            ps_err of [P, "'" + what + "' expected"]
-        ps_err of [P, "'" + what + "' expected (to close '" + who + "' at line " + (str of line) + ")"]
-    P.i is P.i + 1
+            ps_err of [P, "'" + wht + "' expected"]
+        ps_err of [P, "'" + wht + "' expected (to close '" + whom + "' at line " + (str of line) + ")"]
+    ps_adv of (P)
 
 define ps_name(P) as:
     ps_check of [P, "name"]
     local v is P.v[P.i]
-    P.i is P.i + 1
+    ps_adv of (P)
     return v
 
 define ps_block_follow(P, with_until) as:
@@ -62,18 +77,24 @@ define ps_block_follow(P, with_until) as:
 
 define lua_parse(tk) as:
     local P is ps_new of (tk)
+    if P.t[0] == "lexerr":
+        throw of (["SYNTAX", P.l[0], P.v[0]])
     local body is ps_block of (P)
     ps_check of [P, "eof"]
+    ps_close_gotos of (P)
     return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
 
 define ps_block(P) as:
+    ps_enterblock of (P)
     local stats is []
     loop while 1:
         local t is P.t[P.i]
         if t == "return":
             append of [stats, ps_retstat of (P)]
+            ps_leaveblock of (P)
             return stats
         if ps_block_follow of [P, 1]:
+            ps_leaveblock of (P)
             return stats
         local s is ps_statement of (P)
         if s != null:
@@ -89,11 +110,24 @@ define ps_retstat(P) as:
         exprs is ps_explist of (P)
     if P.t[P.i] == ";":
         ps_next of (P)
-    if not (ps_block_follow of [P, 1]):
-        ps_err of [P, "'<eof>' expected"]
     return {"k": "Return", "exprs": exprs, "line": line}
 
+# lparser.c enterlevel: statements, subexpressions and assignment targets
+# nest on the C stack, which Lua stops at LUAI_MAXCCALLS (200) calls, a few
+# of which the caller of the parser holds; past that, "C stack overflow"
+# (raised without a position).
+define ps_enterlevel(P) as:
+    P.depth is P.depth + 1
+    if P.depth >= 198:
+        throw of (["SYNTAX", -1, "C stack overflow"])
+
 define ps_statement(P) as:
+    ps_enterlevel of (P)
+    local s is ps_statement1 of (P)
+    P.depth is P.depth - 1
+    return s
+
+define ps_statement1(P) as:
     local line is P.l[P.i]
     local t is P.t[P.i]
     if t == ";":
@@ -149,6 +183,8 @@ define ps_statement(P) as:
         if P.t[P.i] == "function":
             ps_next of (P)
             local nm is ps_name of (P)
+            ps_checkvars of [P, 1]
+            ps_addvar of [P, nm]
             local fn is ps_body of [P, 0, line]
             fn.name is nm
             return {"k": "LocalFunction", "name": nm, "func": fn, "line": line}
@@ -157,14 +193,15 @@ define ps_statement(P) as:
         local go is 1
         loop while go:
             append of [names, ps_name of (P)]
-            local at is ""
+            ps_checkvars of [P, len of names]
+            local atb is ""
             if P.t[P.i] == "<":
                 ps_next of (P)
-                at is ps_name of (P)
-                if at != "const" and at != "close":
-                    throw of ["SYNTAX", P.l[P.i], "unknown attribute '" + at + "'"]
+                atb is ps_name of (P)
+                if atb != "const" and atb != "close":
+                    throw of (["SYNTAX", P.l[P.i], "unknown attribute '" + atb + "'"])
                 ps_expect of [P, ">"]
-            append of [attribs, at]
+            append of [attribs, atb]
             go is 0
             if P.t[P.i] == ",":
                 ps_next of (P)
@@ -179,25 +216,43 @@ define ps_statement(P) as:
         if P.t[P.i] == "=":
             ps_next of (P)
             exprs is ps_explist of (P)
+        for nm2 in names:
+            ps_addvar of [P, nm2]
         return {"k": "Local", "names": names, "attribs": attribs, "exprs": exprs, "line": line}
     if t == "::":
         ps_next of (P)
         local nm is ps_name of (P)
         ps_expect of [P, "::"]
-        return {"k": "Label", "name": nm, "line": line}
+        return ps_label of [P, nm, line]
     if t == "return":
         return ps_retstat of (P)
     if t == "break":
         ps_next of (P)
         local lp is P.loops
         if lp[len of lp - 1] == 0:
-            throw of ["SYNTAX", line, "break outside loop at line " + (str of line)]
+            # Lua resolves a break like a pending goto: the error is raised
+            # when the enclosing function closes, at the line of the token
+            # after its end (lparser.c undefgoto from close_func)
+            local fsb is ps_fs of (P)
+            append of [fsb.gotos, {"name": "break", "line": line, "nactvar": fsb.actvar, "node": null}]
+            return null
         return {"k": "Break", "line": line}
     if t == "goto":
         ps_next of (P)
         local nm is ps_name of (P)
-        return {"k": "Goto", "name": nm, "line": line}
+        return ps_goto of [P, nm, line]
     return ps_exprstat of (P)
+
+# Close a function: a goto or break still pending is an error (lparser.c
+# undefgoto, raised from close_func at the current line).
+define ps_close_gotos(P) as:
+    local fs is P.fs[len of P.fs - 1]
+    list_truncate of [P.fs, len of P.fs - 1]
+    if len of fs.gotos > 0:
+        local g is fs.gotos[0]
+        if g.name == "break":
+            throw of (["SYNTAX", P.l[P.i], "break outside loop at line " + (str of g.line)])
+        throw of (["SYNTAX", P.l[P.i], "no visible label '" + g.name + "' for <goto> at line " + (str of g.line)])
 
 define ps_loop_block(P) as:
     append of [P.loops, 1]
@@ -242,6 +297,7 @@ define ps_for(P) as:
             ps_next of (P)
             c is ps_expr of (P)
         ps_expect of [P, "do"]
+        P.pendvars is ["(for state)", "(for state)", "(for state)", n1]
         local body is ps_loop_block of (P)
         ps_match of [P, "end", "for", line]
         return {"k": "NumFor", "var": n1, "a": a, "b": b, "c": c, "body": body, "line": line}
@@ -254,6 +310,7 @@ define ps_for(P) as:
         local eline is P.l[P.i]
         local exprs is ps_explist of (P)
         ps_expect of [P, "do"]
+        P.pendvars is concat of [["(for state)", "(for state)", "(for state)", "(for state)"], names]
         local body is ps_loop_block of (P)
         ps_match of [P, "end", "for", line]
         return {"k": "GenFor", "names": names, "exprs": exprs, "body": body, "line": line, "eline": eline}
@@ -280,15 +337,21 @@ define ps_body(P, is_method, line) as:
                     ps_next of (P)
                     go is 1
             else:
-                ps_err of [P, "<name> expected"]
+                ps_err of [P, "<name> or '...' expected"]
     ps_expect of [P, ")"]
     append of [P.va, vararg]
     append of [P.loops, 0]
+    local nfs is ps_newfs of null
+    nfs.line is line
+    append of [P.fs, nfs]
+    for pn in params:
+        ps_addvar of [P, pn]
     local body is ps_block of (P)
     list_truncate of [P.va, len of P.va - 1]
     list_truncate of [P.loops, len of P.loops - 1]
     local endline is P.l[P.i]
     ps_match of [P, "end", "function", line]
+    ps_close_gotos of (P)
     return {"k": "Func", "params": params, "vararg": vararg, "body": body, "line": line, "endline": endline, "name": ""}
 
 define ps_explist(P) as:
@@ -302,13 +365,21 @@ define ps_exprstat(P) as:
     local line is P.l[P.i]
     local e is ps_suffixedexp of (P)
     if P.t[P.i] == "=" or P.t[P.i] == ",":
+        # restassign: each target is checked before the token after it
         local targets is [e]
-        loop while P.t[P.i] == ",":
-            ps_next of (P)
-            append of [targets, ps_suffixedexp of (P)]
-        for tg in targets:
+        local d0 is P.depth
+        # (measured against the reference: one level more than a statement)
+        P.depth is P.depth + 1
+        loop while 1:
+            local tg is targets[len of targets - 1]
             if tg.k != "Name" and tg.k != "Index":
                 ps_err of [P, "syntax error"]
+            if P.t[P.i] != ",":
+                break
+            ps_next of (P)
+            append of [targets, ps_suffixedexp of (P)]
+            ps_enterlevel of (P)
+        P.depth is d0
         ps_expect of [P, "="]
         local exprs is ps_explist of (P)
         return {"k": "Assign", "targets": targets, "exprs": exprs, "line": line}
@@ -370,7 +441,14 @@ define ps_args(P) as:
         ps_next of (P)
         local args is []
         if P.t[P.i] != ")":
-            args is ps_explist of (P)
+            append of [args, ps_expr of (P)]
+            loop while P.t[P.i] == ",":
+                ps_next of (P)
+                # luaK_checkstack: the function, then one register per
+                # argument, above the active locals (MAXREGS 255)
+                if (ps_fs of (P)).actvar + 1 + len of args >= 254:
+                    ps_err of [P, "function or expression needs too many registers"]
+                append of [args, ps_expr of (P)]
         ps_match of [P, ")", "(", line]
         return args
     ps_err of [P, "function arguments expected"]
@@ -466,6 +544,12 @@ define ps_expr(P) as:
     return ps_subexpr of [P, 0]
 
 define ps_subexpr(P, limit) as:
+    ps_enterlevel of (P)
+    local e is ps_subexpr1 of [P, limit]
+    P.depth is P.depth - 1
+    return e
+
+define ps_subexpr1(P, limit) as:
     local t is P.t[P.i]
     local line is P.l[P.i]
     local e is null
@@ -487,3 +571,101 @@ define ps_subexpr(P, limit) as:
         local b is ps_subexpr of [P, pr[1]]
         e is {"k": "Bin", "op": op, "a": e, "b": b, "line": oline}
     return e
+
+# ---------------------------------------------------------------- goto
+# Labels and gotos are resolved as lparser.c 5.4.9 does: per function, a
+# list of active labels and of pending gotos (a break outside a loop is a
+# pending goto named "break"); per block, the number of active locals at
+# entry. A forward goto is solved when its label is created in the same
+# block; leaving a block moves its pending gotos out to the enclosing block's
+# level. Every resolved Goto node gets the target Label node's id.
+
+define ps_newfs as:
+    return {"actvar": 0, "vars": [], "blocks": [], "labels": [], "gotos": [], "line": 0}
+
+# lparser.c errorlimit
+define ps_errorlimit(P, limit, wht) as:
+    local fs is ps_fs of (P)
+    local wh is "main function"
+    if fs.line != 0:
+        wh is "function at line " + (str of fs.line)
+    ps_err of [P, "too many " + wht + " (limit is " + (str of limit) + ") in " + wh]
+
+# new_localvar's check: MAXVARS (200) locals active in a function
+define ps_checkvars(P, n) as:
+    if (ps_fs of (P)).actvar + n > 200:
+        ps_errorlimit of [P, 200, "local variables"]
+
+define ps_fs(P) as:
+    return P.fs[len of P.fs - 1]
+
+define ps_addvar(P, name) as:
+    local fs is ps_fs of (P)
+    append of [fs.vars, name]
+    fs.actvar is fs.actvar + 1
+
+define ps_enterblock(P) as:
+    local fs is ps_fs of (P)
+    append of [fs.blocks, {"nactvar": fs.actvar, "firstlabel": len of fs.labels, "firstgoto": len of fs.gotos}]
+    for nm in P.pendvars:
+        ps_addvar of [P, nm]
+    P.pendvars is []
+
+define ps_leaveblock(P) as:
+    local fs is ps_fs of (P)
+    local bl is fs.blocks[len of fs.blocks - 1]
+    list_truncate of [fs.blocks, len of fs.blocks - 1]
+    list_truncate of [fs.labels, bl.firstlabel]
+    if len of fs.blocks > 0:
+        local i is bl.firstgoto
+        loop while i < len of fs.gotos:
+            fs.gotos[i].nactvar is bl.nactvar
+            i is i + 1
+    fs.actvar is bl.nactvar
+    list_truncate of [fs.vars, bl.nactvar]
+
+define ps_label(P, nm, line) as:
+    local fs is ps_fs of (P)
+    # a label followed only by void statements up to the end of its block
+    # is outside the scope of the block's locals
+    local j is P.i
+    loop while 1:
+        if P.t[j] == ";":
+            j is j + 1
+        elif P.t[j] == "::" and P.t[j + 1] == "name" and P.t[j + 2] == "::":
+            j is j + 3
+        else:
+            break
+    local tj is P.t[j]
+    local last is tj == "else" or tj == "elseif" or tj == "end" or tj == "eof"
+    for lb in fs.labels:
+        if lb.name == nm:
+            throw of (["SYNTAX", P.l[j], "label '" + nm + "' already defined on line " + (str of lb.line)])
+    local bl is fs.blocks[len of fs.blocks - 1]
+    local nact is fs.actvar
+    if last:
+        nact is bl.nactvar
+    P.lid is P.lid + 1
+    local id is P.lid
+    append of [fs.labels, {"name": nm, "line": line, "nactvar": nact, "id": id}]
+    local i is bl.firstgoto
+    loop while i < len of fs.gotos:
+        local g is fs.gotos[i]
+        if g.name == nm:
+            if g.nactvar < nact:
+                throw of (["SYNTAX", P.l[j], "<goto " + nm + "> at line " + (str of g.line) + " jumps into the scope of local '" + fs.vars[g.nactvar] + "'"])
+            g.node.target is id
+            list_remove_at of [fs.gotos, i]
+        else:
+            i is i + 1
+    return {"k": "Label", "name": nm, "line": line, "id": id}
+
+define ps_goto(P, nm, line) as:
+    local fs is ps_fs of (P)
+    local node is {"k": "Goto", "name": nm, "line": line, "target": null}
+    for lb in fs.labels:
+        if lb.name == nm:
+            node.target is lb.id
+            return node
+    append of [fs.gotos, {"name": nm, "line": line, "nactvar": fs.actvar, "node": node}]
+    return node

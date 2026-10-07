@@ -3,10 +3,11 @@
 # Lua:      print(1/0, -1/0, 1e308 * 10, 0/0 ~= 0/0) -> inf  -inf  inf  true
 #           math.huge -> inf
 # Expected: IEEE inf/-inf/nan values (Lua's float semantics), or a loud
-#           refusal; EigenLua refuses (exit 3) rather than print 1e308.
-# Actual v0.44.0:  1e+308 for 1e308 * 10 (silent), and 1 / 0 raises
+#           refusal. EigenLua emits the direct operation (owner decision 2):
+#           math.huge is 1e308 and x / 0 raises, as a Lua error.
+# Actual 686d3b7d: 1e+308 for 1e308 * 10 (silent), and 1 / 0 raises
 #           "division by zero".
-# Rows: num_print (D); any program touching math.huge or x/0.
+# Rows: num_print (line 1) (D); events.lua (168) (S).
 print of (1e308 * 10)
 try:
     print of (1 / 0)

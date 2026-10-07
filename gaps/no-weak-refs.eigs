@@ -1,0 +1,16 @@
+# EigenScript gap: no weak references and no finalizers, so Lua's weak tables
+# (__mode, manual 2.5.4) and __gc (2.5.3) have nothing to map onto. EigenLua
+# accepts both fields and the table stays strong; a program that waits for a
+# weak entry to be collected waits forever. Not a #1286 row.
+# Lua:  local t = setmetatable({}, {__mode = "v"}); t[1] = {}
+#       collectgarbage(); print(t[1]) -> nil
+# Expected: a weak reference (or a weak container) the collector may clear.
+# Actual 686d3b7d: the builtin index has no weak or finalizer entry:
+#   eigenscript --api | grep -ciE 'weak|finali'  ->  0
+# and a value held only by a container is never cleared:
+#   [{"x": 1}] after the only other reference is dropped.
+# Rows: closure.lua (line 37, HANG), gengc.lua (line 122), gc.lua (S).
+held is [{"x": 1}]
+other is held[0]
+other is null
+print of held
