@@ -45,7 +45,11 @@ define lr_co_runner(co) as:
             local vals is lr_call of [r.f, r.transfer, 0]
             res is concat of [[true], vals]
         catch e:
-            if type of e == "dict" and e.COCLOSE == 1:
+            if type of e == "dict" and e.EXIT == 1:
+                # os.exit(c, true) inside the coroutine: on to the main thread
+                r.exitx is e
+                res is [true]
+            elif type of e == "dict" and e.COCLOSE == 1:
                 res is [true]
             else:
                 res is [false, lr_errobj of (e)]
@@ -95,6 +99,8 @@ define lr_co_resume(co, args) as:
     lr_cc.n is ccn
     lr_cc.base is ccb
     pr.status is "running"
+    if r.exitx != null:
+        throw of (r.exitx)
     return r.result
 
 define lr_co_check(A, fname) as:

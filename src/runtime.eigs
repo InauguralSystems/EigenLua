@@ -171,6 +171,8 @@ define lr_main(f, chunk, sites) as:
     try:
         lr_call of [f, [], 0]
     catch e:
+        if type of e == "dict" and e.EXIT == 1:
+            lr_exit of (e.code)
         local msg is lr_msgh of (lr_errobj of (e))
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
@@ -784,7 +786,7 @@ define lr_call(f, args, site) as:
             # a Lua function that failed (most often a call-depth overflow on
             # entry) is dropped: the error belongs to the calling line
             local lua is lr_upvals of (f) != null
-            if lua and not (type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1)):
+            if lua and not (type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1 or e.EXIT == 1)):
                 list_truncate of [lr_stk, len of lr_stk - 1]
                 list_truncate of [lr_fstk, len of lr_fstk - 1]
             lr_eserr of [e, site, lua]
@@ -816,7 +818,7 @@ define lr_ccall(f, args, site) as:
 # unwinding pass through unchanged. `here`: Lua code at that site raised it
 # (not a C function called there), so a message handler runs at that line.
 define lr_eserr(e, site, here) as:
-    if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1):
+    if type of e == "dict" and (e.LUAERR == 1 or e.COCLOSE == 1 or e.EXIT == 1):
         throw of (e)
     local pos is ""
     if site != 0:
@@ -1408,7 +1410,7 @@ define lr_b_pcall(A) as:
     try:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
         list_truncate of [ef, nef]
         local rr is lr_co_cur[0]
@@ -1434,7 +1436,7 @@ define lr_b_xpcall(A) as:
     try:
         r is lr_call of [lr_arg of [A, 0], list_slice of [A, 2, len of A], 0]
     catch e:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
         local rr is lr_co_cur[0]
         rr.nny is nny
@@ -1479,7 +1481,7 @@ define lr_xp_handle(h, v, n, site) as:
     catch e:
         local rr is lr_co_cur[0]
         rr.nny is nny
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
             throw of (e)
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
@@ -2043,7 +2045,12 @@ define lr_os_exit(A) as:
             c is 1
     else:
         c is lr_optint of [A, 0, "exit", 0]
-    lr_exit of (c - 256 * (floor of (c / 256)))
+    c is c - 256 * (floor of (c / 256))
+    # lua_close (a true second argument) closes the pending to-be-closed
+    # variables first: unwind to lr_main, closing them on the way
+    if lr_t of (lr_arg of [A, 1]):
+        throw of ({"EXIT": 1, "code": c, "ev": null})
+    lr_exit of (c)
 
 # os.clock: processor time is not observable here; the seconds since the
 # program started stand in (its value is out of scope, GAPS.md).
@@ -2398,7 +2405,18 @@ define lr_tbc_close(tb, err, site) as:
 # luaD_pcall, lua_closethread), so __close is called from C: site 0.
 define lr_tbc_unwind(tb, e, site) as:
     if not tb[1]:
-        if type of e == "dict" and e.COCLOSE == 1:
+        if type of e == "dict" and e.EXIT == 1:
+            # os.exit(c, true): lua_close closes the main thread's pending
+            # variables with no error, and an error in one is passed to the
+            # next (ldo.c luaD_closeprotected); a coroutine's are not closed
+            if lr_co_cur[0].main:
+                try:
+                    lr_tbc_close of [tb, e.ev, 0]
+                catch e2:
+                    if type of e2 == "dict" and e2.EXIT == 1:
+                        throw of (e2)
+                    e.ev is lr_errobj of (e2)
+        elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
         else:
             lr_tbc_close of [tb, lr_errobj of (e), 0]
