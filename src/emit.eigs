@@ -631,20 +631,28 @@ define em_function(G, fn) as:
         em_line of [E, "local gj is 0"]
     if fn.envvar != null:
         em_declare of [E, fn.envvar, G.env]
-    em_block of [E, fn.body]
+    em_block of [E, fn.body, fn.bend]
     em_line of [E, "return []"]
     em_dedent of (E)
     em_line of [E, "return f" + id]
     append of [G.funcs, join of [E.out, "\n"]]
 
-define em_block(E, stats) as:
-    em_block_tail of [E, stats, null]
+# bend: the line where the block's to-be-closed variables close when it
+# ends normally (lparser.c lastline at leaveblock; a function's final return)
+define em_block(E, stats, bend) as:
+    em_block_tail of [E, stats, null, bend]
 
 # A block whose last act, inside every to-be-closed region it opens, is to
 # set tail.v to the truth of tail.cond (when tail is not null): a
 # repeat-until condition sees the body's locals and runs before they are
 # closed.
-define em_block_tail(E, stats, tail) as:
+define em_block_tail(E, stats, tail, bend) as:
+    local pb is E.bend
+    E.bend is bend
+    em_block_tail1 of [E, stats, tail]
+    E.bend is pb
+
+define em_block_tail1(E, stats, tail) as:
     local haslabel is false
     for s in stats:
         if s.k == "Label":
@@ -707,7 +715,7 @@ define em_tbc_region(E, s, stats, from, tail) as:
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
     em_stats of [E, stats, from, tail]
     list_truncate of [E.tbc, len of E.tbc - 1]
-    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + (em_site of [E, E.bend, "", ""]) + "]"]
     em_dedent of (E)
     em_line of [E, "catch " + tb + "e:"]
     em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + site + "]"]
@@ -725,21 +733,21 @@ define em_tbc_rest(E, r) as:
     em_line of [E, "try:"]
     em_indent of (E)
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
-    em_block_tail of [E, r.rest, r.tail]
+    em_block_tail of [E, r.rest, r.tail, E.bend]
     list_truncate of [E.tbc, len of E.tbc - 1]
-    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + (em_site of [E, E.bend, "", ""]) + "]"]
     em_dedent of (E)
     em_line of [E, "catch " + tb + "e:"]
     em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + site + "]"]
 
 # Close the to-be-closed variables declared inside E.loops[depth:] (all of
-# them for depth 0), innermost first.
-define em_close_tbc(E, depth) as:
+# them for depth 0), innermost first, at Lua line `line`.
+define em_close_tbc(E, depth, line) as:
     local i is len of E.tbc - 1
     loop while i >= 0:
         local t is E.tbc[i]
         if t.ld >= depth:
-            em_line of [E, "lr_tbc_close of [" + t.t + ", null, " + t.site + "]"]
+            em_line of [E, "lr_tbc_close of [" + t.t + ", null, " + (em_site of [E, line, "", ""]) + "]"]
         i is i - 1
 
 # Declare a local v with value code.
@@ -841,7 +849,7 @@ define em_stat(E, s) as:
     elif k == "CallStat":
         em_call of [E, s.e, 1]
     elif k == "Do":
-        em_block of [E, s.body]
+        em_block of [E, s.body, s.bend]
     elif k == "While":
         local mark is len of E.out
         local c is em_cond of [E, s.cond]
@@ -858,18 +866,20 @@ define em_stat(E, s) as:
             em_indent of (E)
             em_line of [E, "if not (" + c + "):"]
             em_line of [E, "    break"]
-        em_loop_begin of [E, "lua"]
-        em_block of [E, s.body]
+        local LW is em_loop_begin of [E, "lua"]
+        LW.endl is s.endl
+        em_block of [E, s.body, s.bend]
         em_line of [E, "null"]
         em_dedent of (E)
         em_loop_end of (E)
     elif k == "Repeat":
         em_line of [E, "loop while 1:"]
         em_indent of (E)
-        em_loop_begin of [E, "lua"]
+        local LR is em_loop_begin of [E, "lua"]
+        LR.endl is s.endl
         local rc is em_tmp of (E)
         em_line of [E, "local " + rc + " is false"]
-        em_block_tail of [E, s.body, {"cond": s.cond, "v": rc}]
+        em_block_tail of [E, s.body, {"cond": s.cond, "v": rc}, s.bend]
         em_line of [E, "if " + rc + ":"]
         em_line of [E, "    break"]
         em_dedent of (E)
@@ -891,7 +901,7 @@ define em_stat(E, s) as:
             # the values first, then the to-be-closed variables, innermost first
             local rt is em_tmp of (E)
             em_line of [E, "local " + rt + " is " + rc]
-            em_close_tbc of [E, 0]
+            em_close_tbc of [E, 0, s.lastline]
             rc is rt
         em_line of [E, "return " + rc]
     elif k == "Break":
@@ -909,7 +919,7 @@ define em_if(E, s, i) as:
     local c is em_cond of [E, s.conds[i]]
     em_line of [E, "if " + c + ":"]
     em_indent of (E)
-    em_block of [E, s.blocks[i]]
+    em_block of [E, s.blocks[i], s.bends[i]]
     em_line of [E, "null"]
     em_dedent of (E)
     # elseif becomes elif (EigenScript caps nesting at 64 levels); a condition
@@ -927,7 +937,7 @@ define em_if(E, s, i) as:
             em_indent of (E)
             em_line of [E, "if " + c2 + ":"]
             em_indent of (E)
-            em_block of [E, s.blocks[k]]
+            em_block of [E, s.blocks[k], s.bends[k]]
             em_line of [E, "null"]
             em_dedent of (E)
             em_if_rest of [E, s, k + 1]
@@ -935,7 +945,7 @@ define em_if(E, s, i) as:
             return null
         em_line of [E, "elif " + c2 + ":"]
         em_indent of (E)
-        em_block of [E, s.blocks[k]]
+        em_block of [E, s.blocks[k], s.bends[k]]
         em_line of [E, "null"]
         em_dedent of (E)
         k is k + 1
@@ -955,7 +965,7 @@ define em_if_else(E, s) as:
     if s["else"] != null:
         em_line of [E, "else:"]
         em_indent of (E)
-        em_block of [E, s["else"]]
+        em_block of [E, s["else"], s.bends[len of s.bends - 1]]
         em_line of [E, "null"]
         em_dedent of (E)
 
@@ -1017,11 +1027,12 @@ define em_numfor(E, s) as:
     # an integer loop counts down tc; a float loop (tc < 0) compares
     em_line of [E, "loop while " + tc + " > 0 or (" + tc + " < 0 and " + ti + " * " + ts + " <= " + tl + "):"]
     em_indent of (E)
-    em_loop_begin of [E, "lua"]
+    local LN is em_loop_begin of [E, "lua"]
+    LN.endl is s.endl
     em_declare of [E, s.v, ti]
     em_line of [E, ti + " is " + ti + " + " + st]
     em_line of [E, tc + " is " + tc + " - 1"]
-    em_block of [E, s.body]
+    em_block of [E, s.body, s.bend]
     em_line of [E, "null"]
     em_dedent of (E)
     em_loop_end of (E)
@@ -1056,7 +1067,8 @@ define em_genfor(E, s) as:
 define em_genfor_loop(E, s, site, tf, tst, tc) as:
     em_line of [E, "loop while 1:"]
     em_indent of (E)
-    em_loop_begin of [E, "lua"]
+    local LG is em_loop_begin of [E, "lua"]
+    LG.endl is s.endl
     local tr is em_tmp of (E)
     em_line of [E, "local " + tr + " is lr_ccall of [" + tf + ", [" + tst + ", " + tc + "], " + site + "]"]
     local i is 0
@@ -1071,7 +1083,7 @@ define em_genfor_loop(E, s, site, tf, tst, tc) as:
         else:
             em_declare of [E, v, "lr_at of [" + tr + ", " + (str of i) + "]"]
         i is i + 1
-    em_block of [E, s.body]
+    em_block of [E, s.body, s.bend]
     em_line of [E, "null"]
     em_dedent of (E)
     em_loop_end of (E)
@@ -1089,7 +1101,7 @@ define em_dirname(p) as:
     return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "labseen": {}, "labline": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -1114,7 +1126,7 @@ define emit_program(ast, file, runtime) as:
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "labseen": {}, "labline": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -1172,7 +1184,7 @@ define em_break(E) as:
     local i is len of E.loops - 1
     loop while E.loops[i].k != "lua":
         i is i - 1
-    em_close_tbc of [E, i + 1]
+    em_close_tbc of [E, i + 1, E.loops[i].endl]
     if top.k == "lua":
         em_line of [E, "break"]
         return null
@@ -1185,7 +1197,11 @@ define em_goto(E, s) as:
     local di is 0
     loop while E.loops[di].id != D.id:
         di is di + 1
-    em_close_tbc of [E, di + 1]
+    # a backward goto closes at the goto, a forward one at its label
+    local cl is s.line
+    if not (has_key of [E.G.labseen, str of s.target]):
+        cl is E.G.labline[str of s.target]
+    em_close_tbc of [E, di + 1, cl]
     if top.id == D.id:
         em_line of [E, D.pc + " is " + (str of D.labels[str of s.target])]
         em_line of [E, "continue"]
@@ -1205,6 +1221,7 @@ define em_block_labels(E, stats) as:
         if s.k == "Label":
             seg is seg + 1
             D.labels[str of s.id] is seg
+            E.G.labline[str of s.id] is s.line
             E.G.labelloop[str of s.id] is D
     seg is 0
     em_line of [E, "if " + pc + " <= 0:"]
@@ -1212,6 +1229,7 @@ define em_block_labels(E, stats) as:
     for s in stats:
         if s.k == "Label":
             em_line of [E, "null"]
+            E.G.labseen[str of s.id] is true
             em_dedent of (E)
             seg is seg + 1
             em_line of [E, "if " + pc + " <= " + (str of seg) + ":"]

@@ -40,6 +40,14 @@ define lr_site_chunk(site) as:
         return sd[3]
     return lr_st.chunk
 
+# The source of a site's chunk (lua_Debug.source): "@file", "=name" or
+# the chunk text itself.
+define lr_site_source(site) as:
+    local sd is lr_st.sites[site]
+    if len of sd > 4:
+        return sd[4]
+    return lr_st.source
+
 # The construct is not handled: say so and exit 3, never run on.
 define lr_unsup(wht, site) as:
     local line is lr_site_line of (site)
@@ -158,6 +166,7 @@ define lr_errfunc(v, site) as:
 
 define lr_main(f, chunk, sites) as:
     lr_st.chunk is lr_chunkid of ("@" + chunk)
+    lr_st.source is "@" + chunk
     lr_st.sites is sites
     lr_init_lib of null
     # lua.c createargtable: arg[0] is the script, arg[-1] the interpreter
@@ -2145,7 +2154,8 @@ define lr_need_compiler as:
 # [null, message] on a syntax error. src is the text, or a lexer stream
 # (lex_stream) for a reader chunk; a Lua error raised by the reader is the
 # message (ldo.c luaD_protectedparser).
-define lr_compile(src, chunkid, env) as:
+define lr_compile(src, source, env) as:
+    local chunkid is lr_chunkid of (source)
     lr_need_compiler of null
     local code is null
     local depth is len of lr_stk
@@ -2158,7 +2168,7 @@ define lr_compile(src, chunkid, env) as:
         local ast is lua_parse of (tk)
         local r is emit_chunk of [ast, len of lr_st.sites]
         for st in r[1]:
-            append of [lr_st.sites, [st[0], st[1], st[2], chunkid]]
+            append of [lr_st.sites, [st[0], st[1], st[2], chunkid, source]]
         code is r[0]
     catch e:
         if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
@@ -2214,7 +2224,7 @@ define lr_b_load(A) as:
         local me is lr_loadmode of [text, mode]
         if me != null:
             return [null, me]
-        return lr_compile of [text, lr_chunkid of (name), env]
+        return lr_compile of [text, name, env]
     local name is "=(load)"
     if lr_arg of [A, 1] != null:
         name is lr_checkstr of [A, 1, "load"]
@@ -2257,7 +2267,7 @@ define lr_b_load(A) as:
     if me != null:
         return [null, me]
     lr_need_compiler of null
-    return lr_compile of [lex_stream of [rd, first], lr_chunkid of (name), env]
+    return lr_compile of [lex_stream of [rd, first], name, env]
 
 define lr_b_loadfile(A) as:
     local fname is lr_arg of [A, 0]
@@ -2279,7 +2289,7 @@ define lr_b_loadfile(A) as:
             text is ""
         else:
             text is "--" + text[nl:]
-    return lr_compile of [text, lr_chunkid of ("@" + fname), env]
+    return lr_compile of [text, "@" + fname, env]
 
 define lr_b_dofile(A) as:
     local r is lr_b_loadfile of ([lr_arg of [A, 0]])
@@ -2523,7 +2533,7 @@ define lr_d_framet(level, stk, main) as:
     if site == 0:
         return {"c": true}
     local ismain is main and n - level == 1
-    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "main": ismain}
+    return {"c": false, "line": lr_site_line of (site), "chunk": lr_site_chunk of (site), "source": lr_site_source of (site), "main": ismain}
 
 define lr_d_getinfo(A) as:
     local a0 is lr_arg of [A, 0]
@@ -2546,7 +2556,7 @@ define lr_d_getinfo(A) as:
             return [t]
         lr_rawset of [t, "currentline", fr.line, 0]
         lr_rawset of [t, "short_src", fr.chunk, 0]
-        lr_rawset of [t, "source", "@" + fr.chunk, 0]
+        lr_rawset of [t, "source", fr.source, 0]
         if fr.main:
             lr_rawset of [t, "what", "main", 0]
         else:
@@ -2568,7 +2578,7 @@ define lr_d_getinfo(A) as:
         return [t]
     local ch is lr_site_chunk of (u[2])
     lr_rawset of [t, "short_src", ch, 0]
-    lr_rawset of [t, "source", "@" + ch, 0]
+    lr_rawset of [t, "source", lr_site_source of (u[2]), 0]
     if u[3]:
         lr_rawset of [t, "what", "main", 0]
         lr_rawset of [t, "linedefined", 0, 0]

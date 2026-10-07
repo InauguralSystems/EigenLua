@@ -8,6 +8,7 @@ co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
 debug_getinfo_func.lua unspecified-audit: ok
+debug_getinfo_source_close.lua unspecified-audit: ok
 debug_traceback_levels.lua unspecified-audit: ok
 debug_traceback_thread.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
