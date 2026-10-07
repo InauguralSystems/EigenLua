@@ -22,7 +22,7 @@ lr_co_nid is {"n": 0}
 
 define lr_co_new(f, main) as:
     lr_co_nid.n is lr_co_nid.n + 1
-    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0}]
+    return [{"id": lr_co_nid.n, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "nny": 0, "ef": []}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]

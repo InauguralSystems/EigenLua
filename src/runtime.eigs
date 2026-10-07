@@ -118,6 +118,44 @@ define lr_globalfuncname(f) as:
                     return lib + "." + k
     return null
 
+# lua.c msghandler: a message (a value with __tostring as is, another
+# non-string named by its type) with a traceback from the error point.
+define lr_msgh(v) as:
+    local msg is ""
+    local trace is true
+    if type of v == "str":
+        msg is v
+    elif type of v == "num":
+        msg is lr_tostr of (v)
+    else:
+        local h is lr_metafield of [v, "__tostring"]
+        if h != null and type of v == "dict":
+            msg is lr_tostr of (v)
+            trace is false
+        else:
+            msg is "(error object is a " + (lr_type of (v)) + " value)"
+    local lvl is 1
+    if len of lr_fstk > 0 and lr_upvals of (lr_fstk[len of lr_fstk - 1]) == null:
+        lvl is 0
+    if trace:
+        msg is (lr_d_traceback of ([msg, lvl]))[0]
+    return msg
+
+# The message handler in force (ldo.c L->errfunc): lua.c's for the main
+# chunk, none inside pcall or a coroutine body, xpcall's own handler. An
+# error raised by lua_error passes through it even where a protected call
+# inside the library catches it (load's reader, luaD_protectedparser).
+define lr_errfunc(v, site) as:
+    local ef is lr_co_cur[0].ef
+    if len of ef == 0:
+        return v
+    local h is ef[len of ef - 1]
+    if h == null:
+        return v
+    if h == "MAIN":
+        return lr_msgh of (v)
+    return lr_xp_handle of [h, v, 0, site]
+
 define lr_main(f, chunk, sites) as:
     lr_st.chunk is lr_chunkid of ("@" + chunk)
     lr_st.sites is sites
@@ -129,29 +167,11 @@ define lr_main(f, chunk, sites) as:
     if type of a0 == "str" and a0 != "":
         lr_rawset of [argt, -1, a0, 0]
     lr_rawset of [lr_G, "arg", argt, 0]
+    append of [lr_co_cur[0].ef, "MAIN"]
     try:
         lr_call of [f, [], 0]
     catch e:
-        local v is lr_errobj of (e)
-        local msg is ""
-        local trace is true
-        if type of v == "str":
-            msg is v
-        elif type of v == "num":
-            msg is lr_tostr of (v)
-        else:
-            local h is lr_metafield of [v, "__tostring"]
-            if h != null and type of v == "dict":
-                msg is lr_tostr of (v)
-                trace is false
-            else:
-                msg is "(error object is a " + (lr_type of (v)) + " value)"
-        # lua.c msghandler: the message with a traceback from the error point
-        local lvl is 1
-        if len of lr_fstk > 0 and lr_upvals of (lr_fstk[len of lr_fstk - 1]) == null:
-            lvl is 0
-        if trace:
-            msg is (lr_d_traceback of ([msg, lvl]))[0]
+        local msg is lr_msgh of (lr_errobj of (e))
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
     lr_exit of 0
@@ -1381,18 +1401,23 @@ define lr_b_pcall(A) as:
     local depth is len of lr_stk
     local ccn is lr_cc.n
     local nny is lr_co_cur[0].nny
+    local ef is lr_co_cur[0].ef
+    local nef is len of ef
+    append of [ef, null]
     local r is null
     try:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
         if type of e == "dict" and e.COCLOSE == 1:
             throw of (e)
+        list_truncate of [ef, nef]
         local rr is lr_co_cur[0]
         rr.nny is nny
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
         lr_cc.n is ccn
         return [false, lr_errobj of (e)]
+    list_truncate of [ef, nef]
     return concat of [[true], r]
 
 define lr_b_xpcall(A) as:
@@ -1402,6 +1427,9 @@ define lr_b_xpcall(A) as:
         lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ef is lr_co_cur[0].ef
+    local nef is len of ef
+    append of [ef, h]
     local r is null
     try:
         r is lr_call of [lr_arg of [A, 0], list_slice of [A, 2, len of A], 0]
@@ -1417,10 +1445,12 @@ define lr_b_xpcall(A) as:
         if type of e == "dict" and type of e.site == "num":
             hs is e.site
         local hv is lr_xp_handle of [h, v, 0, hs]
+        list_truncate of [ef, nef]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
         lr_cc.n is ccn
         return [false, hv]
+    list_truncate of [ef, nef]
     return concat of [[true], r]
 
 # The message handler sees each error, its own included (ldebug.c
@@ -2073,13 +2103,20 @@ define lr_need_compiler as:
         load_file of (lr_st.srcdir + "/emit.eigs")
         lr_st.compiler is 1
 
-# Compile Lua source text into a function whose globals index env:
-# [fn], or [null, message] on a syntax error.
-define lr_compile(text, chunkid, env) as:
+# Compile Lua source into a function whose globals index env: [fn], or
+# [null, message] on a syntax error. src is the text, or a lexer stream
+# (lex_stream) for a reader chunk; a Lua error raised by the reader is the
+# message (ldo.c luaD_protectedparser).
+define lr_compile(src, chunkid, env) as:
     lr_need_compiler of null
     local code is null
+    local depth is len of lr_stk
+    local ccn is lr_cc.n
+    local nny is lr_co_cur[0].nny
     try:
-        local tk is lua_lex of (text)
+        local tk is src
+        if type of src == "str":
+            tk is lua_lex of (src)
         local ast is lua_parse of (tk)
         local r is emit_chunk of [ast, len of lr_st.sites]
         for st in r[1]:
@@ -2093,14 +2130,37 @@ define lr_compile(text, chunkid, env) as:
         if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
             lr_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + chunkid + ":" + (str of e[2]) + "\n")
             lr_exit of 3
+        if type of e == "dict" and e.LUAERR == 1:
+            local hs is 0
+            if type of e.site == "num":
+                hs is e.site
+            local ev is lr_errfunc of [e.v, hs]
+            local rr is lr_co_cur[0]
+            rr.nny is nny
+            list_truncate of [lr_stk, depth]
+            list_truncate of [lr_fstk, depth]
+            lr_cc.n is ccn
+            return [null, ev]
         throw of (e)
     local L is eval of code
     local cell is [env]
     return [L of (cell)]
 
+# ldo.c checkmode: the first character tells a binary chunk (LUA_SIGNATURE)
+# from text; null when the mode allows it.
+define lr_loadmode(first, mode) as:
+    local kind is "text"
+    if len of first > 0 and ord of first[0] == 27:
+        kind is "binary"
+    if index_of of [mode, kind[0]] < 0:
+        return "attempt to load a " + kind + " chunk (mode is '" + mode + "')"
+    if kind == "binary":
+        lr_unsup of ["loading a binary chunk", 0]
+    return null
+
 define lr_b_load(A) as:
     # lbaselib.c luaB_load: a string (or number) chunk, else a reader
-    # function; the mode is checked when loading starts
+    # function; the mode is checked on the first character
     local chunk is lr_arg of [A, 0]
     local mode is "bt"
     if lr_arg of [A, 2] != null:
@@ -2108,31 +2168,58 @@ define lr_b_load(A) as:
     local env is lr_G
     if len of A >= 4:
         env is A[3]
-    local text is ""
-    local name is ""
     if type of chunk == "str" or type of chunk == "num":
-        text is lr_tostr of (chunk)
-        name is text
+        local text is lr_tostr of (chunk)
+        local name is text
         if lr_arg of [A, 1] != null:
             name is lr_checkstr of [A, 1, "load"]
-    else:
-        name is "=(load)"
-        if lr_arg of [A, 1] != null:
-            name is lr_checkstr of [A, 1, "load"]
-        if type of chunk != "fn" and type of chunk != "builtin":
-            lr_argerr of [1, "load", "function expected, got " + (lr_typearg of [A, 0])]
-        local parts is []
-        loop while 1:
-            local piece is lr_call1 of [chunk, [], 0]
-            if piece == null or piece == "":
-                break
-            if type of piece != "str" and type of piece != "num":
-                return [null, (lr_where of (1)) + "reader function must return a string"]
-            append of [parts, lr_tostr of (piece)]
-        text is join of [parts, ""]
-    if index_of of [mode, "t"] < 0:
-        return [null, "attempt to load a text chunk (mode is '" + mode + "')"]
-    return lr_compile of [text, lr_chunkid of (name), env]
+        local me is lr_loadmode of [text, mode]
+        if me != null:
+            return [null, me]
+        return lr_compile of [text, lr_chunkid of (name), env]
+    local name is "=(load)"
+    if lr_arg of [A, 1] != null:
+        name is lr_checkstr of [A, 1, "load"]
+    if type of chunk != "fn" and type of chunk != "builtin":
+        lr_argerr of [1, "load", "function expected, got " + (lr_typearg of [A, 0])]
+    # lbaselib.c generic_reader: nil or "" ends the chunk
+    define rd(x) as:
+        local piece is lr_call1 of [chunk, [], 0]
+        if piece == null:
+            return null
+        if type of piece != "str" and type of piece != "num":
+            lr_throw of ((lr_where of (1)) + "reader function must return a string")
+        return lr_tostr of (piece)
+    # the first read is protected too (luaD_protectedparser)
+    local first is null
+    local depth is len of lr_stk
+    local ccn is lr_cc.n
+    local nny is lr_co_cur[0].nny
+    try:
+        first is rd of null
+    catch e:
+        if type of e == "dict" and e.LUAERR == 1:
+            local hs is 0
+            if type of e.site == "num":
+                hs is e.site
+            local ev is lr_errfunc of [e.v, hs]
+            local rr is lr_co_cur[0]
+            rr.nny is nny
+            list_truncate of [lr_stk, depth]
+            list_truncate of [lr_fstk, depth]
+            lr_cc.n is ccn
+            return [null, ev]
+        throw of (e)
+    if first == "":
+        first is null
+    local f0 is ""
+    if first != null:
+        f0 is first
+    local me is lr_loadmode of [f0, mode]
+    if me != null:
+        return [null, me]
+    lr_need_compiler of null
+    return lr_compile of [lex_stream of [rd, first], lr_chunkid of (name), env]
 
 define lr_b_loadfile(A) as:
     local fname is lr_arg of [A, 0]

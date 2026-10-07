@@ -3,7 +3,16 @@
 # with Lua's wording where it is cheap to match.
 
 define ps_new(tk) as:
-    return {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0}
+    local P is {"t": tk.t, "v": tk.v, "l": tk.l, "fl": tk.f, "z": tk.z, "r": tk.r, "i": 0, "va": [1], "loops": [0], "fs": [ps_newfs of null], "lid": 0, "pendvars": [], "depth": 0, "lx": null}
+    if has_key of [tk, "rd"]:
+        P.lx is tk
+        ps_fill of [P, 0]
+    return P
+
+# A reader chunk is lexed on demand: make tokens up to index k.
+define ps_fill(P, k) as:
+    loop while k >= len of P.t and not P.lx.done:
+        lex_more of (P.lx)
 
 define ps_t(P) as:
     return P.t[P.i]
@@ -32,6 +41,8 @@ define ps_err(P, msg) as:
 # reached (lexerr tokens, lex.eigs).
 define ps_adv(P) as:
     P.i is P.i + 1
+    if P.lx != null:
+        ps_fill of [P, P.i]
     if P.t[P.i] == "lexerr":
         throw of (["SYNTAX", P.l[P.i], P.v[P.i]])
 
@@ -458,6 +469,8 @@ define ps_table(P) as:
     ps_expect of [P, "{"]
     local items is []
     loop while P.t[P.i] != "}":
+        if P.lx != null:
+            ps_fill of [P, P.i + 1]
         if P.t[P.i] == "name" and P.t[P.i + 1] == "=":
             local kl is P.l[P.i]
             local key is ps_name of (P)
@@ -630,6 +643,10 @@ define ps_label(P, nm, line) as:
     # is outside the scope of the block's locals
     local j is P.i
     loop while 1:
+        if P.lx != null:
+            ps_fill of [P, j]
+            if P.t[j] == "::":
+                ps_fill of [P, j + 2]
         if P.t[j] == ";":
             j is j + 1
         elif P.t[j] == "::" and P.t[j + 1] == "name" and P.t[j + 2] == "::":
