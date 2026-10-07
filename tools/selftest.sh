@@ -226,6 +226,27 @@ do_unspecified_rc() {
   run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only plant_rc.lua
   harness unspecified-rc "is UNSPECIFIED"
 }
+do_dup_manifest() {
+  local dest
+  dest=$(stage "$WORK/dupman")
+  grep -m 1 'unspecified-audit: ok$' "$dest/corpus/D.manifest" >>"$dest/corpus/D.manifest"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness dup-manifest "duplicate D manifest line"
+}
+do_builtin_missing() {
+  local dest
+  dest=$(stage "$WORK/bimiss")
+  sed -i '/^string\.rep /d' "$dest/corpus/builtins.inventory"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness builtin-missing "missing [string.rep ]"
+}
+do_builtin_uncited() {
+  local dest
+  dest=$(stage "$WORK/biunc")
+  sed -i 's/^string\.rep .*/string.rep break_outside_loop.lua/' "$dest/corpus/builtins.inventory"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness builtin-uncited "does not mention string.rep"
+}
 do_compat_ref() {
   local c p
   "$ROOT/tools/build_ref.sh" --check-not-compat "${REF%/*}/lua-compat" 2>/dev/null; c=$?
@@ -243,7 +264,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D dup-manifest builtin-missing builtin-uncited; do
     dispatch "$p"
   done
 fi

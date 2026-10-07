@@ -2199,6 +2199,13 @@ define lr_os_getenv(A) as:
 # Only the C locale exists (os.setlocale answers as a C library would).
 define lr_os_setlocale(A) as:
     local l is lr_arg of [A, 0]
+    if l != null:
+        l is lr_checkstr of [A, 0, "setlocale"]
+    # loslib.c: luaL_checkoption(L, 2, "all", catnames)
+    if lr_arg of [A, 1] != null:
+        local cat is lr_checkstr of [A, 1, "setlocale"]
+        if list_index_of of [["all", "collate", "ctype", "monetary", "numeric", "time"], cat] < 0:
+            lr_argerr of [2, "setlocale", "invalid option '" + cat + "'"]
     if l == null or l == "" or l == "C" or l == "POSIX":
         return ["C"]
     return [null]

@@ -28,6 +28,10 @@
 # it is a corpus defect (exit 2). Residuals: tier D ignores stderr; a nonzero
 # reference exit is not a harness error; UNSTABLE is a row verdict only.
 # --selftest execs tools/selftest.sh. Membership is the files on disk, both ways.
+# Gates (exit 2): no D.manifest line twice (plant dup-manifest); ops_matrix.lua
+# covers the operators: line (ops-drop); corpus/builtins.inventory equals the
+# reference's globals and library fields, each cited by a D row that names it
+# or declared uncovered with a reason (builtin-missing, builtin-uncited).
 set -u
 set -o pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -204,9 +208,13 @@ for need in heavy.lua attrib.lua big.lua main.lua files.lua api.lua code.lua bwc
 done
 [[ -f $SUITE/all.lua ]] || die "all.lua missing"
 [[ -z ${s_status[all.lua]:-} ]] || die "all.lua must not be a row"
+# >>> guard:dup-manifest (no D.manifest line twice, the operators: line included)
+dupl=$(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*$' "$DMAN" | LC_ALL=C sort | uniq -d | head -n 1)
+[[ -z $dupl ]] || die "duplicate D manifest line: $dupl"
+# <<< guard:dup-manifest
 while read -r name extra; do
   [[ -z ${name:-} || ${name:0:1} == '#' ]] && continue
-  [[ $name == operators: ]] && { OPS=$extra; continue; }
+  [[ $name == operators: ]] && { [[ -z ${OPS+x} ]] || die "duplicate D manifest line: operators:"; OPS=$extra; continue; }
   [[ ${extra:-} == "unspecified-audit: ok" ]] || die "D manifest row lacks unspecified-audit: ok: $name"
   [[ -n ${d_have[$name]:-} ]] && die "duplicate D row: $name"
   d_have[$name]=1
@@ -221,6 +229,38 @@ done <"$DMAN"
 have=$(sed -n 's/^  {"\([^"]*\)", function.*/\1/p' "$DDIR/ops_matrix.lua" | LC_ALL=C sort -u | tr '\n' ' ')
 [[ $have == "$(tr ' ' '\n' <<<"$OPS" | grep . | LC_ALL=C sort -u | tr '\n' ' ')" ]] || die "ops_matrix.lua operator table [$have] != D.manifest operators: [$OPS]"
 # <<< guard:ops
+# >>> guard:builtins (corpus/builtins.inventory lists exactly the reference's globals and library fields; each is
+# cited by a D manifest row whose code names it, or declared uncovered with a reason)
+INV="$ROOT/corpus/builtins.inventory"
+[[ -f $INV ]] || die "missing builtin inventory: corpus/builtins.inventory"
+ref_names=$("$REF" -e 'local libs = {"coroutine", "debug", "io", "math", "os", "package", "string", "table", "utf8"}
+local isl, out = {}, {}
+for _, l in ipairs(libs) do isl[l] = true end
+for k in pairs(_G) do if not isl[k] then out[#out + 1] = k end end
+for _, l in ipairs(libs) do for k in pairs(_G[l]) do out[#out + 1] = l .. "." .. k end end
+print(table.concat(out, "\n"))' | LC_ALL=C sort) || die "reference could not list its builtins"
+declare -A inv_have=()
+while read -r bname bcite; do
+  [[ -z ${bname:-} || ${bname:0:1} == '#' ]] && continue
+  [[ -z ${inv_have[$bname]:-} ]] || die "duplicate builtin inventory line: $bname"
+  inv_have[$bname]=1
+  [[ $bcite =~ ^uncovered:\ +[^\ ] ]] && continue
+  [[ $bcite =~ ^[A-Za-z0-9_]+\.lua$ && -n ${d_have[$bcite]:-} ]] || die "builtin inventory: $bname cites no D manifest row: '$bcite'"
+  if [[ $bname == *.* ]]; then
+    bre="(^|[^A-Za-z0-9_.])${bname//./\\.}([^A-Za-z0-9_]|\$)|\"${bname#*.}\""
+  else
+    bre="(^|[^A-Za-z0-9_.:])${bname}([^A-Za-z0-9_]|\$)"
+  fi
+  # (no grep -q in a pipe: under pipefail its early exit fails the first grep)
+  [[ -n $(grep -v '^[[:space:]]*--' "$DDIR/$bcite" | grep -E "$bre") ]] || die "builtin inventory: D/$bcite does not mention $bname"
+done <"$INV"
+inv_names=$(printf '%s\n' "${!inv_have[@]}" | LC_ALL=C sort)
+if [[ $inv_names != "$ref_names" ]]; then
+  bmiss=$(comm -13 <(printf '%s\n' "$inv_names") <(printf '%s\n' "$ref_names") | tr '\n' ' ')
+  bextra=$(comm -23 <(printf '%s\n' "$inv_names") <(printf '%s\n' "$ref_names") | tr '\n' ' ')
+  die "builtin inventory != the reference's builtins: missing [$bmiss] extra [$bextra]"
+fi
+# <<< guard:builtins
 # >>> guard:membership
 for f in "$SUITE"/*.lua; do
   base=$(basename "$f")

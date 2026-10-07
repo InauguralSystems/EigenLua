@@ -2,6 +2,7 @@ arg_table.lua unspecified-audit: ok
 assert_semantics.lua unspecified-audit: ok
 break_outside_loop.lua unspecified-audit: ok
 builtin_values.lua unspecified-audit: ok
+builtin_values_more.lua unspecified-audit: ok
 co_close_yield.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
 co_isyieldable_c.lua unspecified-audit: ok
