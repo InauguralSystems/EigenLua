@@ -128,6 +128,7 @@ define lr_main(f, chunk, sites) as:
     catch e:
         local v is lr_errobj of (e)
         local msg is ""
+        local trace is true
         if type of v == "str":
             msg is v
         elif type of v == "num":
@@ -136,8 +137,15 @@ define lr_main(f, chunk, sites) as:
             local h is lr_metafield of [v, "__tostring"]
             if h != null and type of v == "dict":
                 msg is lr_tostr of (v)
+                trace is false
             else:
                 msg is "(error object is a " + (lr_type of (v)) + " value)"
+        # lua.c msghandler: the message with a traceback from the error point
+        local lvl is 1
+        if len of lr_fstk > 0 and lr_upvals of (lr_fstk[len of lr_fstk - 1]) == null:
+            lvl is 0
+        if trace:
+            msg is (lr_d_traceback of ([msg, lvl]))[0]
         lr_stderr of ("lua: " + msg + "\n")
         lr_exit of 1
     lr_exit of 0
