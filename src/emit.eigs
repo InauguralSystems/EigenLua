@@ -1062,7 +1062,9 @@ define em_genfor(E, s) as:
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": csite}]
     em_genfor_loop of [E, s, site, tf, tst, tc]
     list_truncate of [E.tbc, len of E.tbc - 1]
-    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + csite + "]"]
+    # normal exit and break close at the loop's end (lparser.c forbody's
+    # leaveblock runs at its 'end' line)
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + (em_site of [E, s.endl, "", ""]) + "]"]
     em_dedent of (E)
     em_line of [E, "catch " + tb + "e:"]
     em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + csite + "]"]

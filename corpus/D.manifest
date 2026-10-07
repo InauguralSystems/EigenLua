@@ -22,6 +22,7 @@ err_nonstr.lua unspecified-audit: ok
 err_pcall.lua unspecified-audit: ok
 err_xpcall.lua unspecified-audit: ok
 for_string_bounds.lua unspecified-audit: ok
+genfor_close_line.lua unspecified-audit: ok
 goto_stmt.lua unspecified-audit: ok
 int_conversion_errors.lua unspecified-audit: ok
 int_maxinteger.lua unspecified-audit: ok
