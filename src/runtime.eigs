@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 0, "srcdir": ".", "compiler": null}
 lr_stk is []
 lr_fnreg is []
 
@@ -31,12 +31,19 @@ define lr_exit(code) as:
 define lr_site_line(site) as:
     return lr_st.sites[site][0]
 
+# The chunk name of a site: a site added by load carries its chunk's.
+define lr_site_chunk(site) as:
+    local sd is lr_st.sites[site]
+    if len of sd > 3:
+        return sd[3]
+    return lr_st.chunk
+
 # The construct is not handled: say so and exit 3, never run on.
 define lr_unsup(what, site) as:
     local line is lr_site_line of (site)
     if line < 0:
         line is lr_cur_line of (1)
-    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + what + " at " + lr_st.chunk + ":" + (str of line) + "\n")
+    lr_stderr of ("EIGENLUA-UNSUPPORTED: " + what + " at " + (lr_site_chunk of (site)) + ":" + (str of line) + "\n")
     lr_exit of 3
 
 # A value Lua would compute that one finite double cannot hold.
@@ -54,7 +61,7 @@ define lr_where(level) as:
     local line is lr_cur_line of (level)
     if line < 0:
         return ""
-    return lr_st.chunk + ":" + (str of line) + ": "
+    return (lr_site_chunk of (lr_stk[len of lr_stk - level])) + ":" + (str of line) + ": "
 
 define lr_throw(v) as:
     throw of ({"LUAERR": 1, "v": v})
@@ -63,13 +70,13 @@ define lr_rterr(site, msg) as:
     local line is lr_site_line of (site)
     if line < 0:
         throw of ({"LUAERR": 1, "v": (lr_where of (1)) + msg})
-    throw of ({"LUAERR": 1, "v": lr_st.chunk + ":" + (str of line) + ": " + msg})
+    throw of ({"LUAERR": 1, "v": (lr_site_chunk of (site)) + ":" + (str of line) + ": " + msg})
 
 define lr_argerr(n, fname, msg) as:
     throw of ({"LUAERR": 1, "v": (lr_where of (1)) + "bad argument #" + (str of n) + " to '" + fname + "' (" + msg + ")"})
 
 define lr_main(f, chunk, sites) as:
-    lr_st.chunk is chunk
+    lr_st.chunk is lr_chunkid of ("@" + chunk)
     lr_st.sites is sites
     lr_init_lib of null
     try:
@@ -1679,6 +1686,119 @@ define lr_os_exit(A) as:
         c is 1
     lr_exit of c
 
+# ------------------------------------------------------------ load
+
+# luaO_chunkid with LUA_IDSIZE 60: how a chunk name appears in messages.
+define lr_chunkid(src) as:
+    local n is len of src
+    if n > 0 and src[0] == "=":
+        if n <= 60:
+            return src[1:]
+        return src[1:60]
+    if n > 0 and src[0] == "@":
+        if n <= 60:
+            return src[1:]
+        return "..." + src[n - 56:]
+    local nl is index_of of [src, "\n"]
+    if n < 45 and nl < 0:
+        return "[string \"" + src + "\"]"
+    local m is n
+    if nl >= 0:
+        m is nl
+    if m > 45:
+        m is 45
+    return "[string \"" + src[0:m] + "...\"]"
+
+# The compiler (lexer, parser, emitter) is loaded on the first load call.
+define lr_need_compiler as:
+    if lr_st.compiler == null:
+        load_file of (lr_st.srcdir + "/lex.eigs")
+        load_file of (lr_st.srcdir + "/parse.eigs")
+        load_file of (lr_st.srcdir + "/emit.eigs")
+        lr_st.compiler is 1
+
+# Compile Lua source text into a function whose globals index env:
+# [fn], or [null, message] on a syntax error.
+define lr_compile(text, chunkid, env) as:
+    lr_need_compiler of null
+    local code is null
+    try:
+        local tk is lua_lex of (text)
+        local ast is lua_parse of (tk)
+        local r is emit_chunk of [ast, len of lr_st.sites]
+        for st in r[1]:
+            append of [lr_st.sites, [st[0], st[1], st[2], chunkid]]
+        code is r[0]
+    catch e:
+        if type of e == "list" and len of e == 3 and e[0] == "SYNTAX":
+            return [null, chunkid + ":" + (str of e[1]) + ": " + e[2]]
+        if type of e == "list" and len of e == 3 and e[0] == "UNSUP":
+            lr_stderr of ("EIGENLUA-UNSUPPORTED: " + e[1] + " at " + chunkid + ":" + (str of e[2]) + "\n")
+            lr_exit of 3
+        throw of (e)
+    local L is eval of code
+    return [L of (env)]
+
+define lr_b_load(A) as:
+    local chunk is lr_arg of [A, 0]
+    local name is lr_arg of [A, 1]
+    local mode is lr_arg of [A, 2]
+    local env is lr_G
+    if len of A >= 4:
+        env is A[3]
+    local text is ""
+    if type of chunk == "str":
+        text is chunk
+        if name == null:
+            name is chunk
+    elif type of chunk == "fn":
+        if name == null:
+            name is "=(load)"
+        local parts is []
+        loop while 1:
+            local piece is lr_call1 of [chunk, [], 0]
+            if piece == null or piece == "":
+                break
+            if type of piece != "str":
+                return [null, "reader function must return a string"]
+            append of [parts, piece]
+        text is join of [parts, ""]
+    else:
+        lr_argerr of [1, "load", "string expected, got " + (lr_typearg of [A, 0])]
+    if type of name != "str":
+        name is lr_checkstr of [A, 1, "load"]
+    if mode != null and index_of of [lr_checkstr of [A, 2, "load"], "t"] < 0:
+        return [null, "attempt to load a text chunk (mode is '" + mode + "')"]
+    return lr_compile of [text, lr_chunkid of (name), env]
+
+define lr_b_loadfile(A) as:
+    local fname is lr_arg of [A, 0]
+    if fname == null:
+        lr_unsup of ["loadfile from stdin", 0]
+    fname is lr_checkstr of [A, 0, "loadfile"]
+    local mode is lr_arg of [A, 1]
+    local env is lr_G
+    if len of A >= 3:
+        env is A[2]
+    if not (file_exists of fname):
+        return [null, "cannot open " + fname]
+    if mode != null and index_of of [lr_checkstr of [A, 1, "loadfile"], "t"] < 0:
+        return [null, "attempt to load a text chunk (mode is '" + mode + "')"]
+    local text is read_text of fname
+    if len of text > 0 and text[0] == "#":
+        local nl is index_of of [text, "\n"]
+        if nl < 0:
+            text is ""
+        else:
+            text is "--" + text[nl:]
+    return lr_compile of [text, lr_chunkid of ("@" + fname), env]
+
+define lr_b_dofile(A) as:
+    local r is lr_b_loadfile of ([lr_arg of [A, 0]])
+    if r[0] == null:
+        lr_throw of (r[1])
+    return lr_call of [r[0], [], 0]
+
 # ------------------------------------------------------------ globals
 
 define lr_lib(fns, stubs, trap) as:
@@ -1718,7 +1838,10 @@ lr_pkglib is lr_lib of [{}, lr_stubs of ["package.", "loadlib searchpath"], {"co
 lr_basefns is {"print": lr_b_print, "type": lr_b_type, "tostring": lr_b_tostring, "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
 for k in keys of lr_basefns:
     lr_rawset of [lr_G, k, lr_basefns[k], 0]
-for k in ["dofile", "load", "loadfile", "require", "warn"]:
+lr_rawset of [lr_G, "load", lr_b_load, 0]
+lr_rawset of [lr_G, "loadfile", lr_b_loadfile, 0]
+lr_rawset of [lr_G, "dofile", lr_b_dofile, 0]
+for k in ["require", "warn"]:
     lr_rawset of [lr_G, k, lr_stub of (k), 0]
 lr_rawset of [lr_G, "_G", lr_G, 0]
 lr_rawset of [lr_G, "_VERSION", "Lua 5.4", 0]

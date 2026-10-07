@@ -110,6 +110,8 @@ define rs_stat(R, s) as:
     elif k == "Assign":
         for t in s.targets:
             rs_expr of [R, t]
+            if t.k == "Name" and t.var == null and t.n == "_ENV":
+                em_unsup of ["assignment to _ENV", s.line]
             if t.k == "Name" and t.var != null and t.var.attr != "":
                 throw of (["SYNTAX", s.line, "attempt to assign to const variable '" + t.n + "'"])
         for e in s.exprs:
@@ -177,8 +179,6 @@ define rs_expr(R, e) as:
         e.var is v
         if v != null and v.fn.id != R.fn.id:
             rs_capture of [R, v, R.fn]
-        if v == null and e.n == "_ENV":
-            em_unsup of ["_ENV", e.line]
     elif k == "Index":
         rs_expr of [R, e.o]
         rs_expr of [R, e.key]
@@ -223,7 +223,7 @@ define em_tmp(E) as:
 # A site is [line, descriptor_a, descriptor_b]; its id indexes the table.
 define em_site(E, line, da, db) as:
     append of [E.G.sites, [line, da, db]]
-    return str of (len of E.G.sites - 1)
+    return str of (E.G.sitebase + len of E.G.sites - 1)
 
 # Lua's variable description for an operand, as in its error messages.
 define em_desc(E, e) as:
@@ -457,7 +457,11 @@ define em_expr(E, e) as:
     if k == "Name":
         if e.var != null:
             return em_var_ref of (e.var)
+        if e.n == "_ENV":
+            return E.G.env
         local site is em_site of [E, e.line, "global '" + e.n + "'", ""]
+        if E.G.env != "lr_G":
+            return "(lr_index of [" + E.G.env + ", " + (em_strlit of (e.n)) + ", " + site + "])"
         return "(lr_gget of [" + (em_strlit of (e.n)) + ", " + site + "])"
     if k == "Paren":
         return em_expr of [E, e.e]
@@ -667,7 +671,10 @@ define em_assign_to(E, target, code, site_line) as:
             em_line of [E, (em_var_ref of (target.var)) + " is " + code]
         else:
             local site is em_site of [E, site_line, "", ""]
-            em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+            if E.G.env != "lr_G":
+                em_line of [E, "lr_setindex of [" + E.G.env + ", " + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
+            else:
+                em_line of [E, "lr_gset of [" + (em_strlit of (target.n)) + ", " + code + ", " + site + "]"]
         return null
     throw of (["INTERNAL", "assign target"])
 
@@ -847,13 +854,24 @@ define em_genfor(E, s) as:
     em_line of [E, "null"]
     em_dedent of (E)
 
+define em_dirname(p) as:
+    local i is len of p - 1
+    loop while i >= 0 and p[i] != "/":
+        i is i - 1
+    if i < 0:
+        return "."
+    if i == 0:
+        return "/"
+    return p[0:i]
+
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
     local out is []
     append of [out, "load_file of " + (em_strlit of (runtime))]
+    append of [out, "lr_st.srcdir is " + (em_strlit of (em_dirname of (runtime)))]
     append of [out, "S is []"]
     for st in G.sites:
         append of [out, "append of [S, [" + (str of st[0]) + ", " + (em_strlit of (st[1])) + ", " + (em_strlit of (st[2])) + "]]"]
@@ -862,3 +880,20 @@ define emit_program(ast, file, runtime) as:
     append of [out, "unobserved:"]
     append of [out, "    lr_main of [F" + (str of ast.id) + " of ([]), " + (em_strlit of (file)) + ", S]"]
     return (join of [out, "\n"]) + "\n"
+
+# A chunk compiled at run time by load: the code of a function L(ENV) whose
+# result is the chunk's main function, its globals indexing ENV. Site ids
+# start at sitebase; the caller appends the returned sites to the site table.
+# Returns [code, sites].
+define emit_chunk(ast, sitebase) as:
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "env": "ENV", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local R is {"G": G, "scopes": [], "fn": null}
+    rs_func of [R, ast, null]
+    em_function of [G, ast]
+    local out is ["define L(ENV) as:"]
+    for f in G.funcs:
+        for ln in split of [f, "\n"]:
+            append of [out, "    " + ln]
+    append of [out, "    return F" + (str of ast.id) + " of ([])"]
+    append of [out, "L"]
+    return [(join of [out, "\n"]) + "\n", G.sites]
