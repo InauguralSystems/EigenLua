@@ -1,0 +1,17 @@
+# EigenScript gap: no proper tail calls. Lua guarantees them (manual 3.4.10),
+# so a tail-recursive loop runs in constant stack; a call in tail position
+# here still takes a frame, and the call-depth limit (gaps/call-depth.eigs)
+# ends the loop. Not a #1286 row; a VM property.
+# Lua: function d(n) if n > 0 then return d(n - 1) else return 101 end end
+#      print(d(30000)) -> 101
+# Expected: 101.
+# Actual 686d3b7d: {"kind": "limit", "message": "call stack overflow", "line": 13}
+# Rows: calls.lua (line 119, "testing tail calls") (S).
+define d(n) as:
+    if n == 0:
+        return 101
+    return d of (n - 1)
+try:
+    print of (d of 30000)
+catch e:
+    print of e

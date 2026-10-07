@@ -4,9 +4,11 @@
 # Lua:      2^53 + 1 (integers) -> 9007199254740993
 #           math.maxinteger + 1 == math.mininteger -> true (wraps)
 # Expected: 9007199254740993, or an error on precision loss.
-# Actual v0.44.0:  9007199254740992, and 9223372036854775807 + 1 prints a
-#           rounded 9.223372036854776e+18 with no error.
-# Rows: int_past53, int_maxinteger, int_wrap (D).
+# Actual 686d3b7d: 9007199254740992, and 9223372036854775807 + 1 prints a
+#           rounded 9.223372036854776e+18 with no error; true.
+# Rows: int_past53, int_maxinteger, int_wrap, rng_xoshiro (line 3: math.random(0)
+#       is a full 64-bit integer) (D); math.lua (13), nextvar.lua (78),
+#       sort.lua (64), locals.lua (overflow loop at 91) (S).
 print of (9007199254740992 + 1)
 print of (9223372036854775807 + 1)
 print of (9223372036854775807 == 9223372036854775806)

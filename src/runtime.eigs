@@ -1172,8 +1172,23 @@ define lr_b_xpcall(A) as:
             throw of (e)
         local v is lr_errobj of (e)
         list_truncate of [lr_stk, depth]
-        return [false, lr_call1 of [h, [v], 0]]
+        return [false, lr_xp_handle of [h, v, 0]]
     return concat of [[true], r]
+
+# The message handler sees each error, its own included (ldebug.c
+# luaG_errormsg calls it again for an error it raises); past the C-call
+# limit the result is "error in error handling" (LUA_ERRERR).
+define lr_xp_handle(h, v, n) as:
+    if n >= 200:
+        return "error in error handling"
+    local depth is len of lr_stk
+    try:
+        return lr_call1 of [h, [v], 0]
+    catch e:
+        if type of e == "dict" and e.COCLOSE == 1:
+            throw of (e)
+        list_truncate of [lr_stk, depth]
+        return lr_xp_handle of [h, lr_errobj of (e), n + 1]
 
 define lr_b_select(A) as:
     local n is lr_arg of [A, 0]
@@ -1987,7 +2002,7 @@ define lr_init_lib as:
     null
 
 lr_G is lr_newtable of null
-lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format, "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_s_gsub}, lr_stubs of ["string.", "dump pack packsize unpack"], {}]
+lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format, "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_s_gsub, "pack": lr_s_pack, "packsize": lr_s_packsize, "unpack": lr_s_unpack}, lr_stubs of ["string.", "dump"], {}]
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
 lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort, "move": lr_t_move}, {}, {}]
