@@ -1821,7 +1821,7 @@ define lr_init_lib as:
     null
 
 lr_G is lr_newtable of null
-lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format}, lr_stubs of ["string.", "dump find gmatch gsub match pack packsize unpack"], {}]
+lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format, "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_s_gsub}, lr_stubs of ["string.", "dump pack packsize unpack"], {}]
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
 lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort}, lr_stubs of ["table.", "move"], {}]

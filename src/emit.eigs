@@ -854,6 +854,8 @@ define em_genfor(E, s) as:
     em_line of [E, "null"]
     em_dedent of (E)
 
+em_rt_parts is ["rt_pattern.eigs"]
+
 define em_dirname(p) as:
     local i is len of p - 1
     loop while i >= 0 and p[i] != "/":
@@ -870,6 +872,9 @@ define emit_program(ast, file, runtime) as:
     rs_func of [R, ast, null]
     em_function of [G, ast]
     local out is []
+    # the runtime library parts, then runtime.eigs, which builds the tables
+    for part in em_rt_parts:
+        append of [out, "load_file of " + (em_strlit of ((em_dirname of (runtime)) + "/" + part))]
     append of [out, "load_file of " + (em_strlit of (runtime))]
     append of [out, "lr_st.srcdir is " + (em_strlit of (em_dirname of (runtime)))]
     append of [out, "S is []"]
