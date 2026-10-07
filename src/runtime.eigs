@@ -765,6 +765,16 @@ define lr_gset(name, v, site) as:
 # as lua_resume restarts the count, so a count never drops below the base.
 lr_cc is {"n": 1, "base": 1}
 
+# A protected call that caught an error restores the count it began with
+# (ldo.c luaD_rawrunprotected). If its coroutine yielded and was resumed
+# inside it, its C frame is gone: the error is caught while unrolling,
+# whose own protected run began at the resume's level (ldo.c precover).
+define lr_ccrestore(ccn, ccg) as:
+    if lr_co_cur[0].rg != ccg:
+        lr_cc.n is lr_cc.base
+    else:
+        lr_cc.n is ccn
+
 define lr_ccinc(site) as:
     lr_cc.n is lr_cc.n + 1
     if lr_cc.n >= 200:
@@ -1313,9 +1323,25 @@ define lr_stub(name) as:
 
 define lr_b_print(A) as:
     local parts is []
+    local meta is false
     for v in A:
-        append of [parts, lr_tostr of (v)]
-    print of (join of [parts, "\t"])
+        if type of v == "dict":
+            meta is true
+    if not meta:
+        for v in A:
+            append of [parts, lr_tostr of (v)]
+        print of (join of [parts, "\t"])
+        return []
+    # lbaselib.c luaB_print writes each value as it converts it, so a
+    # __tostring that fails leaves the values before it written
+    local i is 0
+    for v in A:
+        local s is lr_tostr of (v)
+        if i > 0:
+            write of "\t"
+        write of s
+        i is i + 1
+    write of "\n"
     return []
 
 define lr_b_type(A) as:
@@ -1411,6 +1437,7 @@ define lr_b_pcall(A) as:
         lr_argerr of [1, "pcall", "value expected"]
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
     local ef is lr_co_cur[0].ef
     local nef is len of ef
@@ -1426,7 +1453,7 @@ define lr_b_pcall(A) as:
         rr.nny is nny
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         return [false, lr_errobj of (e)]
     list_truncate of [ef, nef]
     return concat of [[true], r]
@@ -1438,6 +1465,7 @@ define lr_b_xpcall(A) as:
         lr_argerr of [2, "xpcall", "function expected, got " + (lr_typearg of [A, 1])]
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local ef is lr_co_cur[0].ef
     local nef is len of ef
     append of [ef, h]
@@ -1459,7 +1487,7 @@ define lr_b_xpcall(A) as:
         list_truncate of [ef, nef]
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         return [false, hv]
     list_truncate of [ef, nef]
     return concat of [[true], r]
@@ -1472,6 +1500,7 @@ define lr_xp_handle(h, v, n, site) as:
         return "error in error handling"
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
     try:
         # called from the erring Lua frame (at its line), else from C; it
@@ -1494,7 +1523,7 @@ define lr_xp_handle(h, v, n, site) as:
             throw of (e)
         list_truncate of [lr_stk, depth]
         list_truncate of [lr_fstk, depth]
-        lr_cc.n is ccn
+        lr_ccrestore of [ccn, ccg]
         local hs is 0
         if type of e == "dict" and type of e.site == "num":
             hs is e.site
@@ -2160,6 +2189,7 @@ define lr_compile(src, source, env) as:
     local code is null
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
     try:
         local tk is src
@@ -2187,7 +2217,7 @@ define lr_compile(src, source, env) as:
             rr.nny is nny
             list_truncate of [lr_stk, depth]
             list_truncate of [lr_fstk, depth]
-            lr_cc.n is ccn
+            lr_ccrestore of [ccn, ccg]
             return [null, ev]
         throw of (e)
     local L is eval of code
@@ -2242,6 +2272,7 @@ define lr_b_load(A) as:
     local first is null
     local depth is len of lr_stk
     local ccn is lr_cc.n
+    local ccg is lr_co_cur[0].rg
     local nny is lr_co_cur[0].nny
     try:
         first is rd of null
@@ -2255,7 +2286,7 @@ define lr_b_load(A) as:
             rr.nny is nny
             list_truncate of [lr_stk, depth]
             list_truncate of [lr_fstk, depth]
-            lr_cc.n is ccn
+            lr_ccrestore of [ccn, ccg]
             return [null, ev]
         throw of (e)
     if first == "":

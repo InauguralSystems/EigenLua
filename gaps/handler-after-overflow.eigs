@@ -1,0 +1,33 @@
+# EigenScript gap (EigenLua#11 item 3): code can run only after an error has
+# unwound the frames to the catching try; nothing runs at the raise point.
+# Lua's xpcall message handler runs ON TOP of the erring frames
+# (ldo.c luaG_errormsg calls it before unwinding). After a stack overflow
+# that leaves the handler no room, so a handler that calls deeply fails
+# again and xpcall returns "error in error handling" / a C stack overflow
+# (errors.lua:549-557: the handler's own checkerr("error handling", loop)).
+# EigenLua runs the handler from xpcall's catch, after the VM unwound the
+# overflowed stack, so the handler has the whole stack again and its deep
+# call overflows normally instead. Not a #1286 row.
+# Lua:  local function loop() return 1 + loop() end
+#       print(xpcall(loop, function(m) local ok, e = pcall(loop) return e end))
+#       -> false   error in error handling
+#       (EigenLua: false   prog.lua:1: EigenScript limit error: call stack
+#       overflow, the handler's own pcall overflowing normally)
+# Expected: a way to run a handler before unwinding (an error hook), or a
+# catch that runs on the erring stack.
+# Actual 686d3b7d: the catch sees the depth of the try, not of the error:
+# this prints [true, 0, true, 4094]: the depth at the raise was the limit,
+# yet the catch can recurse 4094 levels again.
+define depth(n) as:
+    try:
+        return depth of (n + 1)
+    catch e:
+        return n
+lvl is {"at": -1}
+define overflow(n) as:
+    lvl.at is n
+    return 1 + (overflow of (n + 1))
+try:
+    overflow of 0
+catch e:
+    print of [lvl.at > 1000, 0, e.kind == "limit", depth of 0]

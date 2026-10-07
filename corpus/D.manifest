@@ -7,6 +7,7 @@ co_isyieldable_c.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
+cstack_yield_resume.lua unspecified-audit: ok
 debug_getinfo_func.lua unspecified-audit: ok
 debug_getinfo_source_close.lua unspecified-audit: ok
 debug_traceback_levels.lua unspecified-audit: ok
@@ -38,6 +39,7 @@ load_reader_protected.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
 meta_concat.lua unspecified-audit: ok
+meta_cstack_kinds.lua unspecified-audit: ok
 meta_cstack_limit.lua unspecified-audit: ok
 meta_eq.lua unspecified-audit: ok
 meta_index.lua unspecified-audit: ok
@@ -55,6 +57,7 @@ num_str2num_edges.lua unspecified-audit: ok
 ops_matrix.lua unspecified-audit: ok
 os_exit_args.lua unspecified-audit: ok
 os_exit_close.lua unspecified-audit: ok
+print_partial.lua unspecified-audit: ok
 require_searchers.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
