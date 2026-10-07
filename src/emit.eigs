@@ -992,11 +992,12 @@ define emit_program(ast, file, runtime) as:
     return (join of [out, "\n"]) + "\n"
 
 # A chunk compiled at run time by load: the code of a function L(ENV) whose
-# result is the chunk's main function, its globals indexing ENV. Site ids
+# result is the chunk's main function, its globals indexing ENV[0] (ENV is
+# the cell of its _ENV upvalue, so debug.setupvalue can replace it). Site ids
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]

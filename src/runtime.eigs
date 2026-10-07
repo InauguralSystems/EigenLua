@@ -833,7 +833,7 @@ define lr_toint(v) as:
     local x is lr_arnum of (v)
     if x == null:
         return null
-    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+    if x != floor of x or x < -9223372036854775808 or x > 9223372036854775808:
         return null
     return x
 
@@ -1043,9 +1043,11 @@ define lr_checknum(A, i, fname) as:
         lr_argerr of [i + 1, fname, "number expected, got " + (lr_typearg of [A, i])]
     return x
 
+# An integral value is accepted up to 2^63 inclusive: math.maxinteger maps
+# to that double (gaps/no-int64.eigs), and must still be usable.
 define lr_checkint(A, i, fname) as:
     local x is lr_checknum of [A, i, fname]
-    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+    if x != floor of x or x < -9223372036854775808 or x > 9223372036854775808:
         lr_argerr of [i + 1, fname, "number has no integer representation"]
     return x
 
@@ -1507,6 +1509,33 @@ define lr_t_unpack(A) as:
     append of [out, lr_index of [t, j, 0]]
     return out
 
+# table.move (ltablib.c tmove), through metamethods like lua_geti/lua_seti.
+define lr_t_move(A) as:
+    local a1 is lr_arg of [A, 0]
+    local f is lr_checkint of [A, 1, "move"]
+    local e is lr_checkint of [A, 2, "move"]
+    local t is lr_checkint of [A, 3, "move"]
+    local a2 is a1
+    if lr_arg of [A, 4] != null:
+        a2 is A[4]
+    if e >= f:
+        if not (f > 0 or e < 9223372036854775807 + f):
+            lr_argerr of [3, "move", "too many elements to move"]
+        local n is e - f + 1
+        if not (t <= 9223372036854775807 - n + 1):
+            lr_argerr of [4, "move", "destination wrap around"]
+        if t > e or t <= f or (len of A > 4 and not (lr_eq of [a1, a2, 0])):
+            local i is 0
+            loop while i < n:
+                lr_setindex of [a2, t + i, lr_index of [a1, f + i, 0], 0]
+                i is i + 1
+        else:
+            local j is n - 1
+            loop while j >= 0:
+                lr_setindex of [a2, t + j, lr_index of [a1, f + j, 0], 0]
+                j is j - 1
+    return [a2]
+
 # table.sort: merge sort (stable, which Lua's is not required to be; the
 # order of equal elements is unspecified, so any order is conforming).
 define lr_t_sort(A) as:
@@ -1706,7 +1735,8 @@ define lr_compile(text, chunkid, env) as:
             lr_exit of 3
         throw of (e)
     local L is eval of code
-    return [L of (env)]
+    local cell is [env, lr_cellid of null]
+    return [lr_regfn of [L of (cell), [cell], ["_ENV"]]]
 
 define lr_b_load(A) as:
     local chunk is lr_arg of [A, 0]
@@ -1960,7 +1990,7 @@ lr_G is lr_newtable of null
 lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_s_format, "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_s_gsub}, lr_stubs of ["string.", "dump pack packsize unpack"], {}]
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
-lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort}, lr_stubs of ["table.", "move"], {}]
+lr_tablib is lr_lib of [{"insert": lr_t_insert, "remove": lr_t_remove, "concat": lr_t_concat, "pack": lr_t_pack, "unpack": lr_t_unpack, "sort": lr_t_sort, "move": lr_t_move}, {}, {}]
 lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod, "random": lr_m_random, "randomseed": lr_m_randomseed, "sin": lr_m_sin, "cos": lr_m_cos, "tan": lr_m_tan, "asin": lr_m_asin, "acos": lr_m_acos, "atan": lr_m_atan, "exp": lr_m_exp, "log": lr_m_log, "deg": lr_m_deg, "rad": lr_m_rad, "modf": lr_m_modf, "ult": lr_m_ult}, {}, {}]
 # math.huge is inf in Lua; the direct translation is EigenScript's own
 # overflow, which saturates at 1e308 (gaps/no-nonfinite.eigs)
