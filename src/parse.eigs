@@ -82,15 +82,7 @@ define lua_parse(tk) as:
     local body is ps_block of (P)
     ps_check of [P, "eof"]
     ps_close_gotos of (P)
-    local useenv is 0
-    if list_contains of [P.v, "_ENV"]:
-        useenv is 1
-    # a chunk naming the debug upvalue functions gets inspectable closures
-    local dbgup is 0
-    for nm in ["getupvalue", "setupvalue", "upvalueid", "upvaluejoin"]:
-        if list_contains of [P.v, nm]:
-            dbgup is 1
-    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1, "useenv": useenv, "dbgup": dbgup}
+    return {"k": "Func", "params": [], "vararg": 1, "body": body, "line": 0, "endline": P.l[P.i], "main": 1}
 
 define ps_block(P) as:
     ps_enterblock of (P)

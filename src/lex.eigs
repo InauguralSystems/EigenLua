@@ -55,10 +55,6 @@ define lua_lex(src) as:
     # reaches that token, since Lua lexes on demand and an earlier syntax
     # error wins.
     try:
-        # shebang line
-        if n > 0 and src[0] == "#":
-            loop while i < n and src[i] != "\n":
-                i is i + 1
         loop while i < n:
             local c is ord of src[i]
             if c == 10:

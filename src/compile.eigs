@@ -31,6 +31,14 @@ define drv_main(argv) as:
         drv_stderr of ("lua: cannot open " + file)
         return 1
     local src is read_text of file
+    # luaL_loadfilex skipcomment: a file's first line starting with '#' is
+    # skipped (its newline kept); a string given to load gets no such skip
+    if len of src > 0 and src[0] == "#":
+        local nl is index_of of [src, "\n"]
+        if nl < 0:
+            src is ""
+        else:
+            src is src[nl:]
     local ast is null
     try:
         local tk is lua_lex of (src)

@@ -1,9 +1,12 @@
 assert_semantics.lua unspecified-audit: ok
 break_outside_loop.lua unspecified-audit: ok
+co_close_yield.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
+co_isyieldable_c.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
+debug_upvalue_computed.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
@@ -15,6 +18,10 @@ int_neg_idiv.lua unspecified-audit: ok
 int_one_vs_one.lua unspecified-audit: ok
 int_past53.lua unspecified-audit: ok
 int_wrap.lua unspecified-audit: ok
+io_default_output.lua unspecified-audit: ok
+io_file_results.lua unspecified-audit: ok
+io_read_eof.lua unspecified-audit: ok
+load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
 meta_concat.lua unspecified-audit: ok
 meta_eq.lua unspecified-audit: ok
@@ -28,6 +35,7 @@ multi_assign_order.lua unspecified-audit: ok
 multi_return.lua unspecified-audit: ok
 num_print.lua unspecified-audit: ok
 ops_matrix.lua unspecified-audit: ok
+require_searchers.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok
@@ -35,6 +43,7 @@ scope_loop_capture.lua unspecified-audit: ok
 scope_shadow.lua unspecified-audit: ok
 str_byte_char_sub_rep.lua unspecified-audit: ok
 str_case_rev_sub.lua unspecified-audit: ok
+str_class_z.lua unspecified-audit: ok
 str_classes.lua unspecified-audit: ok
 str_embedded_nul.lua unspecified-audit: ok
 str_find_match.lua unspecified-audit: ok
@@ -44,6 +53,8 @@ str_gsub.lua unspecified-audit: ok
 str_high_bytes.lua unspecified-audit: ok
 str_len.lua unspecified-audit: ok
 str_nul_lazy.lua unspecified-audit: ok
+tbc_genfor_close.lua unspecified-audit: ok
+tbc_repeat_until.lua unspecified-audit: ok
 tbl_int_float_key.lua unspecified-audit: ok
 tbl_len_border.lua unspecified-audit: ok
 tbl_next_pairs.lua unspecified-audit: ok

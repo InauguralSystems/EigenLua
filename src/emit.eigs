@@ -77,7 +77,7 @@ define rs_func(R, fn, parent) as:
         rs_declare of [R, v]
         append of [pv, v]
     fn.pvars is pv
-    if parent == null and R.G.useenv:
+    if parent == null:
         # _ENV is a variable of the main function: every global name
         # indexes the _ENV visible where it appears (manual 2.2)
         local ev is rs_new_var of [R, "_ENV", fn, ""]
@@ -185,7 +185,7 @@ define rs_expr(R, e) as:
         e.var is v
         if v != null and v.fn.id != R.fn.id:
             rs_capture of [R, v, R.fn, e.line]
-        if v == null and R.G.useenv:
+        if v == null:
             local ev is rs_lookup of [R, "_ENV"]
             e.envvar is ev
             if ev.fn.id != R.fn.id:
@@ -257,11 +257,8 @@ define em_envdesc(E, v) as:
         return "upvalue '_ENV'"
     return "local '_ENV'"
 
-# A captured variable's cell. When the chunk uses the debug upvalue
-# functions, a cell also carries an id, so upvalueid can tell cells apart.
+# A captured variable's cell, a one-element list.
 define em_cell(E, code) as:
-    if E.G.dbgup:
-        return "[" + code + ", lr_cellid of null]"
     return "[" + code + "]"
 
 define em_var_ref(v) as:
@@ -591,9 +588,6 @@ define em_closure(E, fn) as:
         append of [cells, "c" + (str of v.id)]
         append of [names, em_strlit of (v.name)]
     local cl is "(F" + (str of fn.id) + " of ([" + (join of [cells, ", "]) + "]))"
-    if E.G.dbgup:
-        # registered with its cells and their names for debug.getupvalue
-        return "(lr_regfn of [" + cl + ", [" + (join of [cells, ", "]) + "], [" + (join of [names, ", "]) + "]])"
     return cl
 
 # Emit the factory for fn into G.funcs.
@@ -608,6 +602,17 @@ define em_function(G, fn) as:
         i is i + 1
     em_line of [E, "define f" + id + "(A) as:"]
     em_indent of (E)
+    # debug.getupvalue asks a Lua function for its upvalue cells and their
+    # names by calling it with a dict (lr_upvals); a loaded chunk's main
+    # function has the one upvalue _ENV, the cell ENV
+    em_line of [E, "if type of A == \"dict\":"]
+    if fn.main == 1 and G.env != "lr_G":
+        em_line of [E, "    return [[ENV], [\"_ENV\"]]"]
+    else:
+        local names is []
+        for v in fn.free:
+            append of [names, em_strlit of (v.name)]
+        em_line of [E, "    return [U, [" + (join of [names, ", "]) + "]]"]
     local np is len of fn.pvars
     i is 0
     for v in fn.pvars:
@@ -637,22 +642,35 @@ define em_block(E, stats) as:
                     em_unsup of ["to-be-closed variable in a block with labels", s2.line]
             em_block_labels of [E, stats]
             return null
-    em_stats of [E, stats, 0]
+    em_stats of [E, stats, 0, null]
+
+# A block whose last act, inside every to-be-closed region it opens, is to
+# set tail.v to the truth of tail.cond: a repeat-until condition sees the
+# body's locals and runs before they are closed.
+define em_block_tail(E, stats, tail) as:
+    for s in stats:
+        if s.k == "Label":
+            em_block of [E, stats]
+            em_line of [E, tail.v + " is " + (em_cond of [E, tail.cond])]
+            return null
+    em_stats of [E, stats, 0, tail]
 
 # Statements from index i; a to-be-closed local wraps the rest of its block.
-define em_stats(E, stats, i) as:
+define em_stats(E, stats, i, tail) as:
     loop while i < len of stats:
         local s is stats[i]
         em_stat of [E, s]
         if s.k == "Local" and list_contains of [s.attribs, "close"]:
-            em_tbc_region of [E, s, stats, i + 1]
+            em_tbc_region of [E, s, stats, i + 1, tail]
             return null
         i is i + 1
+    if tail != null:
+        em_line of [E, tail.v + " is " + (em_cond of [E, tail.cond])]
 
 # local x <close> = v: the rest of the block runs in a try; x is closed
 # (its __close called) on normal exit, before a return, break or goto that
 # leaves it, and with the error value when an error unwinds it.
-define em_tbc_region(E, s, stats, from) as:
+define em_tbc_region(E, s, stats, from, tail) as:
     local k is list_index_of of [s.attribs, "close"]
     local v is s.vars[k]
     local tb is em_tmp of (E)
@@ -662,7 +680,7 @@ define em_tbc_region(E, s, stats, from) as:
     em_line of [E, "try:"]
     em_indent of (E)
     append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": site}]
-    em_stats of [E, stats, from]
+    em_stats of [E, stats, from, tail]
     list_truncate of [E.tbc, len of E.tbc - 1]
     em_line of [E, "lr_tbc_close of [" + tb + ", null, " + site + "]"]
     em_dedent of (E)
@@ -804,9 +822,10 @@ define em_stat(E, s) as:
         em_line of [E, "loop while 1:"]
         em_indent of (E)
         em_loop_begin of [E, "lua"]
-        em_block of [E, s.body]
-        local c is em_cond of [E, s.cond]
-        em_line of [E, "if " + c + ":"]
+        local rc is em_tmp of (E)
+        em_line of [E, "local " + rc + " is false"]
+        em_block_tail of [E, s.body, {"cond": s.cond, "v": rc}]
+        em_line of [E, "if " + rc + ":"]
         em_line of [E, "    break"]
         em_dedent of (E)
         em_loop_end of (E)
@@ -960,13 +979,34 @@ define em_numfor(E, s) as:
     em_dedent of (E)
     em_loop_end of (E)
 
+# The explist is adjusted to four values (manual 3.3.5); the fourth is a
+# to-be-closed variable, closed when the loop ends however it ends. When it
+# is nil by construction no region is opened.
 define em_genfor(E, s) as:
     local site is em_site of [E, s.eline, "for iterator 'for iterator'", ""]
-    local vals is em_pin of [E, em_adjust of [E, s.exprs, 3]]
+    local vals is em_pin of [E, em_adjust of [E, s.exprs, 4]]
     local tf is vals[0]
     local tst is vals[1]
     local tc is em_tmp of (E)
     em_line of [E, "local " + tc + " is " + vals[2]]
+    if vals[3] == "null":
+        em_genfor_loop of [E, s, site, tf, tst, tc]
+        return null
+    local tb is em_tmp of (E)
+    local csite is em_site of [E, s.line, "", ""]
+    em_line of [E, "local " + tb + " is [" + vals[3] + ", false]"]
+    em_line of [E, "lr_tbc_check of [" + tb + "[0], \"(for state)\", " + csite + "]"]
+    em_line of [E, "try:"]
+    em_indent of (E)
+    append of [E.tbc, {"t": tb, "ld": len of E.loops, "site": csite}]
+    em_genfor_loop of [E, s, site, tf, tst, tc]
+    list_truncate of [E.tbc, len of E.tbc - 1]
+    em_line of [E, "lr_tbc_close of [" + tb + ", null, " + csite + "]"]
+    em_dedent of (E)
+    em_line of [E, "catch " + tb + "e:"]
+    em_line of [E, "    lr_tbc_unwind of [" + tb + ", " + tb + "e, " + csite + "]"]
+
+define em_genfor_loop(E, s, site, tf, tst, tc) as:
     em_line of [E, "loop while 1:"]
     em_indent of (E)
     em_loop_begin of [E, "lua"]
@@ -1002,7 +1042,7 @@ define em_dirname(p) as:
     return p[0:i]
 
 define emit_program(ast, file, runtime) as:
-    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": file}
+    local G is {"funcs": [], "sites": [[-1, "", ""]], "sitebase": 0, "labelloop": {}, "env": "lr_G", "fid": -1, "vid": 0, "tmp": 0, "file": file}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]
@@ -1027,7 +1067,7 @@ define emit_program(ast, file, runtime) as:
 # start at sitebase; the caller appends the returned sites to the site table.
 # Returns [code, sites].
 define emit_chunk(ast, sitebase) as:
-    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "useenv": ast.useenv == 1 or ast.dbgup == 1, "dbgup": ast.dbgup == 1, "fid": -1, "vid": 0, "tmp": 0, "file": ""}
+    local G is {"funcs": [], "sites": [], "sitebase": sitebase, "labelloop": {}, "env": "ENV[0]", "fid": -1, "vid": 0, "tmp": 0, "file": ""}
     local R is {"G": G, "scopes": [], "fn": null}
     rs_func of [R, ast, null]
     em_function of [G, ast]

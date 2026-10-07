@@ -103,17 +103,21 @@ define lr_co_b_resume(A) as:
 define lr_co_yield(A) as:
     local co is lr_co_cur
     local r is co[0]
+    # lua_yieldk raises with the C function yield as the running frame, so
+    # the message carries no position
     if r.main:
-        lr_throw of ((lr_where of (1)) + "attempt to yield from outside a coroutine")
+        lr_throw of ("attempt to yield from outside a coroutine")
     if r.nny > 0:
-        lr_throw of ((lr_where of (1)) + "attempt to yield across a C-call boundary")
+        lr_throw of ("attempt to yield across a C-call boundary")
     r.result is concat of [[true], A]
     r.status is "suspended"
     r.stk is lr_stk
     task_send of [r.resumer, 1]
     task_recv of null
     if r.closing == true:
-        # coroutine.close: unwind the body, closing its pending variables
+        # coroutine.close: unwind the body, closing its pending variables;
+        # lua_closethread runs them from C, so they cannot yield
+        r.nny is r.nny + 1
         throw of ({"COCLOSE": 1})
     return r.transfer
 
@@ -128,7 +132,9 @@ define lr_co_isyieldable(A) as:
     local co is lr_co_cur
     if len of A > 0:
         co is lr_co_check of [A, "isyieldable"]
-    return [not co[0].main]
+    # lua_isyieldable: the main thread never; a coroutine not while a C
+    # function that calls back without a continuation is running
+    return [not co[0].main and co[0].nny == 0]
 
 define lr_co_wrap(A) as:
     local f is lr_arg of [A, 0]

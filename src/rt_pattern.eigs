@@ -55,6 +55,8 @@ define lr_pm_tabs_build as:
     tabs[117] is lr_pm_mktab of ((c) => c >= 65 and c <= 90)
     tabs[119] is lr_pm_mktab of (lr_pm_isalnum)
     tabs[120] is lr_pm_mktab of ((c) => (lr_pm_isdigit of (c)) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70))
+    # %z: the NUL byte (lstrlib.c match_class, a deprecated class 5.4 keeps)
+    tabs[122] is lr_pm_mktab of ((c) => c == 0)
     return tabs
 
 lr_pm_tabs is lr_pm_tabs_build of null

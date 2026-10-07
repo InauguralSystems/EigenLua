@@ -1046,12 +1046,14 @@ define lr_arg(A, i) as:
         return A[i]
     return null
 
-# ltablib.c checktab: a table, or a value whose metatable gives the access.
-define lr_checktab(A, i, fname) as:
+# ltablib.c checktab: a table, or a value whose metatable has every field
+# the access needs: what holds "r" (__index), "w" (__newindex), "l" (__len).
+define lr_checktab(A, i, fname, what) as:
     local v is lr_arg of [A, i]
     if type of v == "dict" and v.ud != true:
         return v
-    if lr_metafield of [v, "__index"] != null or lr_metafield of [v, "__newindex"] != null or lr_metafield of [v, "__len"] != null:
+    local mt is lr_metatable of (v)
+    if mt != null and (index_of of [what, "r"] < 0 or lr_rawget of [mt, "__index"] != null) and (index_of of [what, "w"] < 0 or lr_rawget of [mt, "__newindex"] != null) and (index_of of [what, "l"] < 0 or lr_rawget of [mt, "__len"] != null):
         return v
     lr_argerr of [i + 1, fname, "table expected, got " + (lr_typearg of [A, i])]
 
@@ -1061,7 +1063,7 @@ define lr_checkany(A, i, fname) as:
 
 define lr_checktable(A, i, fname) as:
     local v is lr_arg of [A, i]
-    if type of v != "dict":
+    if type of v != "dict" or v.ud == true:
         lr_argerr of [i + 1, fname, "table expected, got " + (lr_typearg of [A, i])]
     return v
 
@@ -1281,7 +1283,7 @@ define lr_b_rawequal(A) as:
 
 define lr_b_rawlen(A) as:
     local v is lr_arg of [A, 0]
-    if type of v == "dict":
+    if type of v == "dict" and v.ud != true:
         return [len of v.a]
     if type of v == "str":
         return [len of v]
@@ -1290,7 +1292,7 @@ define lr_b_rawlen(A) as:
 define lr_b_setmetatable(A) as:
     local t is lr_checktable of [A, 0, "setmetatable"]
     local mt is lr_arg of [A, 1]
-    if (mt != null and type of mt != "dict") or len of A < 2:
+    if (mt != null and (type of mt != "dict" or mt.ud == true)) or len of A < 2:
         lr_argerr of [2, "setmetatable", "nil or table expected, got " + (lr_typearg of [A, 1])]
     if t.mt != null and lr_rawget of [t.mt, "__metatable"] != null:
         lr_throw of ((lr_where of (1)) + "cannot change a protected metatable")
@@ -1486,7 +1488,7 @@ define lr_s_char(A) as:
 # ------------------------------------------------------------ table library
 
 define lr_t_insert(A) as:
-    local t is lr_checktable of [A, 0, "insert"]
+    local t is lr_checktab of [A, 0, "insert", "rwl"]
     local n is (lr_len of [t, 0])
     if len of A == 2:
         lr_setindex of [t, n + 1, A[1], 0]
@@ -1504,7 +1506,7 @@ define lr_t_insert(A) as:
     return []
 
 define lr_t_remove(A) as:
-    local t is lr_checktable of [A, 0, "remove"]
+    local t is lr_checktab of [A, 0, "remove", "rwl"]
     local n is (lr_len of [t, 0])
     if len of A < 2:
         if n == 0:
@@ -1530,7 +1532,7 @@ define lr_t_remove(A) as:
     return [v3]
 
 define lr_t_concat(A) as:
-    local t is lr_checktable of [A, 0, "concat"]
+    local t is lr_checktab of [A, 0, "concat", "rl"]
     local sep is ""
     if lr_arg of [A, 1] != null:
         sep is lr_checkstr of [A, 1, "concat"]
@@ -1586,9 +1588,9 @@ define lr_t_move(A) as:
     local f is lr_checkint of [A, 1, "move"]
     local e is lr_checkint of [A, 2, "move"]
     local t is lr_checkint of [A, 3, "move"]
-    lr_checktab of [A, 0, "move"]
+    lr_checktab of [A, 0, "move", "r"]
     if lr_arg of [A, 4] != null:
-        lr_checktab of [A, 4, "move"]
+        lr_checktab of [A, 4, "move", "w"]
     local a2 is a1
     if lr_arg of [A, 4] != null:
         a2 is A[4]
@@ -1613,7 +1615,7 @@ define lr_t_move(A) as:
 # table.sort: merge sort (stable, which Lua's is not required to be; the
 # order of equal elements is unspecified, so any order is conforming).
 define lr_t_sort(A) as:
-    local t is lr_checktable of [A, 0, "sort"]
+    local t is lr_checktab of [A, 0, "sort", "rwl"]
     local cmp is lr_arg of [A, 1]
     local n is lr_len of [t, 0]
     if n > 1 and cmp != null and type of cmp != "fn" and type of cmp != "builtin":
@@ -1820,8 +1822,8 @@ define lr_compile(text, chunkid, env) as:
             lr_exit of 3
         throw of (e)
     local L is eval of code
-    local cell is [env, lr_cellid of null]
-    return [lr_regfn of [L of (cell), [cell], ["_ENV"]]]
+    local cell is [env]
+    return [L of (cell)]
 
 define lr_b_load(A) as:
     # lbaselib.c luaB_load: a string (or number) chunk, else a reader
@@ -1887,59 +1889,96 @@ define lr_b_dofile(A) as:
         lr_throw of (r[1])
     return lr_call of [r[0], [], 0]
 
-# require (loadlib.c): package.loaded, then package.preload, then a Lua file
-# on package.path. C loaders are out of scope (GAPS.md).
+# require (loadlib.c ll_require/findloader): package.loaded, then each
+# searcher of package.searchers in turn. The standard searchers are
+# preload, the Lua file searcher on package.path, and the two C searchers
+# on package.cpath; loading a C library is out of scope (GAPS.md), so a C
+# searcher that finds a file stops as unsupported.
 define lr_b_require(A) as:
     local name is lr_checkstr of [A, 0, "require"]
-    local loaded is lr_rawget of [lr_pkglib, "loaded"]
-    local have is lr_index of [loaded, name, 0]
+    local have is lr_index of [lr_pkgloaded, name, 0]
     if lr_t of (have):
         return [have]
+    local ss is lr_index of [lr_pkglib, "searchers", 0]
+    if type of ss != "dict" or ss.ud == true:
+        lr_throw of ((lr_where of (1)) + "'package.searchers' must be a table")
     local msg is []
     local loader is null
     local extra is null
-    local pre is lr_index of [lr_pkglib, "preload", 0]
-    local pf is null
-    if type of pre == "dict":
-        pf is lr_index of [pre, name, 0]
-    if pf != null:
-        loader is pf
-        extra is ":preload:"
-    else:
-        append of [msg, "\n\tno field package.preload['" + name + "']"]
-        local path is lr_index of [lr_pkglib, "path", 0]
-        if type of path != "str":
-            lr_throw of ((lr_where of (1)) + "'package.path' must be a string")
-        local sp is lr_searchpath of [name, path, ".", "/"]
-        if sp[0] == null:
-            append of [msg, sp[1]]
-        else:
-            local r is lr_b_loadfile of ([sp[0]])
-            if r[0] == null:
-                lr_throw of ((lr_where of (1)) + "error loading module '" + name + "' from file '" + sp[0] + "':\n\t" + r[1])
-            loader is r[0]
-            extra is sp[0]
-    if loader == null:
-        lr_throw of ((lr_where of (1)) + "module '" + name + "' not found:" + (join of [msg, ""]))
+    local i is 1
+    loop while 1:
+        local s is lr_rawget of [ss, i]
+        if s == null:
+            lr_throw of ((lr_where of (1)) + "module '" + name + "' not found:" + (join of [msg, ""]))
+        local r is lr_call of [s, [name], 0]
+        local r0 is lr_at of [r, 0]
+        if type of r0 == "fn" or type of r0 == "builtin":
+            loader is r0
+            extra is lr_at of [r, 1]
+            break
+        if type of r0 == "str" or type of r0 == "num":
+            append of [msg, "\n\t" + (lr_tostr of (r0))]
+        i is i + 1
     local res is lr_call1 of [loader, [name, extra], 0]
     if res != null:
-        lr_setindex of [loaded, name, res, 0]
-    elif lr_index of [loaded, name, 0] == null:
-        lr_setindex of [loaded, name, true, 0]
-    return [lr_index of [loaded, name, 0], extra]
+        lr_setindex of [lr_pkgloaded, name, res, 0]
+    if lr_index of [lr_pkgloaded, name, 0] == null:
+        lr_setindex of [lr_pkgloaded, name, true, 0]
+    return [lr_index of [lr_pkgloaded, name, 0], extra]
 
-# [filename, null] or [null, "\n\tno file '...'..."]
+define lr_p_searcher_preload(A) as:
+    local name is lr_checkstr of [A, 0, "searcher_preload"]
+    if lr_index of [lr_pkgpreload, name, 0] == null:
+        return ["no field package.preload['" + name + "']"]
+    return [lr_index of [lr_pkgpreload, name, 0], ":preload:"]
+
+# loadlib.c findfile: [filename, null] or [null, message].
+define lr_p_findfile(name, pname) as:
+    local path is lr_index of [lr_pkglib, pname, 0]
+    if type of path == "num":
+        path is lr_tostr of (path)
+    if type of path != "str":
+        lr_throw of ((lr_where of (1)) + "'package." + pname + "' must be a string")
+    return lr_searchpath of [name, path, ".", "/"]
+
+define lr_p_searcher_lua(A) as:
+    local name is lr_checkstr of [A, 0, "searcher_Lua"]
+    local sp is lr_p_findfile of [name, "path"]
+    if sp[0] == null:
+        return [sp[1]]
+    local r is lr_b_loadfile of ([sp[0]])
+    if r[0] == null:
+        lr_throw of ((lr_where of (1)) + "error loading module '" + name + "' from file '" + sp[0] + "':\n\t" + r[1])
+    return [r[0], sp[0]]
+
+define lr_p_searcher_c(A) as:
+    local name is lr_checkstr of [A, 0, "searcher_C"]
+    local sp is lr_p_findfile of [name, "cpath"]
+    if sp[0] == null:
+        return [sp[1]]
+    lr_unsup of ["a C module (" + sp[0] + ")", 0]
+
+define lr_p_searcher_croot(A) as:
+    local name is lr_checkstr of [A, 0, "searcher_Croot"]
+    local p is index_of of [name, "."]
+    if p < 0:
+        return []
+    local sp is lr_p_findfile of [name[0:p], "cpath"]
+    if sp[0] == null:
+        return [sp[1]]
+    lr_unsup of ["a C module (" + sp[0] + ")", 0]
+
+# loadlib.c searchpath: [filename, null] or [null, "no file '...'..."];
+# every name between ';' is tried, empty ones too.
 define lr_searchpath(name, path, sep, rep) as:
-    if sep != "":
+    if sep != "" and index_of of [name, sep] >= 0:
         name is str_replace of [name, sep, rep]
-    local msg is []
-    for tmpl in split of [path, ";"]:
-        if tmpl != "":
-            local fn is str_replace of [tmpl, "?", name]
-            if file_exists of fn:
+    local full is str_replace of [path, "?", name]
+    if full != "":
+        for fn in split of [full, ";"]:
+            if fn != "" and file_exists of fn and not (is_dir of fn):
                 return [fn, null]
-            append of [msg, "\n\tno file '" + fn + "'"]
-    return [null, join of [msg, ""]]
+    return [null, "no file '" + (str_replace of [full, ";", "'\n\tno file '"]) + "'"]
 
 define lr_p_searchpath(A) as:
     local name is lr_checkstr of [A, 0, "searchpath"]
@@ -1950,7 +1989,10 @@ define lr_p_searchpath(A) as:
         sep is lr_checkstr of [A, 2, "searchpath"]
     if lr_arg of [A, 3] != null:
         rep is lr_checkstr of [A, 3, "searchpath"]
-    return lr_searchpath of [name, path, sep, rep]
+    local r is lr_searchpath of [name, path, sep, rep]
+    if r[0] != null:
+        return [r[0]]
+    return r
 
 # warn (lauxlib.c warnf*): off at start as in lua.c; "@on"/"@off" control
 # it; when on, the message goes to stderr.
@@ -2001,30 +2043,23 @@ define lr_tbc_unwind(tb, e, site) as:
     throw of (e)
 
 # ------------------------------------------------------------ debug upvalues
-# Only in chunks that name the debug upvalue functions (parse.eigs dbgup):
-# every closure is registered with its upvalue cells and their names, in
-# Lua's upvalue order (first reference), and each cell carries an id.
-
-lr_upreg is {"f": [], "cells": [], "names": []}
+# A Lua function answers a call with a dict (instead of its argument list)
+# with [cells, names]: its upvalue cells and their names, in Lua's upvalue
+# order (first reference). Only functions the emitter wrote (named f<id>)
+# are asked. A cell gets an id the first time upvalueid asks for one.
 
 define lr_cellid as:
     lr_st.nid is lr_st.nid + 1
     return lr_st.nid
 
-define lr_regfn(f, cells, names) as:
-    append of [lr_upreg.f, f]
-    append of [lr_upreg.cells, cells]
-    append of [lr_upreg.names, names]
-    return f
-
 # [cells, names] of a registered Lua function, or null.
 define lr_upvals(f) as:
     if type of f != "fn":
         return null
-    local i is list_index_of of [lr_upreg.f, f]
-    if i < 0:
+    local s is str of f
+    if len of s < 6 or s[0:5] != "<fn f" or not (lr_isdigit of (s[5])):
         return null
-    return [lr_upreg.cells[i], lr_upreg.names[i]]
+    return f of ({"UPQ": 1})
 
 define lr_d_getupvalue(A) as:
     local f is lr_arg of [A, 0]
@@ -2052,6 +2087,8 @@ define lr_d_upvalueid(A) as:
     if u == null or n < 1 or n > len of u[0]:
         return [null]
     local cell is u[0][n - 1]
+    if len of cell < 2:
+        append of [cell, lr_cellid of null]
     return [{"id": cell[1], "a": [], "h": {}, "o": {}, "mt": null, "ud": true}]
 
 # ------------------------------------------------------------ debug.getinfo
@@ -2199,6 +2236,8 @@ lr_rawset of [lr_io_mt, "__close", lr_io_f_gc, 0]
 lr_io_stdout is lr_io_mkfile of ("stdout")
 lr_io_stderr is lr_io_mkfile of ("stderr")
 lr_io_stdin is lr_io_mkfile of ("stdin")
+lr_io_cur.in is lr_io_stdin
+lr_io_cur.out is lr_io_stdout
 for fh in [lr_io_stdout, lr_io_stderr, lr_io_stdin]:
     fh.mt is lr_io_mt
 lr_rawset of [lr_iolib, "stdout", lr_io_stdout, 0]
@@ -2211,11 +2250,13 @@ lr_utf8lib is lr_lib of [{"char": lr_utf8_char, "codepoint": lr_utf8_codepoint, 
 # UTF8PATT holds a NUL byte; the direct translation ends it there
 lr_rawset of [lr_utf8lib, "charpattern", str_from_bytes of ([91, 0, 45, 127, 194, 45, 253, 93, 91, 128, 45, 191, 93, 42]), 0]
 lr_dbglib is lr_lib of [{"getupvalue": lr_d_getupvalue, "setupvalue": lr_d_setupvalue, "upvalueid": lr_d_upvalueid, "getinfo": lr_d_getinfo, "traceback": lr_d_traceback, "getmetatable": lr_d_getmetatable, "setmetatable": lr_d_setmetatable}, lr_stubs of ["debug.", "debug gethook getlocal getregistry getuservalue sethook setlocal setuservalue upvaluejoin setcstacklimit"], {}]
-lr_pkglib is lr_lib of [{"searchpath": lr_p_searchpath}, lr_stubs of ["package.", "loadlib"], {"searchers": "package.searchers"}]
+lr_pkglib is lr_lib of [{"searchpath": lr_p_searchpath}, lr_stubs of ["package.", "loadlib"], {}]
 lr_rawset of [lr_pkglib, "path", "/usr/local/share/lua/5.4/?.lua;/usr/local/share/lua/5.4/?/init.lua;/usr/local/lib/lua/5.4/?.lua;/usr/local/lib/lua/5.4/?/init.lua;./?.lua;./?/init.lua", 0]
 lr_rawset of [lr_pkglib, "cpath", "/usr/local/lib/lua/5.4/?.so;/usr/local/lib/lua/5.4/loadall.so;./?.so", 0]
 lr_rawset of [lr_pkglib, "config", "/\n;\n?\n!\n-\n", 0]
-lr_rawset of [lr_pkglib, "preload", lr_newtable of null, 0]
+lr_pkgpreload is lr_newtable of null
+lr_rawset of [lr_pkglib, "preload", lr_pkgpreload, 0]
+lr_rawset of [lr_pkglib, "searchers", lr_tnew of [[lr_p_searcher_preload, lr_p_searcher_lua, lr_p_searcher_c, lr_p_searcher_croot], [], 0], 0]
 lr_basefns is {"print": lr_ny of (lr_b_print), "type": lr_b_type, "tostring": lr_ny of (lr_b_tostring), "tonumber": lr_b_tonumber, "error": lr_b_error, "assert": lr_b_assert, "pcall": lr_b_pcall, "xpcall": lr_b_xpcall, "select": lr_b_select, "rawget": lr_b_rawget, "rawset": lr_b_rawset, "rawequal": lr_b_rawequal, "rawlen": lr_b_rawlen, "setmetatable": lr_b_setmetatable, "getmetatable": lr_b_getmetatable, "next": lr_b_next, "pairs": lr_b_pairs, "ipairs": lr_b_ipairs, "collectgarbage": lr_b_collectgarbage}
 for k in keys of lr_basefns:
     lr_rawset of [lr_G, k, lr_basefns[k], 0]
