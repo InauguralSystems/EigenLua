@@ -1,0 +1,19 @@
+# EigenScript gap (EigenLua#10): read_line on a pipe drops a "\r" before the
+# "\n" and does not say whether the last line ended with a newline, so
+# liolib.c's io.read("L") / io.read("l") / io.read(n) on a piped stdin
+# cannot be matched byte for byte. (A regular file on stdin is read with
+# read_bytes of "/dev/stdin", byte for byte; on a pipe that read fails, so
+# read_line is the only stdin reader left.)
+# Run with stdin a pipe:
+#   printf 'a\r\nb'   | eigenscript gaps/pipe-read-line.eigs
+#   printf 'a\r\nb\n' | eigenscript gaps/pipe-read-line.eigs
+# Lua 5.4 (printf 'a\r\nb' | lua -e 'print(#io.read("L"), io.read("L"))'):
+#   3   b        (the first line keeps "\r\n"; the last has no newline)
+# Expected: the two inputs read differently, and the first line has 3 bytes.
+# Actual 686d3b7d: both print ["a", 1, "b", 1, null]: the "\r" is gone and
+# the missing final newline cannot be seen. Not a #1286 row; no graded row
+# (Tier D programs read no stdin; the grader feeds an empty pipe).
+l1 is read_line of null
+l2 is read_line of null
+l3 is read_line of null
+print of [l1, len of l1, l2, len of l2, l3]
