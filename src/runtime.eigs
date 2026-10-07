@@ -203,7 +203,7 @@ define lr_at(l, i) as:
     return null
 
 define lr_isint(x) as:
-    return x == floor of x and x > -9223372036854775808.5 and x < 9223372036854775808
+    return x == floor of x and x >= -9223372036854775808 and x < 9223372036854775808
 
 # ------------------------------------------------------------ numbers <-> strings
 
@@ -723,10 +723,13 @@ define lr_arith_meta(op, a, b, site) as:
     local desc is sd[2]
     local isbit is op == "&" or op == "|" or op == "~" or op == "<<" or op == ">>" or op == "u~"
     if isbit:
-        if type of a != "num" and (type of a != "str" or lr_str2num of (a) == null):
+        # Lua 5.4 converts no string for a bitwise operation (the string
+        # library's metamethods cover arithmetic only): the first operand
+        # that is not a number is the bad one (ldebug.c luaG_opinterror)
+        if type of a != "num":
             bad is a
             desc is sd[1]
-        elif type of b == "num" or (type of b == "str" and lr_str2num of (b) != null):
+        elif type of b == "num":
             lr_rterr of [site, "number has no integer representation"]
     elif lr_arnum of (a) == null:
         bad is a
@@ -830,9 +833,9 @@ define lr_unm(a, site) as:
 # ------------------------------------------------------------ bitwise
 
 define lr_toint(v) as:
-    local x is lr_arnum of (v)
-    if x == null:
+    if type of v != "num":
         return null
+    local x is v
     if x != floor of x or x < -9223372036854775808 or x > 9223372036854775808:
         return null
     return x
@@ -852,16 +855,33 @@ define lr_bitop(op, a, b, site) as:
         return lr_shiftl of [x, y]
     return lr_shiftl of [x, 0 - y]
 
+# x shifted left by n (right, logically, for n < 0) as a 64-bit word: done
+# on the two's complement halves, so every representable result is exact.
 define lr_shiftl(x, n) as:
     if n <= -64 or n >= 64:
         return 0
-    if n >= 0:
-        return x << n
-    if x >= 0:
-        return x >> (0 - n)
-    # logical shift of a negative int64
-    local s is 0 - n
-    return (x >> s) & ((1 << (64 - s)) - 1)
+    if n == 0:
+        return x
+    local w is lr_u64 of (x)
+    local hi is w[0]
+    local lo is w[1]
+    local M is 4294967295
+    if n > 0:
+        if n >= 32:
+            hi is (lo << (n - 32)) & M
+            lo is 0
+        else:
+            hi is ((hi << n) & M) | (lo >> (32 - n))
+            lo is (lo << n) & M
+    else:
+        local s is 0 - n
+        if s >= 32:
+            lo is hi >> (s - 32)
+            hi is 0
+        else:
+            lo is (lo >> s) | ((hi << (32 - s)) & M)
+            hi is hi >> s
+    return lr_rng_toint of ([hi, lo])
 
 define lr_band(a, b, site) as:
     return lr_bitop of ["&", a, b, site]
