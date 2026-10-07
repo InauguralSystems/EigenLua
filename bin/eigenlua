@@ -4,7 +4,7 @@
 # prints EIGENLUA-ASSERTS:<n> on stderr at exit. Unsupported constructs exit 3
 # with EIGENLUA-UNSUPPORTED: <construct> at <file>:<line>.
 # The VM is $EIGENSCRIPT, else `eigenscript` on PATH, and must have the bool
-# type (EigenScript main at 686d3b7d or later; its --version still reads 0.44.0).
+# type (EigenScript v0.45.0 or later).
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ES=${EIGENSCRIPT:-$(command -v eigenscript || true)}
@@ -13,6 +13,6 @@ ES=${EIGENSCRIPT:-$(command -v eigenscript || true)}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/eigenlua.XXXXXX") || exit 2
 trap 'rm -rf "$tmp"' EXIT
 printf 'print of (type of (1 == 1))\n' >"$tmp/probe.eigs"
-[[ $("$ES" "$tmp/probe.eigs" 2>/dev/null) == bool ]] || { echo "eigenlua: $ES has no bool type (need EigenScript 686d3b7d or later)" >&2; exit 2; }
+[[ $("$ES" "$tmp/probe.eigs" 2>/dev/null) == bool ]] || { echo "eigenlua: $ES has no bool type (need EigenScript v0.45.0 or later)" >&2; exit 2; }
 "$ES" "$ROOT/src/compile.eigs" "$1" "$tmp/prog.eigs" "$ROOT/src/runtime.eigs" || exit $?
 EIGENLUA_ARGV0=$0 "$ES" "$tmp/prog.eigs"
