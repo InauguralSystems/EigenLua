@@ -65,8 +65,7 @@ define lua_lex(src) as:
     # reaches that token, since Lua lexes on demand and an earlier syntax
     # error wins.
     try:
-        loop while S.i < S.n:
-            lex_item of (S)
+        lex_item of [S, true]
     catch e:
         if type of e != "list" or e[0] != "SYNTAX":
             throw of (e)
@@ -78,7 +77,7 @@ define lua_lex(src) as:
 # It reads the source up to the index it leaves in S.i and no further (a
 # lexical error records the last index it read in lex_hi), as llex.c reads
 # one character ahead; a reader chunk (lex_stream) relies on this.
-define lex_item(S) as:
+define lex_item(S, all) as:
     local src is S.src
     local n is S.n
     local i is S.i
@@ -90,105 +89,107 @@ define lex_item(S) as:
     local Fl is S.f
     local Z is S.z
     local Rw is S.r
-    local c is ord of src[i]
-    if c == 10 or c == 13:
-        # \n, \r, \r\n and \n\r each count as one line break
-        # (llex.c inclinenumber)
-        line is line + 1
-        i is i + 1
-        if i < n and (src[i] == "\n" or src[i] == "\r") and (ord of src[i]) != c:
+    # all: every item to the end of the text (a whole chunk), else one
+    loop while i < n:
+        local c is ord of src[i]
+        if c == 10 or c == 13:
+            # \n, \r, \r\n and \n\r each count as one line break
+            # (llex.c inclinenumber)
+            line is line + 1
             i is i + 1
-    elif c == 32 or c == 9 or c == 11 or c == 12:
-        i is i + 1
-    elif c == 45 and i + 1 < n and src[i + 1] == "-":
-        # comment
-        i is i + 2
-        local lv is -1
-        if i < n and src[i] == "[":
-            lv is lex_long_level of [src, i]
-        if lv >= 0:
-            local r is lex_long of [src, i, lv, line, 1]
+            if i < n and (src[i] == "\n" or src[i] == "\r") and (ord of src[i]) != c:
+                i is i + 1
+        elif c == 32 or c == 9 or c == 11 or c == 12:
+            i is i + 1
+        elif c == 45 and i + 1 < n and src[i + 1] == "-":
+            # comment
+            i is i + 2
+            local lv is -1
+            if i < n and src[i] == "[":
+                lv is lex_long_level of [src, i]
+            if lv >= 0:
+                local r is lex_long of [src, i, lv, line, 1]
+                i is r[0]
+                line is r[1]
+            else:
+                loop while i < n and src[i] != "\n" and src[i] != "\r":
+                    i is i + 1
+        elif lex_is_alpha of c:
+            local j is i
+            loop while j < n and (lex_is_alpha of (ord of src[j]) or lex_is_digit of (ord of src[j])):
+                j is j + 1
+            local w is src[i:j]
+            if has_key of [kw, w]:
+                append of [T, w]
+            else:
+                append of [T, "name"]
+            append of [V, w]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, 0]
+            append of [Rw, null]
+            i is j
+        elif lex_is_digit of c or (c == 46 and i + 1 < n and lex_is_digit of (ord of src[i + 1])):
+            local r is lex_number of [src, i, line]
+            append of [T, "number"]
+            append of [V, r[1]]
+            append of [Rw, src[i:r[0]]]
+            append of [Ln, line]
+            append of [Fl, r[2]]
+            append of [Z, 0]
+            i is r[0]
+        elif c == 34 or c == 39:
+            local r is lex_string of [src, i, line]
+            append of [T, "string"]
+            append of [V, r[1]]
+            append of [Rw, src[i] + r[1] + src[i]]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, r[3]]
+            i is r[0]
+            line is r[2]
+        elif c == 91 and lex_long_level of [src, i] >= 0:
+            local lv is lex_long_level of [src, i]
+            local sl is line
+            local r is lex_long of [src, i, lv, line, 0]
+            append of [T, "string"]
+            append of [V, r[2]]
+            append of [Rw, src[i:r[0]]]
+            append of [Ln, sl]
+            append of [Fl, 0]
+            append of [Z, r[3]]
             i is r[0]
             line is r[1]
         else:
-            loop while i < n and src[i] != "\n" and src[i] != "\r":
-                i is i + 1
-    elif lex_is_alpha of c:
-        local j is i
-        loop while j < n and (lex_is_alpha of (ord of src[j]) or lex_is_digit of (ord of src[j])):
-            j is j + 1
-        local w is src[i:j]
-        if has_key of [kw, w]:
-            append of [T, w]
-        else:
-            append of [T, "name"]
-        append of [V, w]
-        append of [Ln, line]
-        append of [Fl, 0]
-        append of [Z, 0]
-        append of [Rw, null]
-        i is j
-    elif lex_is_digit of c or (c == 46 and i + 1 < n and lex_is_digit of (ord of src[i + 1])):
-        local r is lex_number of [src, i, line]
-        append of [T, "number"]
-        append of [V, r[1]]
-        append of [Rw, src[i:r[0]]]
-        append of [Ln, line]
-        append of [Fl, r[2]]
-        append of [Z, 0]
-        i is r[0]
-    elif c == 34 or c == 39:
-        local r is lex_string of [src, i, line]
-        append of [T, "string"]
-        append of [V, r[1]]
-        append of [Rw, src[i] + r[1] + src[i]]
-        append of [Ln, line]
-        append of [Fl, 0]
-        append of [Z, r[3]]
-        i is r[0]
-        line is r[2]
-    elif c == 91 and lex_long_level of [src, i] >= 0:
-        local lv is lex_long_level of [src, i]
-        local sl is line
-        local r is lex_long of [src, i, lv, line, 0]
-        append of [T, "string"]
-        append of [V, r[2]]
-        append of [Rw, src[i:r[0]]]
-        append of [Ln, sl]
-        append of [Fl, 0]
-        append of [Z, r[3]]
-        i is r[0]
-        line is r[1]
-    else:
-        local p3 is src[i:min of [i + 3, n]]
-        local p2 is src[i:min of [i + 2, n]]
-        local op is ""
-        if src[i] == "[" and i + 1 < n and src[i + 1] == "=":
-            # llex.c skip_sep: '[' and '='s with no second '['
-            local k2 is i + 1
-            loop while k2 < n and src[k2] == "=":
-                k2 is k2 + 1
-            lex_err of [line, "invalid long string delimiter near '" + src[i:k2] + "'", k2]
-        if p3 == "...":
-            op is p3
-        elif p2 == "==" or p2 == "~=" or p2 == "<=" or p2 == ">=" or p2 == "//" or p2 == "::" or p2 == "<<" or p2 == ">>" or p2 == "..":
-            op is p2
-        elif index_of of ["+-*/%^#&~|<>=(){}[];:,.", src[i]] >= 0:
-            op is src[i]
-        else:
-            # any other byte is a token of its own; the parser rejects it
-            op is src[i]
-        append of [T, op]
-        append of [V, op]
-        append of [Ln, line]
-        append of [Fl, 0]
-        append of [Z, 0]
-        append of [Rw, null]
-        i is i + len of op
+            local p3 is src[i:min of [i + 3, n]]
+            local p2 is src[i:min of [i + 2, n]]
+            local op is ""
+            if src[i] == "[" and i + 1 < n and src[i + 1] == "=":
+                # llex.c skip_sep: '[' and '='s with no second '['
+                local k2 is i + 1
+                loop while k2 < n and src[k2] == "=":
+                    k2 is k2 + 1
+                lex_err of [line, "invalid long string delimiter near '" + src[i:k2] + "'", k2]
+            if p3 == "...":
+                op is p3
+            elif p2 == "==" or p2 == "~=" or p2 == "<=" or p2 == ">=" or p2 == "//" or p2 == "::" or p2 == "<<" or p2 == ">>" or p2 == "..":
+                op is p2
+            elif index_of of ["+-*/%^#&~|<>=(){}[];:,.", src[i]] >= 0:
+                op is src[i]
+            else:
+                # any other byte is a token of its own; the parser rejects it
+                op is src[i]
+            append of [T, op]
+            append of [V, op]
+            append of [Ln, line]
+            append of [Fl, 0]
+            append of [Z, 0]
+            append of [Rw, null]
+            i is i + len of op
+        if not all:
+            break
     S.i is i
     S.line is line
-    append of [Rw, null]
-    return {"t": T, "v": V, "l": Ln, "f": Fl, "z": Z, "r": Rw}
 
 # Level of a long bracket opening at i ("[" "="* "["), or -1.
 define lex_long_level(src, i) as:
@@ -593,7 +594,7 @@ define lex_more(S) as:
         local hi is -1
         local err is null
         try:
-            lex_item of (S)
+            lex_item of [S, false]
             hi is S.i
         catch e:
             if type of e != "list" or e[0] != "SYNTAX":

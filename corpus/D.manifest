@@ -32,6 +32,7 @@ io_file_results.lua unspecified-audit: ok
 io_read_eof.lua unspecified-audit: ok
 lex_error_messages.lua unspecified-audit: ok
 lex_line_endings.lua unspecified-audit: ok
+lex_near_raw.lua unspecified-audit: ok
 load_mode_binary.lua unspecified-audit: ok
 load_reader_protected.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
