@@ -44,10 +44,13 @@ define lr_site_chunk(site) as:
 define lr_unsup(wht, site) as:
     local line is lr_site_line of (site)
     local chunk is lr_site_chunk of (site)
-    if line < 0 and len of lr_stk > 0:
-        # a library function: the position of its caller
-        line is lr_cur_line of (1)
-        chunk is lr_site_chunk of (lr_stk[len of lr_stk - 1])
+    # a library function: the position of the nearest Lua caller (a C
+    # caller such as pcall has none)
+    local lv is 1
+    loop while line < 0 and lv <= len of lr_stk:
+        line is lr_cur_line of (lv)
+        chunk is lr_site_chunk of (lr_stk[len of lr_stk - lv])
+        lv is lv + 1
     lr_stderr of ("EIGENLUA-UNSUPPORTED: " + wht + " at " + chunk + ":" + (str of line) + "\n")
     lr_exit of 3
 
