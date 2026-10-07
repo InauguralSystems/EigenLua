@@ -7,9 +7,9 @@ inherits EigenScript's observer, trace tape and sandbox.
 It is graded against reference Lua 5.4.9 and the official Lua test suite. The bar and the gap ledger are in
 [GAPS.md](GAPS.md).
 
-Status: front end round 5. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
+Status: front end round 6. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
 and runs the result on the EigenScript VM: `$EIGENSCRIPT`, else `eigenscript` on `PATH`. It needs the `bool` type,
-which arrived at EigenScript `main` 686d3b7d (EigenScript#1647).
+which arrived at EigenScript `main` 686d3b7d (EigenScript#1647); round 6 runs on v0.45.0.
 
 The runtime library has these parts:
 - `src/runtime.eigs`;
@@ -23,15 +23,20 @@ The runtime library has these parts:
 
 `goto`, `<close>`, `load`/`require`, `_ENV` and the in-scope `debug` functions are compiled.
 
-Measured 2026-10-07 (round 5) with `tools/grade.sh --candidate bin/eigenlua --tier all`:
-`SUMMARY S=2/23 D=87/99 fail=16 diverge=12 hang=1 crash=0 unsupported=4 examined=122 assert=trusted`.
+Measured 2026-10-07 (round 6, v0.45.0) with `tools/grade.sh --candidate bin/eigenlua --tier all`:
+`SUMMARY S=2/23 D=96/108 fail=15 diverge=12 hang=2 crash=0 unsupported=4 examined=131 assert=trusted`.
 Every non-passing row is classified in [LEDGER.md](LEDGER.md) by its first failure:
-- 27 are EigenScript gaps, each with a reproducer in `gaps/`;
+- 27 are EigenScript gaps, each with a reproducer in `gaps/` (cstack.lua is now a HANG on v0.45.0: it runs past its
+  time budget before its unchanged first failure);
 - 6 stop first in regions GAPS.md declares out of scope;
 - no graded row's first failure is a front-end bug (a claim about graded rows only; probe-found bugs are listed
   by issue in LEDGER.md). Round 5 fixed EigenLua#8, #11-#20, each with a Tier D program, added table-library and
   builtin-value coverage (#2, #3), cut the upvalue query to 1.4% of a call (#9), and attributed `load`'s speed
   (#7, constructs.lua) and pipe reads (#10) to EigenScript gaps with reproducers.
+- Round 6 fixed EigenLua#21, #22, #24-#29 (reader read counts, hex-float subnormals, the xpcall handler before
+  `__close`, one address space, library argument errors, the generic for's close line, loaded chunks' sites)
+  and a probe-found index-error naming bug; `dofile`'s errno text is `gaps/no-errno.eigs`. The grader now refuses a
+  duplicate D.manifest line and checks `corpus/builtins.inventory` against the reference's builtins (#21).
 - Lua-specific limits the runtime follows: LUAI_MAXCCALLS (C-stack levels, "C stack overflow" at 200), and an
   uncaught error prints lua.c's traceback on stderr.
 
