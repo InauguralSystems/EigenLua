@@ -10,7 +10,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 ES=${EIGENSCRIPT:-$ROOT/.tmp/eigenscript-linux-x86_64}
-[[ $("$ES" --version 2>&1) == 0.45.0 ]] || { echo "HARNESS: $ES is not EigenScript 0.45.0"; exit 2; }
+[[ $("$ES" --version 2>&1) == 0.45.1 ]] || { echo "HARNESS: $ES is not EigenScript 0.45.1"; exit 2; }
 files=()
 for f in "$ROOT"/corpus/D/*.lua; do files+=("$f"); done
 nd=${#files[@]}
