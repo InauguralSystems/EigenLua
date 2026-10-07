@@ -80,6 +80,7 @@ tbc_unwind_frame.lua unspecified-audit: ok
 tbl_int_float_key.lua unspecified-audit: ok
 tbl_len_border.lua unspecified-audit: ok
 tbl_len_nonint.lua unspecified-audit: ok
+tbl_move_overflow.lua unspecified-audit: ok
 tbl_next_pairs.lua unspecified-audit: ok
 tbl_nil_holes.lua unspecified-audit: ok
 tbl_remove_insert.lua unspecified-audit: ok
