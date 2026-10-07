@@ -244,6 +244,8 @@ Each issue row's D program fails at round 4 (8a30e385; `tools/grade.sh --candida
 | os_exit_close.lua | `os.exit(c, true)` did not close pending to-be-closed variables | #17 |
 | debug_traceback_thread.lua | `debug.traceback(co)` walked the caller's stack; default level 0 for another thread | #16 |
 | tbl_move_overflow.lua | `table.move({}, minI, -1, 1)` hung (HANG at 8a30e385): the overflow checks are now exact on 32-bit limbs of the C constant | #19 |
+
+**Owner decision (2026-10-07) on #19's limb arithmetic:** it is kept and is not a rule-2 shim. ltablib.c's checks compare Lua values against the C constant LUA_MAXINTEGER, and the limbs emulate that constant's int64 arithmetic exactly. No Lua value is re-represented: arguments past 2^53 still round and diverge (`no-int64`). A plain double translation would make the row HANG (2^63 + -2^63 = 0), which hides a gap rather than showing it.
 | tbc_goto_labels.lua | `<close>` in a block with labels was UNSUPPORTED | #20 |
 | debug_getinfo_source_close.lua | `getinfo(f).source` was `"@"..short_src` for string chunks; `getinfo(2).currentline` in `__close` on the normal path was the declaration line | #8 |
 | str_format_p_string.lua | `%p` of a string was a substitute value (colliding hash; a fresh number per call for long strings); it now names the string value | #12 |
