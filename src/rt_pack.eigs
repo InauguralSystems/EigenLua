@@ -314,6 +314,10 @@ define lr_pk_unpackint(bytes, pos, size, little, signed) as:
     local v is hi * 4294967296 + lo
     if size < 8:
         if signed and v >= pow of [2, size * 8 - 1]:
+            if size > 4:
+                # from the halves, so a small negative value stays exact
+                # (v itself is rounded once it passes 2^53)
+                return (hi - (pow of [2, (size - 4) * 8])) * 4294967296 + lo
             v is v - (pow of [2, size * 8])
         return v
     local neg is signed and hi >= 2147483648

@@ -6,6 +6,7 @@ co_isyieldable_c.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
+debug_getinfo_func.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
@@ -24,14 +25,17 @@ io_default_output.lua unspecified-audit: ok
 io_file_results.lua unspecified-audit: ok
 io_read_eof.lua unspecified-audit: ok
 lex_error_messages.lua unspecified-audit: ok
+lex_line_endings.lua unspecified-audit: ok
 load_shebang.lua unspecified-audit: ok
 meta_call.lua unspecified-audit: ok
 meta_concat.lua unspecified-audit: ok
 meta_eq.lua unspecified-audit: ok
 meta_index.lua unspecified-audit: ok
 meta_len.lua unspecified-audit: ok
+meta_len_args.lua unspecified-audit: ok
 meta_lt.lua unspecified-audit: ok
 meta_newindex.lua unspecified-audit: ok
+meta_type_metatables.lua unspecified-audit: ok
 method_lookup_order.lua unspecified-audit: ok
 multi_assign.lua unspecified-audit: ok
 multi_assign_order.lua unspecified-audit: ok
@@ -57,6 +61,7 @@ str_gsub.lua unspecified-audit: ok
 str_high_bytes.lua unspecified-audit: ok
 str_len.lua unspecified-audit: ok
 str_nul_lazy.lua unspecified-audit: ok
+str_unpack_signext.lua unspecified-audit: ok
 tbc_genfor_close.lua unspecified-audit: ok
 tbc_repeat_until.lua unspecified-audit: ok
 tbc_unwind_frame.lua unspecified-audit: ok

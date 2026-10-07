@@ -1,0 +1,18 @@
+-- surface: metatables: debug.setmetatable gives numbers, booleans, nil and functions one metatable per type (lstate.h G(L)->mt)
+local mt = {__index = function(a, b) return a + b end, __len = function(x) return math.floor(x) end}
+debug.setmetatable(10, mt)
+print(getmetatable(-2) == mt, (10)[3], (10)["3"], #3.45)
+debug.setmetatable(23, nil)
+print(getmetatable(-2))
+debug.setmetatable(true, {__index = function() return "b" end, __call = function(self, x) return "called " .. tostring(x) end})
+print((true).x, (false)(5))
+debug.setmetatable(nil, {__index = function() return "nilidx" end})
+local n = nil
+print(n.foo)
+debug.setmetatable(nil, nil)
+print(pcall(function() return n.foo end))
+debug.setmetatable(print, {__index = function() return "fidx" end})
+print(print.x, (function() end).y)
+debug.setmetatable(print, nil)
+print(getmetatable(print), getmetatable(true) ~= nil)
+debug.setmetatable(true, nil)

@@ -57,14 +57,12 @@ define lua_lex(src) as:
     try:
         loop while i < n:
             local c is ord of src[i]
-            if c == 10:
+            if c == 10 or c == 13:
+                # \n, \r, \r\n and \n\r each count as one line break
+                # (llex.c inclinenumber)
                 line is line + 1
                 i is i + 1
-            elif c == 13:
-                # \r, \r\n and \n\r each count as one line break
-                line is line + 1
-                i is i + 1
-                if i < n and src[i] == "\n":
+                if i < n and (src[i] == "\n" or src[i] == "\r") and (ord of src[i]) != c:
                     i is i + 1
             elif c == 32 or c == 9 or c == 11 or c == 12:
                 i is i + 1

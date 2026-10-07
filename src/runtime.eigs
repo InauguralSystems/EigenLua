@@ -519,13 +519,17 @@ define lr_tnew(pos, kv, site) as:
 define lr_rawlen(t) as:
     return len of t.a
 
+# The metatable of a value: a table's or full userdata's own, else the one
+# its type shares (lstate.h G(L)->mt, set by debug.setmetatable).
+lr_typemt is {}
+
 define lr_metatable(v) as:
     local t is type of v
     if t == "dict":
         return v.mt
     if t == "str":
         return lr_strmt
-    return null
+    return lr_typemt[lr_type of (v)]
 
 define lr_metafield(v, name) as:
     local mt is lr_metatable of (v)
@@ -1000,7 +1004,8 @@ define lr_len(a, site) as:
         return len of a
     local h is lr_metafield of [a, "__len"]
     if h != null:
-        return lr_callmm1 of [h, "len", [a], site]
+        # luaT_callTMres(L, tm, rb, rb, ra): the operand is passed twice
+        return lr_callmm1 of [h, "len", [a, a], site]
     if ta == "dict":
         return len of a.a
     local sd is lr_st.sites[site]
@@ -2151,11 +2156,29 @@ define lr_d_getinfo(A) as:
         return [t]
     if type of fa != "fn" and type of fa != "builtin":
         lr_argerr of [first + 1, "getinfo", "function or level expected"]
-    # a function value: no line information is kept for it
+    # a function value (ldebug.c funcinfo): a C function, or a Lua function
+    # with the chunk and lines of its definition; it is not running, so its
+    # currentline is -1
     lr_rawset of [t, "currentline", -1, 0]
-    lr_rawset of [t, "short_src", lr_st.chunk, 0]
-    lr_rawset of [t, "source", "@" + lr_st.chunk, 0]
-    lr_rawset of [t, "what", "Lua", 0]
+    local u is lr_upvals of (fa)
+    if u == null:
+        lr_rawset of [t, "short_src", "[C]", 0]
+        lr_rawset of [t, "source", "=[C]", 0]
+        lr_rawset of [t, "what", "C", 0]
+        lr_rawset of [t, "linedefined", -1, 0]
+        lr_rawset of [t, "lastlinedefined", -1, 0]
+        return [t]
+    local ch is lr_site_chunk of (u[2])
+    lr_rawset of [t, "short_src", ch, 0]
+    lr_rawset of [t, "source", "@" + ch, 0]
+    if u[3]:
+        lr_rawset of [t, "what", "main", 0]
+        lr_rawset of [t, "linedefined", 0, 0]
+        lr_rawset of [t, "lastlinedefined", 0, 0]
+    else:
+        lr_rawset of [t, "what", "Lua", 0]
+        lr_rawset of [t, "linedefined", lr_site_line of (u[2]), 0]
+        lr_rawset of [t, "lastlinedefined", u[4], 0]
     return [t]
 
 # debug.traceback: the message and one "chunk:line:" entry per Lua level.
@@ -2203,7 +2226,8 @@ define lr_d_setmetatable(A) as:
     if type of v == "str":
         lr_strmt is mt
         return [v]
-    lr_unsup of ["debug.setmetatable of a " + (lr_type of (v)), 0]
+    lr_typemt[lr_type of (v)] is mt
+    return [v]
 
 # ------------------------------------------------------------ globals
 
