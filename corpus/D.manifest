@@ -28,6 +28,8 @@ err_c_function_unlocated.lua unspecified-audit: ok
 err_eigs_located.lua unspecified-audit: ok
 err_index_folded_float_keys.lua unspecified-audit: ok
 err_index_folded_integer_keys.lua unspecified-audit: ok
+err_index_folded_mod_bitwise_keys.lua unspecified-audit: ok
+err_index_folded_neg_zero_keys.lua unspecified-audit: ok
 err_index_folded_string_keys.lua unspecified-audit: ok
 err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok

@@ -271,7 +271,8 @@ define em_desc(E, e) as:
 
 # The constant folding relevant to getobjname.  This deliberately mirrors
 # lcode.c's conservative rule rather than evaluating through the runtime:
-# failures, integer overflow, NaN, and negative zero must remain RK operands.
+# failures, integer overflow, NaN, and floating negative zero must remain RK
+# operands.  Integer negative zero is simply integer zero.
 # The returned tag preserves Lua's integer/float subtype because only an
 # integer in OP_GETI's byte-sized range receives the "integer index" name.
 define em_folded_key(e) as:
@@ -287,9 +288,14 @@ define em_folded_key(e) as:
         return em_folded_key of (e.var.cinit)
     if e.k == "Un" and e.op == "-":
         local a is em_folded_key of (e.a)
-        if a == null or a[0] == "str" or a[1] == 0:
+        if a == null or a[0] == "str" or (a[0] == "float" and a[1] == 0):
             return null
         return [a[0], 0 - a[1]]
+    if e.k == "Un" and e.op == "~":
+        local ua is em_folded_key of (e.a)
+        if ua == null or ua[0] == "str" or ua[1] != floor of ua[1] or ua[1] < -9223372036854775808 or ua[1] >= 9223372036854775808:
+            return null
+        return ["int", bit_not of (ua[1])]
     if e.k == "Bin":
         local a is em_folded_key of (e.a)
         local b is em_folded_key of (e.b)
@@ -303,8 +309,34 @@ define em_folded_key(e) as:
             v is a[1] - b[1]
         elif e.op == "*":
             v is a[1] * b[1]
+        elif e.op == "%" and b[1] != 0:
+            v is a[1] % b[1]
+            if v != 0 and (v < 0) != (b[1] < 0):
+                v is v + b[1]
         elif e.op == "//" and b[1] != 0:
             v is floor of (a[1] / b[1])
+        elif e.op == "&" or e.op == "|" or e.op == "~" or e.op == "<<" or e.op == ">>":
+            # luaV_tointegerns: bitwise folding accepts integral floats but
+            # never performs a lossy conversion.
+            if a[1] != floor of a[1] or b[1] != floor of b[1] or a[1] < -9223372036854775808 or a[1] >= 9223372036854775808 or b[1] < -9223372036854775808 or b[1] >= 9223372036854775808:
+                return null
+            fl is false
+            if e.op == "&":
+                v is bit_and of [a[1], b[1]]
+            elif e.op == "|":
+                v is bit_or of [a[1], b[1]]
+            elif e.op == "~":
+                v is bit_xor of [a[1], b[1]]
+            elif b[1] <= -64 or b[1] >= 64:
+                v is 0
+            elif e.op == "<<" and b[1] >= 0:
+                v is bit_shl of [a[1], b[1]]
+            elif e.op == "<<":
+                v is bit_shr of [a[1], 0 - b[1]]
+            elif b[1] >= 0:
+                v is bit_shr of [a[1], b[1]]
+            else:
+                v is bit_shl of [a[1], 0 - b[1]]
         else:
             return null
         # All integer values EigenScript can represent exactly are safely
