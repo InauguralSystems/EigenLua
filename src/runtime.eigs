@@ -570,7 +570,9 @@ define lr_fnid(f) as:
 
 define lr_newtable as:
     lr_st.nid is lr_st.nid + 1
-    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "mt": null}
+    # Hash iteration state is allocated lazily by the first next.  Array keys
+    # never enter it: next scans the array storage directly.
+    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "it": null, "im": null, "is": null, "il": 0, "ih": 0, "mt": null}
 
 # Encoded key for the o part (numbers that are not array indices, tables,
 # functions).
@@ -605,13 +607,125 @@ define lr_rawget(t, k) as:
         return null
     return p[1]
 
+# A representation key used only by the table's iteration cursor.  Prefixing
+# strings keeps them disjoint from lr_okey's encodings.
+define lr_iterkey(k) as:
+    if type of k == "str":
+        return "s" + k
+    return lr_okey of (k)
+
+# The traversal representation invariant is: (1) each key is yielded from
+# exactly one place, the array (1..its current length) or the hash order;
+# (2) an order entry is live exactly while its key lives in hash storage;
+# (3) hash-to-array migration tombstones its entry and array-to-hash
+# migration registers one; (4) ih is the array high-water length since the
+# order was built, so keys len(a) < k <= ih without an order entry are ghost
+# cursors left by a shrink; (5) a hash cursor resumes through its position
+# map and never at zero; and (6) compaction happens only while inserting an
+# absent key, never on deletion or reassignment.  The empty-table fast path
+# below is also allowed to discard the order before a new traversal starts.
+define lr_iter_hashlive(t, k) as:
+    if type of k == "str":
+        return has_key of [t.h, k]
+    return has_key of [t.o, lr_okey of (k)]
+
+# Rebuild the iteration order and its position map, dropping tombstones.
+# This is called only while installing an absent key: adding keys during a
+# traversal is undefined, while deletion and reassignment must not move the
+# cursor that a traversal is using.
+define lr_iter_compact(t) as:
+    local ni is []
+    local nm is {}
+    local ns is {}
+    for k in t.it:
+        if lr_iter_hashlive of [t, k]:
+            append of [ni, k]
+            if type of k == "str":
+                ns[k] is len of ni
+            else:
+                nm[lr_iterkey of (k)] is len of ni
+    # Drop the old dictionary's references as well as replacing it.  The VM
+    # may retain a discarded dictionary until its next collection, and those
+    # encoded string keys otherwise make churn's peak proportional to every
+    # distinct key ever seen.
+    for ek in keys of t.im:
+        dict_remove of [t.im, ek]
+    for sk in keys of t.is:
+        dict_remove of [t.is, sk]
+    t.it is ni
+    t.im is nm
+    t.is is ns
+    # Compaction happens during an insertion, not while a traversal can be
+    # paused in a delete.  Its rebuilt order starts a new ghost epoch.
+    t.ih is len of t.a
+    return null
+
+# Build the persistent order once, from the current hash storage.  Runtime
+# tables also install some fields directly, so raw storage is authoritative.
+define lr_iter_init(t) as:
+    if t.it != null:
+        return null
+    t.it is []
+    t.im is {}
+    t.is is {}
+    t.il is 0
+    t.ih is len of t.a
+    for k in keys of t.h:
+        append of [t.it, k]
+        t.is[k] is len of t.it
+        t.il is t.il + 1
+    for ok in keys of t.o:
+        local k is t.o[ok][0]
+        local ek is lr_iterkey of (k)
+        append of [t.it, k]
+        t.im[ek] is len of t.it
+        t.il is t.il + 1
+    return null
+
+# Register an absent key at insertion time.  A retained tombstone is revived
+# in place unless compaction was warranted, preserving deleted-current-key
+# traversal without accumulating unbounded dead entries.
+define lr_iter_insert(t, k) as:
+    if t.it == null:
+        return null
+    local dead is len of t.it - t.il
+    local threshold is t.il
+    if threshold < 16:
+        threshold is 16
+    if dead > t.il and dead >= threshold:
+        lr_iter_compact of (t)
+    local at is null
+    if type of k == "str":
+        at is t.is[k]
+    else:
+        at is t.im[lr_iterkey of (k)]
+    if at != null and at < 0:
+        # A trimmed migrated key keeps its sole order slot, but a negative
+        # position marks that slot as a ghost until a sparse write revives it.
+        if type of k == "str":
+            t.is[k] is 0 - at
+        else:
+            t.im[lr_iterkey of (k)] is 0 - at
+    elif at == null or at == 0:
+        append of [t.it, k]
+        if type of k == "str":
+            t.is[k] is len of t.it
+        else:
+            t.im[lr_iterkey of (k)] is len of t.it
+    t.il is t.il + 1
+    return null
+
 define lr_rawset(t, k, v, site) as:
     local tk is type of k
     if tk == "str":
         if v == null:
             if has_key of [t.h, k]:
                 dict_remove of [t.h, k]
+                if t.it != null:
+                    t.il is t.il - 1
         else:
+            if not has_key of [t.h, k]:
+                lr_iter_insert of [t, k]
             t.h[k] is v
         return null
     if tk == "none":
@@ -627,6 +741,17 @@ define lr_rawset(t, k, v, site) as:
                     loop while m > 0 and a[m - 1] == null:
                         m is m - 1
                     list_truncate of [a, m]
+                    if t.it != null:
+                        # A migrated key can still own a dead hash-order
+                        # position.  Mark it as an implicit ghost in place;
+                        # a sparse rewrite revives that sole order slot.
+                        local j is m + 1
+                        loop while j <= n:
+                            local gek is lr_iterkey of (j)
+                            local gat is t.im[gek]
+                            if gat != null and gat > 0:
+                                t.im[gek] is 0 - gat
+                            j is j + 1
                 return null
             if v == null:
                 return null
@@ -636,13 +761,23 @@ define lr_rawset(t, k, v, site) as:
             loop while has_key of [t.o, nk]:
                 append of [a, t.o[nk][1]]
                 dict_remove of [t.o, nk]
+                if t.it != null:
+                    t.il is t.il - 1
+                    # Keep the old position as a tombstone: a later sparse
+                    # write can revive it without moving a paused cursor.
                 nk is lr_okey of (len of a + 1)
+            if t.it != null and len of a > t.ih:
+                t.ih is len of a
             return null
     local ek is lr_okey of (k)
     if v == null:
         if has_key of [t.o, ek]:
             dict_remove of [t.o, ek]
+            if t.it != null:
+                t.il is t.il - 1
     else:
+        if not has_key of [t.o, ek]:
+            lr_iter_insert of [t, k]
         t.o[ek] is [k, v]
     return null
 
@@ -683,44 +818,80 @@ define lr_metafield(v, name) as:
 
 # next(t, k) -> [key, value] or [null].
 define lr_next(t, k) as:
-    local a is t.a
-    local na is len of a
+    # Do not pay a function call on every step of an established traversal.
+    if t.it == null:
+        lr_iter_init of (t)
+    # Once an empty table starts a fresh traversal there is no live cursor to
+    # preserve.  Reclaim both the order and its key map, so churn does not
+    # retain one encoded map key per value ever inserted.
+    if k == null and t.il == 0 and len of t.a == 0:
+        # Explicitly sever the small maps produced by churn (which the VM can
+        # otherwise retain until a later collection).  For a large table that
+        # was emptied in one batch, replacing the maps is the linear-time
+        # skip: walking every tombstone here would defeat this fast path.
+        if len of t.it < 1000:
+            for ek in keys of t.im:
+                dict_remove of [t.im, ek]
+            for sk in keys of t.is:
+                dict_remove of [t.is, sk]
+        t.it is []
+        t.im is {}
+        t.is is {}
+        t.ih is len of t.a
+    local ai is 0
     local i is 0
-    local phase is 0
+    local kt is type of k
     if k == null:
-        i is 0
-    elif type of k == "num" and k >= 1 and k <= na and k == floor of k:
-        i is k
-    elif type of k == "str":
-        phase is 1
+        ai is 0
+    elif kt == "num" and k == floor of k and k >= 1 and k <= len of t.a:
+        # The overwhelmingly common array cursor needs no position-map or
+        # hash-storage probes.  Its physical slot is authoritative even when
+        # an old migration tombstone still has a mapped order position.
+        ai is k
     else:
-        phase is 2
-    if phase == 0:
-        loop while i < na:
-            if a[i] != null:
-                return [i + 1, a[i]]
-            i is i + 1
-        phase is 1
-        k is null
-    if phase == 1:
-        local hk is keys of t.h
-        local j is 0
-        if k != null:
-            j is (list_index_of of [hk, k]) + 1
-            if j == 0:
+        local at is null
+        if kt == "str":
+            at is t.is[k]
+            if at == null:
                 lr_throw of ("invalid key to 'next'")
-        if j < len of hk:
-            return [hk[j], t.h[hk[j]]]
-        k is null
-    local ok is keys of t.o
-    local j2 is 0
-    if k != null:
-        j2 is (list_index_of of [ok, lr_okey of (k)]) + 1
-        if j2 == 0:
-            lr_throw of ("invalid key to 'next'")
-    if j2 < len of ok:
-        local p is t.o[ok[j2]]
-        return [p[0], p[1]]
+            # String cursors cannot be ghosts, so their one map lookup is
+            # sufficient to resume directly in hash order.
+            i is at
+            ai is len of t.a
+        else:
+            at is t.im[lr_iterkey of (k)]
+            # One position-map lookup distinguishes an ordinary hash cursor
+            # from an implicit ghost.  Sparse rewrites revive the negative
+            # position assigned to a migrated entry in the ghost range.
+            if at != null and at > 0:
+                i is at
+                ai is len of t.a
+            elif kt == "num" and k == floor of k and k > len of t.a and k <= t.ih and (at == null or at < 0):
+                # Leaving a just-trimmed array key is the same boundary as
+                # leaving the array: start hash order.
+                ai is len of t.a
+            else:
+                lr_throw of ("invalid key to 'next'")
+    loop while ai < len of t.a:
+        local value is t.a[ai]
+        if value != null:
+            return [ai + 1, value]
+        ai is ai + 1
+    loop while i < len of t.it:
+        local key is t.it[i]
+        # Read the authoritative hash slot once.  Calling hash-live and then
+        # rawget duplicated both the dictionary probe and numeric-key
+        # encoding on every visited key, which dominated pairs-only time.
+        if type of key == "str":
+            local value is t.h[key]
+            if value != null:
+                return [key, value]
+        else:
+            local okey is lr_okey of (key)
+            local pair is t.o[okey]
+            if pair != null:
+                return [key, pair[1]]
+        i is i + 1
     return [null]
 
 # ------------------------------------------------------------ index / call
@@ -1664,9 +1835,6 @@ define lr_b_next(A) as:
     local t is lr_checktable of [A, 0, "next"]
     return lr_next of [t, lr_arg of [A, 1]]
 
-# pairs: a snapshot iterator over the keys present at the start; a key whose
-# value became nil during the traversal is skipped (manual: assigning nil to
-# existing fields during traversal is allowed).
 define lr_b_pairs(A) as:
     local t is lr_arg of [A, 0]
     local h is lr_metafield of [t, "__pairs"]
@@ -1674,26 +1842,7 @@ define lr_b_pairs(A) as:
         local r is lr_call of [h, [t], 0]
         return [lr_at of [r, 0], lr_at of [r, 1], lr_at of [r, 2]]
     lr_checkany of [A, 0, "pairs"]
-    if type of t != "dict":
-        return [lr_b_next, t, null]
-    local ks is []
-    for i in range of (len of t.a):
-        if t.a[i] != null:
-            append of [ks, i + 1]
-    for k in keys of t.h:
-        append of [ks, k]
-    for k in keys of t.o:
-        append of [ks, t.o[k][0]]
-    local st is {"i": 0}
-    define pairs_iter(B) as:
-        loop while st.i < len of ks:
-            local k is ks[st.i]
-            st.i is st.i + 1
-            local v is lr_rawget of [t, k]
-            if v != null:
-                return [k, v]
-        return [null]
-    return [pairs_iter, t, null]
+    return [lr_b_next, t, null]
 
 define lr_ipairs_iter(A) as:
     local i is (lr_checkint of [A, 1, "ipairs"]) + 1
