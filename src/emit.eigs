@@ -246,6 +246,24 @@ define em_site(E, line, da, db) as:
         return "S[" + (str of (len of E.G.sites - 1)) + "]"
     return str of (E.G.sitebase + len of E.G.sites - 1)
 
+# Preserve the subtype of folded floating arguments as call-site metadata.
+# EigenScript maps both Lua numeric subtypes directly to `num`, but a few C
+# APIs (notably next) inspect the original TValue tag rather than converting
+# an integral float to an integer.  This metadata does not change the value
+# passed to Lua code; it only lets those APIs reproduce that tag-sensitive
+# lookup for constants whose subtype the front end still knows.
+define em_floatargs(args) as:
+    local tags is ["@float"]
+    local i is 0
+    for a in args:
+        local k is em_folded_key of (a)
+        if k != null and k[0] == "float":
+            append of [tags, str of i]
+        i is i + 1
+    if len of tags == 1:
+        return ""
+    return join of [tags, ","]
+
 # Lua's variable description for an operand, as in its error messages.
 define em_desc(E, e) as:
     if e.k == "Name":
@@ -257,9 +275,23 @@ define em_desc(E, e) as:
     if e.k == "Paren":
         return em_desc of [E, e.e]
     # ldebug.c getobjname: OP_GETFIELD names its key, OP_GETI is "integer
-    # index", any other key (rname) is "?"
+    # index", any other key (rname) is "?".  When GETFIELD/GETTABLE indexes
+    # the local or upvalue named _ENV, isEnv reports the key as a global.
     if e.k == "Index":
         local fk is em_folded_key of (e.key)
+        local od is em_desc of [E, e.o]
+        if od == "local '_ENV'":
+            if fk != null and fk[0] == "str":
+                return "global '" + fk[1] + "'"
+            if fk != null and fk[0] == "int" and fk[1] >= 0 and fk[1] <= 255:
+                return "field 'integer index'"
+            return "global '?'"
+        elif od == "upvalue '_ENV'":
+            if fk != null and fk[0] == "str":
+                return "global '" + fk[1] + "'"
+            if fk != null and fk[0] == "int" and fk[1] >= 0 and fk[1] <= 255:
+                return "field 'integer index'"
+            return "global '?'"
         if fk != null and fk[0] == "str":
             return "field '" + fk[1] + "'"
         if fk != null and fk[0] == "int" and fk[1] >= 0 and fk[1] <= 255:
@@ -583,7 +615,7 @@ define em_call(E, e, want_list) as:
             mn is "lr_mcall"
         em_line of [E, "local " + t + " is " + mn + " of [" + tm + ", " + oc + ", " + args + ", " + site + "]"]
         return t
-    local site is em_site of [E, e.line, em_desc of [E, e.f], ""]
+    local site is em_site of [E, e.line, em_desc of [E, e.f], em_floatargs of (e.args)]
     local fc is em_expr of [E, e.f]
     local fpos is len of E.out
     local args is em_explist of [E, e.args]
