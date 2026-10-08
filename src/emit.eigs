@@ -109,6 +109,14 @@ define rs_stat(R, s) as:
         for v in vs:
             rs_declare of [R, v]
         s.vars is vs
+        # lparser/lcode keep a compile-time value for eligible <const>
+        # locals.  Retain the initializer so debug-name generation can see
+        # the same folded key that selects OP_GETFIELD/OP_GETI.
+        local ci is 0
+        for v in vs:
+            if v.attr == "const" and ci < len of s.exprs:
+                v.cinit is s.exprs[ci]
+            ci is ci + 1
     elif k == "LocalFunction":
         local v is rs_new_var of [R, s.name, R.fn, ""]
         rs_declare of [R, v]
@@ -251,14 +259,62 @@ define em_desc(E, e) as:
     # ldebug.c getobjname: OP_GETFIELD names its key, OP_GETI is "integer
     # index", any other key (rname) is "?"
     if e.k == "Index":
-        if e.key.k == "Str":
-            return "field '" + e.key.v + "'"
-        if e.key.k == "Num" and not e.key.fl and e.key.v >= 0 and e.key.v <= 255:
+        local fk is em_folded_key of (e.key)
+        if fk != null and fk[0] == "str":
+            return "field '" + fk[1] + "'"
+        if fk != null and fk[0] == "int" and fk[1] >= 0 and fk[1] <= 255:
             return "field 'integer index'"
         return "field '?'"
     if e.k == "Str":
         return "constant '" + e.v + "'"
     return ""
+
+# The constant folding relevant to getobjname.  This deliberately mirrors
+# lcode.c's conservative rule rather than evaluating through the runtime:
+# failures, integer overflow, NaN, and negative zero must remain RK operands.
+# The returned tag preserves Lua's integer/float subtype because only an
+# integer in OP_GETI's byte-sized range receives the "integer index" name.
+define em_folded_key(e) as:
+    if e.k == "Str":
+        return ["str", e.v]
+    if e.k == "Num":
+        if e.fl:
+            return ["float", e.v]
+        return ["int", e.v]
+    if e.k == "Paren":
+        return em_folded_key of (e.e)
+    if e.k == "Name" and e.var != null and e.var.attr == "const" and e.var.cinit != null:
+        return em_folded_key of (e.var.cinit)
+    if e.k == "Un" and e.op == "-":
+        local a is em_folded_key of (e.a)
+        if a == null or a[0] == "str" or a[1] == 0:
+            return null
+        return [a[0], 0 - a[1]]
+    if e.k == "Bin":
+        local a is em_folded_key of (e.a)
+        local b is em_folded_key of (e.b)
+        if a == null or b == null or a[0] == "str" or b[0] == "str":
+            return null
+        local fl is a[0] == "float" or b[0] == "float" or e.op == "/"
+        local v is null
+        if e.op == "+":
+            v is a[1] + b[1]
+        elif e.op == "-":
+            v is a[1] - b[1]
+        elif e.op == "*":
+            v is a[1] * b[1]
+        elif e.op == "//" and b[1] != 0:
+            v is floor of (a[1] / b[1])
+        else:
+            return null
+        # All integer values EigenScript can represent exactly are safely
+        # inside Lua's int64 range.  Reject rounded arithmetic as overflow.
+        if not fl and (v > 9007199254740991 or v < -9007199254740991):
+            return null
+        if fl:
+            return ["float", v]
+        return ["int", v]
+    return null
 
 # How Lua names the _ENV a global name indexes, for an index error: the
 # main chunk's _ENV is an upvalue.
