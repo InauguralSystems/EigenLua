@@ -14,4 +14,5 @@ make -s -C "$SRC/eigs" CC=gcc
 sudo make -s -C "$SRC/eigs" install PREFIX=/usr/local CC=gcc
 mkdir -p "$ROOT/.tmp"
 ln -sf /usr/local/bin/eigenscript "$ROOT/.tmp/eigenscript-linux-x86_64"
+echo "cloud_setup: run the suite with EIGENLUA_TIMEOUT_SCALE=3 on this box"
 echo "cloud_setup: EigenScript $(eigenscript --version) installed (pin $REF)"

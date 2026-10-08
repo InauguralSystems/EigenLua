@@ -3,14 +3,18 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
+# These timeouts catch hangs at CI speed. A slower box (a Codex Cloud task)
+# scales them with EIGENLUA_TIMEOUT_SCALE (a positive integer, default 1).
+S=${EIGENLUA_TIMEOUT_SCALE:-1}
+[[ $S =~ ^[1-9][0-9]*$ ]] || { echo "EIGENLUA_TIMEOUT_SCALE must be a positive integer" >&2; exit 2; }
 
 echo "RUN build_ref"
-timeout 600 tools/build_ref.sh
+timeout $((600 * S)) tools/build_ref.sh
 
 echo "RUN selftest"
-timeout 420 tools/grade.sh --selftest
+timeout $((420 * S)) tools/grade.sh --selftest
 
 echo "RUN canary"
-timeout 240 tools/grade.sh --candidate "$ROOT/.ref/bin/lua-count" --tier all
+timeout $((240 * S)) tools/grade.sh --candidate "$ROOT/.ref/bin/lua-count" --tier all
 
 echo "RUN ok"
