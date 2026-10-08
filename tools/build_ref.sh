@@ -35,6 +35,10 @@ fi
 
 mkdir -p "$REF" "$BIN"
 cd "$REF"
+# A copy committed under vendor/ (same pinned SHA-256) needs no network.
+if [[ ! -f $TAR && -f "$ROOT/vendor/$TAR" ]]; then
+  cp "$ROOT/vendor/$TAR" "$TAR"
+fi
 if [[ ! -f $TAR ]]; then
   rm -f "$TAR.partial"
   curl -fsSL -o "$TAR.partial" "$URL"
