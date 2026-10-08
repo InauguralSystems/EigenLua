@@ -1157,17 +1157,13 @@ define lr_arith_meta(op, a, b, site) as:
             if dn != "":
                 dn is " (" + dn + ")"
             lr_rterr of [site, "number" + dn + " has no integer representation"]
-    elif lr_arnum of (a) == null:
+    elif type of a != "num":
         bad is a
         desc is sd[1]
     if desc != "":
         desc is " (" + desc + ")"
     if isbit:
         lr_rterr of [site, "attempt to perform bitwise operation on a " + (lr_tname of (bad)) + " value" + desc]
-    if type of a == "str" or type of b == "str":
-        # the string library's arithmetic metamethods (lstrlib.c trymt)
-        local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
-        lr_rterr of [site, "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'"]
     lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_tname of (bad)) + " value" + desc]
 
 define lr_arith(op, a, b, site) as:
@@ -1261,16 +1257,31 @@ define lr_unm(a, site) as:
         desc is " (" + sd[1] + ")"
     lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_tname of (a)) + " value" + desc]
 
-# lstrlib.c's arithmetic metamethods: coerce both operands and perform the
-# primitive operation.  A failed coercion retries normal metamethod lookup,
-# matching trymt (and therefore honoring a metatable replacement).
-define lr_s_arith(A, op) as:
+# lstrlib.c trymt: only the second operand can supply the fallback metamethod.
+# In particular, never redispatch to the shared string metamethod itself.
+define lr_s_trymt(a, b, op, self) as:
+    local ev is lr_arith_ev of (op)
+    local h is null
+    if type of b != "str":
+        h is lr_metafield of [b, ev]
+    if h == null or lr_fnid of (h) == lr_fnid of (self):
+        local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
+        lr_throw of ((lr_where of (1)) + "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'")
+    return [lr_callmm1 of [h, ev[2:], [a, b], 0]]
+
+# lstrlib.c's arithmetic functions: tonum both operands, perform raw
+# arithmetic when both convert, and otherwise use trymt above.
+define lr_s_arith(A, op, self) as:
     local a is lr_arg of [A, 0]
     local b is lr_arg of [A, 1]
     local x is lr_arnum of (a)
+    # tonum(L, 1) pushes its conversion before tonum(L, 2).  With no
+    # explicit second argument, that pushed value therefore becomes slot 2.
+    if len of A < 2 and x != null:
+        b is x
     local y is lr_arnum of (b)
     if x == null or y == null:
-        return [lr_arith_meta of [op, a, b, 0]]
+        return lr_s_trymt of [a, b, op, self]
     if op == "u-":
         # lua_arith consumes the top operand even for a unary opcode.  The
         # normal __unm dispatch duplicates its operand, but a direct call to
@@ -1279,28 +1290,28 @@ define lr_s_arith(A, op) as:
     return [lr_arith_num of [op, x, y, 0]]
 
 define lr_s_add(A) as:
-    return lr_s_arith of [A, "+"]
+    return lr_s_arith of [A, "+", lr_s_add]
 
 define lr_s_subarith(A) as:
-    return lr_s_arith of [A, "-"]
+    return lr_s_arith of [A, "-", lr_s_subarith]
 
 define lr_s_mularith(A) as:
-    return lr_s_arith of [A, "*"]
+    return lr_s_arith of [A, "*", lr_s_mularith]
 
 define lr_s_divarith(A) as:
-    return lr_s_arith of [A, "/"]
+    return lr_s_arith of [A, "/", lr_s_divarith]
 
 define lr_s_modarith(A) as:
-    return lr_s_arith of [A, "%"]
+    return lr_s_arith of [A, "%", lr_s_modarith]
 
 define lr_s_idivarith(A) as:
-    return lr_s_arith of [A, "//"]
+    return lr_s_arith of [A, "//", lr_s_idivarith]
 
 define lr_s_powarith(A) as:
-    return lr_s_arith of [A, "^"]
+    return lr_s_arith of [A, "^", lr_s_powarith]
 
 define lr_s_unmarith(A) as:
-    return lr_s_arith of [A, "u-"]
+    return lr_s_arith of [A, "u-", lr_s_unmarith]
 
 # ------------------------------------------------------------ bitwise
 
