@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null, "coclose": null}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
@@ -1549,14 +1549,14 @@ define lr_b_xpcall(A) as:
 # luaG_errormsg calls it again for an error it raises); past the C-call
 # limit the result is "error in error handling" (LUA_ERRERR).
 define lr_xp_handle(h, v, n, site) as:
-    # ldo.c allows an extra LUAI_MAXCCALLS / 10 calls while handling a
-    # stack error, and ERRORSTACKSIZE supplies another five handler calls
-    # before luaD_throw changes the result to LUA_ERRERR.  The stack error
-    # itself is delivered to the 197th invocation (the main chunk starts
-    # with two C calls already counted).
-    if n >= 215:
+    # Account for the C levels already live when xpcall catches the error.
+    # ldo.c first reaches LUAI_MAXCCALLS at an absolute level of 199 here;
+    # its emergency allowance ends at 218.  Thus nested C callbacks consume
+    # the same budget as repeated handler failures instead of resetting it.
+    local cn is lr_cc.n + n
+    if cn >= 218:
         return "error in error handling"
-    if n == 196:
+    if cn == 199:
         v is "C stack overflow"
     local depth is len of lr_stk
     local ccn is lr_cc.n
@@ -2558,10 +2558,12 @@ define lr_tbc_unwind(tb, e, site) as:
                     e.ev is lr_errobj of (e2)
         elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
-        elif not lr_co_cur[0].main:
+        elif lr_co_cur[0].deferclose and len of lr_co_cur[0].ef == 0:
             # lua_resume leaves an errored coroutine's stack intact.
             # lua_closethread, invoked later by coroutine.close, performs
-            # the pending closes with the original error object.
+            # the pending closes with the original error object.  A protected
+            # call still closes while unwinding to its catcher, and cowrap
+            # closes before it propagates the thread's error.
             e is lr_errhd of (e)
             append of [lr_co_cur[0].pending, [tb, lr_errobj of (e)]]
         else:
@@ -2652,7 +2654,7 @@ define lr_d_upvalueid(A) as:
 define lr_d_frame(level) as:
     # lua_closethread calls pending __close methods without leaving a Lua
     # caller frame on the coroutine stack.
-    if lr_st.coclose == true and level >= 2:
+    if type of lr_st.coclose == "num" and len of lr_stk - level < lr_st.coclose:
         return null
     local fr is lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
     # a chunk compiled by load runs as a main function too (what = "main"):

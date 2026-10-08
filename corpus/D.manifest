@@ -3,14 +3,19 @@ assert_semantics.lua unspecified-audit: ok
 break_outside_loop.lua unspecified-audit: ok
 builtin_values.lua unspecified-audit: ok
 builtin_values_more.lua unspecified-audit: ok
-co_close_yield.lua unspecified-audit: ok
 co_close_getinfo.lua unspecified-audit: ok
+co_close_getinfo_helper.lua unspecified-audit: ok
+co_close_getinfo_nested.lua unspecified-audit: ok
+co_close_yield.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
 co_error_deferred_close.lua unspecified-audit: ok
 co_isyieldable_c.lua unspecified-audit: ok
+co_pcall_close.lua unspecified-audit: ok
+co_pcall_close_error.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
 co_wrap.lua unspecified-audit: ok
+co_wrap_error_close.lua unspecified-audit: ok
 cstack_yield_resume.lua unspecified-audit: ok
 debug_getinfo_func.lua unspecified-audit: ok
 debug_getinfo_source_close.lua unspecified-audit: ok
@@ -21,8 +26,8 @@ err_c_function_unlocated.lua unspecified-audit: ok
 err_eigs_located.lua unspecified-audit: ok
 err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
-err_method_nil.lua unspecified-audit: ok
 err_method_bad_self.lua unspecified-audit: ok
+err_method_nil.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
 err_pcall.lua unspecified-audit: ok
 err_xpcall.lua unspecified-audit: ok
@@ -69,8 +74,8 @@ ops_matrix.lua unspecified-audit: ok
 os_exit_args.lua unspecified-audit: ok
 os_exit_close.lua unspecified-audit: ok
 print_partial.lua unspecified-audit: ok
-require_searchers.lua unspecified-audit: ok
 ptr_id_space.lua unspecified-audit: ok
+require_searchers.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok
@@ -108,6 +113,10 @@ tbl_sort_auxsort.lua unspecified-audit: ok
 utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
 xpcall_handler_close.lua unspecified-audit: ok
+xpcall_handler_depth0.lua unspecified-audit: ok
+xpcall_handler_depth1.lua unspecified-audit: ok
+xpcall_handler_depth20.lua unspecified-audit: ok
+xpcall_handler_depth5.lua unspecified-audit: ok
 xpcall_handler_frame.lua unspecified-audit: ok
 xpcall_handler_overflow.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>

@@ -7,7 +7,7 @@ inherits EigenScript's observer, trace tape and sandbox.
 It is graded against reference Lua 5.4.9 and the official Lua test suite. The bar and the gap ledger are in
 [GAPS.md](GAPS.md).
 
-Status: front end round 7. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
+Status: front end round 8. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
 and runs the result on the EigenScript VM: `$EIGENSCRIPT`, else `eigenscript` on `PATH`. It needs the `bool` type,
 which arrived in EigenScript v0.45.0 (EigenScript#1647).
 
@@ -23,8 +23,9 @@ The runtime library has these parts:
 
 `goto`, `<close>`, `load`/`require`, `_ENV` and the in-scope `debug` functions are compiled.
 
-Measured 2026-10-08 (round 7, v0.45.1) with `EIGENLUA_TIMEOUT_SCALE=3 bash tests/run.sh`:
-`SUMMARY S=23/23 D=112/112 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=135 assert=trusted`.
+Measured 2026-10-08 (round 8, v0.45.1) with `tools/grade.sh --candidate bin/eigenlua --tier D`
+and the existing Tier S measurement:
+`SUMMARY S=23/23 D=109/121 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=144 assert=trusted`.
 Every non-passing row is classified in [LEDGER.md](LEDGER.md) by its first failure:
 - 27 are EigenScript gaps, each with a reproducer in `gaps/` (cstack.lua is now a HANG on v0.45.0: it runs past its
   time budget before its unchanged first failure);
@@ -37,8 +38,8 @@ Every non-passing row is classified in [LEDGER.md](LEDGER.md) by its first failu
   `__close`, one address space, library argument errors, the generic for's close line, loaded chunks' sites)
   and a probe-found index-error naming bug; `dofile`'s errno text is `gaps/no-errno.eigs`. The grader now refuses a
   duplicate D.manifest line and checks `corpus/builtins.inventory` against the reference's builtins (#21).
-- Round 7 fixed EigenLua#35's bad-method-self reason, deferred coroutine-error closing, xpcall handler emergency
-  stack depth, and `debug.getinfo(2)` while `coroutine.close` runs a closing method.
+- Round 7 fixed EigenLua#35's bad-method-self reason and attempted the remaining coroutine fixes. Round 8 corrected
+  their protected-call, wrap, nested C-depth, and close-frame edge cases with nine additional Tier D programs.
 - Lua-specific limits the runtime follows: LUAI_MAXCCALLS (C-stack levels, "C stack overflow" at 200), and an
   uncaught error prints lua.c's traceback on stderr.
 

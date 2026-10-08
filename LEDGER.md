@@ -1,4 +1,4 @@
-# EigenLua front end: divergence ledger (round 7)
+# EigenLua front end: divergence ledger (round 8)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
 failure tables below preserve the round-6 measurements; EigenScript v0.45.1 closes those upstream gaps.
@@ -7,18 +7,18 @@ failure tables below preserve the round-6 measurements; EigenScript v0.45.1 clos
   `0.44.0`). v0.45.0 has a heap use-after-free (EigenScript#1661) on an under-arity call of a 2+ parameter function
   whose missing parameter is read about 1000 calls deep; the emitted code makes no under-arity call of such a function.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
-- **Grader verdict, end of round 7:**
-  `SUMMARY S=23/23 D=112/112 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=135 assert=trusted`.
+- **Grader verdict, end of round 8:**
+  `SUMMARY S=23/23 D=109/121 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=144 assert=trusted`.
 - **Before round 7** (same checkout before EigenLua#35's changes, on v0.45.1):
   `SUMMARY S=23/23 D=108/108 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=131 assert=trusted`.
 - **Before this round** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 112 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
+Tier D has 121 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
 79e29669 for the bug they fix, 1 failing there only on a probe-found bug, 1 coverage row; section at the end). The 12 rows that do not match are the same 12 as in round 2,
-all EigenScript gaps on v0.45.0. Round 7 added four programs for EigenLua#35; each diverged before its fix and now
-matches. On v0.45.1 every S and D row passes.
+all EigenScript gaps on v0.45.0. Round 7 added four programs for EigenLua#35. Round 8 adds nine edge-case programs and fixes the three
+remaining implementation defects. The 12 current divergences are the longstanding EigenScript gaps listed below.
 
 ## Classes
 
@@ -376,3 +376,13 @@ Each EigenLua#35 row diverged immediately before its fix and matches now.
   `os.time` with a table. Out of scope.
 - **Other:** `string.dump` and binary chunks; `package.loadlib` and a C searcher that finds a library (C modules);
   `loadfile` from stdin.
+
+## Front-end bugs fixed in round 8
+
+Round 8 keeps the bad-method-self fix and repairs the blind critic's three remaining EigenLua#35 defects.
+
+| D program | bug | issue |
+|---|---|---|
+| `co_pcall_close.lua`, `co_pcall_close_error.lua`, `co_wrap_error_close.lua` | Close deferral is limited to an uncaught error escaping a resumable coroutine; protected errors and wrapped coroutine errors close immediately. | #35 |
+| `xpcall_handler_depth0.lua`, `xpcall_handler_depth1.lua`, `xpcall_handler_depth5.lua`, `xpcall_handler_depth20.lua` | Repeated message-handler errors consume the current C-stack budget rather than using shape-specific fixed counts. | #35 |
+| `co_close_getinfo_helper.lua`, `co_close_getinfo_nested.lua` | `debug.getinfo` cuts frames at the active `__close` boundary, and nested closes restore the outer boundary. | #35 |
