@@ -1,0 +1,81 @@
+local seed = @SEED@
+local STEPS = @STEPS@
+local INSERT_DURING = @INS@
+local LIMIT, BURST = @LIMIT@, @BURST@
+local function rand(n) seed = (seed * 48271) % 2147483647; return seed % n end
+local TK = {{}, {}, {}}
+local FN = {function() end, function() end}
+local U = {}  -- key universe
+for i = -3, LIMIT do U[#U + 1] = i end
+for i = 1, 8 do U[#U + 1] = "s" .. i end
+U[#U + 1] = 3.5; U[#U + 1] = -0.5; U[#U + 1] = TK[1]; U[#U + 1] = TK[2]; U[#U + 1] = FN[1]; U[#U + 1] = true; U[#U + 1] = false
+local function pick()
+  local r = rand(10)
+  if r < 5 then return rand(LIMIT + 4) - 3 end
+  if r == 5 then return (rand(12) + 1) + 0.0 end    -- float-integral 1.0..12.0
+  if r < 8 then return "s" .. (rand(8) + 1) end
+  return U[#U - 6 + rand(7)]
+end
+local function live()
+  local n = 0
+  for _, k in ipairs(U) do if rawget(T, k) ~= nil then n = n + 1 end end
+  return n
+end
+local function kstr(k) local ty = type(k) if ty == "number" or ty == "string" or ty == "boolean" then return tostring(k) end for i, x in ipairs(TK) do if x == k then return "T" .. i end end for i, x in ipairs(FN) do if x == k then return "F" .. i end end return "?" end
+local fail = false
+local function report(msg, step) print("DEFECT", msg, "seed=@SEED@", "step=" .. step); fail = true end
+local tabs = {{}, {}, {}}
+local function traverse(t, step)
+  T = t
+  local startlive = {}
+  local nlive = 0
+  for _, k in ipairs(U) do if rawget(t, k) ~= nil then startlive[k] = true; nlive = nlive + 1 end end
+  local seen, count, sum, strs = {}, 0, 0, {}
+  local mode = rand(4); mode = 0
+  local ok, err = pcall(function()
+    for k, v in pairs(t) do
+      count = count + 1
+      if count > nlive * 10 + 10 then report("RUNAWAY", step) return end
+      if seen[k] then if not INSERT_DURING then report("DUP " .. kstr(k), step) end end
+      seen[k] = true
+      if rawget(t, k) == nil then report("DEADKEY " .. kstr(k), step) end
+      if type(k) == "number" then sum = sum + k else strs[#strs + 1] = kstr(k) end
+      if mode == 1 then local nk = next(t, k); local n0 = next(t) end
+      if mode == 2 and count == 2 then
+        local inner = 0 for _ in pairs(t) do inner = inner + 1; if inner > LIMIT + 100 then break end end
+        local now = 0 for _, kk in ipairs(U) do if rawget(t, kk) ~= nil then now = now + 1 end end
+        if inner ~= now and not INSERT_DURING then report("NESTED inner=" .. inner .. " live=" .. now, step) end
+      end
+      local r = rand(5); r = 4
+      if r == 0 then t[k] = nil
+      elseif r == 1 then rawset(t, k, nil)
+      elseif r == 2 then t[k] = step
+      elseif r == 3 then rawset(t, k, -step) end
+      if INSERT_DURING and rand(6) == 0 then t[#t + 1] = step end
+    end
+  end)
+  if not ok and not INSERT_DURING then report("ERROR " .. tostring(err), step) end
+  if not INSERT_DURING then
+    for k in pairs(startlive) do if not seen[k] then report("MISSED " .. kstr(k), step) end end
+    table.sort(strs)
+    print(step, count, sum, table.concat(strs, ","))
+  end
+end
+for step = 1, STEPS do
+  local t = tabs[rand(#tabs) + 1]
+  local op = rand(12)
+  if op <= 1 then t[pick()] = step
+  elseif op == 2 then t[pick()] = nil
+  elseif op == 3 then rawset(t, pick(), step)
+  elseif op == 4 then rawset(t, pick(), nil)
+  elseif op == 5 then for _ = 1, BURST do local n = #t; if n < LIMIT then t[n + 1] = step end end
+  elseif op == 6 then for _ = 1, BURST do local n = #t; if n > 0 then t[n] = nil end end
+  elseif op == 7 then local n = #t; if n < LIMIT then table.insert(t, rand(n + 1) + 1, step) end
+  elseif op == 8 then local n = #t; if n > 0 then table.remove(t, rand(n) + 1) end
+  elseif op == 9 then local a = rand(10) + 1; table.move(t, a, a + rand(5), rand(15) + 1)
+  elseif op == 10 then for i = 1, rand(6) do t[rand(LIMIT) + 1] = nil end
+  else local base = rand(LIMIT - 5); for i = 1, rand(5) + 1 do t[base + i] = i end end
+  if step % 7 == 0 then traverse(t, step) end
+  if fail then return end
+end
+print("DONE")

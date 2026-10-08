@@ -121,6 +121,18 @@ tbl_len_nonint.lua unspecified-audit: ok
 tbl_library.lua unspecified-audit: ok
 tbl_move_overflow.lua unspecified-audit: ok
 tbl_next_pairs.lua unspecified-audit: ok
+tbl_next_churn_compaction.lua unspecified-audit: ok
+tbl_next_empty_mixed.lua unspecified-audit: ok
+tbl_next_lazy_array_mix.lua unspecified-audit: ok
+tbl_pairs_any_argument.lua unspecified-audit: ok
+tbl_pairs_delete_traversal.lua unspecified-audit: ok
+tbl_pairs_after_shrink.lua unspecified-audit: ok
+tbl_pairs_fuzz_mutation.lua unspecified-audit: ok
+tbl_pairs_migration_hash_to_array.lua unspecified-audit: ok
+tbl_pairs_iterator_identity.lua unspecified-audit: ok
+tbl_pairs_metamethod.lua unspecified-audit: ok
+tbl_pairs_nil_state_error.lua unspecified-audit: ok
+tbl_pairs_traversed_pop.lua unspecified-audit: ok
 tbl_nil_holes.lua unspecified-audit: ok
 tbl_remove_insert.lua unspecified-audit: ok
 tbl_sort_auxsort.lua unspecified-audit: ok
@@ -133,4 +145,5 @@ xpcall_handler_depth20.lua unspecified-audit: ok
 xpcall_handler_depth5.lua unspecified-audit: ok
 xpcall_handler_frame.lua unspecified-audit: ok
 xpcall_handler_overflow.lua unspecified-audit: ok
+tbl_pairs_rehash_reinsert.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>
