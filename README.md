@@ -11,6 +11,16 @@ Status: front end round 6. `bin/eigenlua prog.lua` compiles with `src/compile.ei
 and runs the result on the EigenScript VM: `$EIGENSCRIPT`, else `eigenscript` on `PATH`. It needs the `bool` type,
 which arrived in EigenScript v0.45.0 (EigenScript#1647).
 
+To check a local setup, put EigenScript v0.45.1 (the devcontainer's pinned version) on `PATH` and run from the repo root:
+
+```bash
+export EIGENSCRIPT="$(command -v eigenscript)"
+bin/eigenlua corpus/D/scope_closure.lua
+tests/parse_all.sh
+```
+
+The example prints `1`, `3`, `10`, and `3` on separate lines; the parser check reports `parsed=131/131`.
+
 The runtime library has these parts:
 - `src/runtime.eigs`;
 - Lua patterns (`rt_pattern`);
