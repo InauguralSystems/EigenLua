@@ -63,6 +63,34 @@ define lr_co_runner(co) as:
         r.status is "dead"
         r.result is res
         task_send of [r.resumer, 1]
+        # An errored resumable coroutine keeps its to-be-closed variables
+        # until coroutine.close.  Wait here so close can resume this task:
+        # lua_closethread runs the close methods as this coroutine, not as
+        # the caller that asked to close it.
+        if r.err != null and len of r.pending > 0:
+            task_recv of null
+            local ev is r.err[1]
+            r.nny is r.nny + 1
+            for p in r.pending:
+                local depth is len of lr_stk
+                local ccn is lr_cc.n
+                local ccg is r.rg
+                try:
+                    lr_tbc_close of [p[0], ev, 0]
+                catch ce:
+                    ev is lr_errobj of (ce)
+                # A failed close leaves its Lua frames live for an enclosing
+                # protected call to inspect.  lua_closethread instead starts
+                # every pending close from its own restored protected frame.
+                list_truncate of [lr_stk, depth]
+                list_truncate of [lr_fstk, depth]
+                lr_ccrestore of [ccn, ccg]
+            r.nny is r.nny - 1
+            r.pending is []
+            r.err is null
+            r.status is "dead"
+            r.result is [false, ev]
+            task_send of [r.resumer, 1]
         return null
     return lr_co_run
 
@@ -186,10 +214,13 @@ define lr_co_close(A) as:
     local co is lr_co_check of [A, "close"]
     local r is co[0]
     if r.status == "suspended" or r.status == "dead":
-        if r.status == "suspended" and r.tid != null:
+        if (r.status == "suspended" and r.tid != null) or (r.err != null and len of r.pending > 0):
             r.closing is true
             local oldclose is r.coclose
             r.coclose is len of r.stk + 1
+            # lr_co_resume is the common lua_closethread handoff for both a
+            # yielded stack and an errored stack waiting on deferred closes.
+            r.status is "suspended"
             local res is lr_co_resume of [co, []]
             r.coclose is oldclose
             r.status is "dead"
@@ -199,29 +230,9 @@ define lr_co_close(A) as:
             return [true]
         r.status is "dead"
         if r.err != null:
-            local e is r.err
-            local ev is e[1]
-            local cr is lr_co_cur[0]
-            local oldclose is cr.coclose
-            cr.coclose is len of lr_stk + 1
-            for p in r.pending:
-                local depth is len of lr_stk
-                local ccn is lr_cc.n
-                local ccg is cr.rg
-                try:
-                    lr_tbc_close of [p[0], ev, 0]
-                catch ce:
-                    ev is lr_errobj of (ce)
-                # A failed close leaves its Lua frames live for an enclosing
-                # protected call to inspect.  lua_closethread instead starts
-                # every pending close from its own restored protected frame.
-                list_truncate of [lr_stk, depth]
-                list_truncate of [lr_fstk, depth]
-                lr_ccrestore of [ccn, ccg]
-            cr.coclose is oldclose
-            r.pending is []
+            local res is r.err
             r.err is null
-            return [false, ev]
+            return res
         return [true]
     lr_throw of ((lr_where of (1)) + "cannot close a " + r.status + " coroutine")
 
