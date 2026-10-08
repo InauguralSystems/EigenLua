@@ -4,7 +4,9 @@ break_outside_loop.lua unspecified-audit: ok
 builtin_values.lua unspecified-audit: ok
 builtin_values_more.lua unspecified-audit: ok
 co_close_yield.lua unspecified-audit: ok
+co_close_getinfo.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
+co_error_deferred_close.lua unspecified-audit: ok
 co_isyieldable_c.lua unspecified-audit: ok
 co_resume_yield.lua unspecified-audit: ok
 co_status.lua unspecified-audit: ok
@@ -20,6 +22,7 @@ err_eigs_located.lua unspecified-audit: ok
 err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_nil.lua unspecified-audit: ok
+err_method_bad_self.lua unspecified-audit: ok
 err_nonstr.lua unspecified-audit: ok
 err_pcall.lua unspecified-audit: ok
 err_xpcall.lua unspecified-audit: ok
@@ -106,4 +109,5 @@ utf8_lib.lua unspecified-audit: ok
 vararg_pack.lua unspecified-audit: ok
 xpcall_handler_close.lua unspecified-audit: ok
 xpcall_handler_frame.lua unspecified-audit: ok
+xpcall_handler_overflow.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>
