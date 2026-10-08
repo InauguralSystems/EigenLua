@@ -79,10 +79,12 @@ print_partial.lua unspecified-audit: ok
 ptr_id_space.lua unspecified-audit: ok
 require_searchers.lua unspecified-audit: ok
 rng_xoshiro.lua unspecified-audit: ok
+co_close_deferred_cdepth.lua unspecified-audit: ok
 co_close_deferred_error_levels.lua unspecified-audit: ok
 co_close_deferred_error_stack.lua unspecified-audit: ok
 co_close_deferred_running.lua unspecified-audit: ok
 co_close_deferred_selfops.lua unspecified-audit: ok
+co_close_deferred_unclosed_many.lua unspecified-audit: ok
 scope_closure.lua unspecified-audit: ok
 scope_local_block.lua unspecified-audit: ok
 scope_loop_capture.lua unspecified-audit: ok

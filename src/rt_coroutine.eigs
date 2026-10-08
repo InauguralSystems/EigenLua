@@ -62,37 +62,44 @@ define lr_co_runner(co) as:
                 r.err is res
         r.status is "dead"
         r.result is res
+        # The body task is done even when its error left deferred closes.
+        # coroutine.close runs those records later in a fresh, short-lived
+        # task; keeping this task parked would consume EigenScript's finite
+        # live-task allowance for every unreachable errored coroutine.
+        r.tid is null
         task_send of [r.resumer, 1]
-        # An errored resumable coroutine keeps its to-be-closed variables
-        # until coroutine.close.  Wait here so close can resume this task:
-        # lua_closethread runs the close methods as this coroutine, not as
-        # the caller that asked to close it.
-        if r.err != null and len of r.pending > 0:
-            task_recv of null
-            local ev is r.err[1]
-            r.nny is r.nny + 1
-            for p in r.pending:
-                local depth is len of lr_stk
-                local ccn is lr_cc.n
-                local ccg is r.rg
-                try:
-                    lr_tbc_close of [p[0], ev, 0]
-                catch ce:
-                    ev is lr_errobj of (ce)
-                # A failed close leaves its Lua frames live for an enclosing
-                # protected call to inspect.  lua_closethread instead starts
-                # every pending close from its own restored protected frame.
-                list_truncate of [lr_stk, depth]
-                list_truncate of [lr_fstk, depth]
-                lr_ccrestore of [ccn, ccg]
-            r.nny is r.nny - 1
-            r.pending is []
-            r.err is null
-            r.status is "dead"
-            r.result is [false, ev]
-            task_send of [r.resumer, 1]
         return null
     return lr_co_run
+
+# Run an errored thread's saved close records as that thread.  This task is
+# created only by coroutine.close and finishes immediately after the closes.
+define lr_co_close_runner(co) as:
+    define lr_co_run_closes(x) as:
+        local r is co[0]
+        local ev is r.err[1]
+        r.nny is r.nny + 1
+        for p in r.pending:
+            local depth is len of lr_stk
+            local ccn is lr_cc.n
+            local ccg is r.rg
+            try:
+                lr_tbc_close of [p[0], ev, 0]
+            catch ce:
+                ev is lr_errobj of (ce)
+            # lua_closethread restores its protected-call stack before every
+            # pending close, including after a close method itself errors.
+            list_truncate of [lr_stk, depth]
+            list_truncate of [lr_fstk, depth]
+            lr_ccrestore of [ccn, ccg]
+        r.nny is r.nny - 1
+        r.pending is []
+        r.err is null
+        r.status is "dead"
+        r.result is [false, ev]
+        r.tid is null
+        task_send of [r.resumer, 1]
+        return null
+    return lr_co_run_closes
 
 # Resume co with args: [true, values...] or [false, error value].
 define lr_co_resume(co, args) as:
@@ -214,12 +221,11 @@ define lr_co_close(A) as:
     local co is lr_co_check of [A, "close"]
     local r is co[0]
     if r.status == "suspended" or r.status == "dead":
-        if (r.status == "suspended" and r.tid != null) or (r.err != null and len of r.pending > 0):
+        if r.status == "suspended" and r.tid != null:
             r.closing is true
             local oldclose is r.coclose
             r.coclose is len of r.stk + 1
-            # lr_co_resume is the common lua_closethread handoff for both a
-            # yielded stack and an errored stack waiting on deferred closes.
+            # A yielded stack still has its body task and resumes it to unwind.
             r.status is "suspended"
             local res is lr_co_resume of [co, []]
             r.coclose is oldclose
@@ -228,6 +234,38 @@ define lr_co_close(A) as:
             if res[0] == false:
                 return res
             return [true]
+        if r.err != null and len of r.pending > 0:
+            local prv is lr_co_cur
+            local pr is prv[0]
+            local ccn is lr_cc.n
+            local ccb is lr_cc.base
+            pr.status is "normal"
+            pr.stk is lr_stk
+            pr.fstk is lr_fstk
+            r.status is "running"
+            r.resumer is task_self of null
+            local oldclose is r.coclose
+            r.coclose is len of r.stk + 1
+            lr_co_cur is co
+            lr_stk is r.stk
+            lr_fstk is r.fstk
+            # lua_closethread restarts the closed thread's protected C-stack
+            # count at the caller's level; lr_tbc_close adds the metamethod
+            # boundary itself.
+            lr_cc.n is ccn
+            lr_cc.base is ccn
+            r.tid is task_spawn of (lr_co_close_runner of (co))
+            task_detach of r.tid
+            task_recv of null
+            lr_co_cur is prv
+            lr_stk is pr.stk
+            lr_fstk is pr.fstk
+            lr_cc.n is ccn
+            lr_cc.base is ccb
+            pr.status is "running"
+            r.coclose is oldclose
+            r.status is "dead"
+            return r.result
         r.status is "dead"
         if r.err != null:
             local res is r.err
