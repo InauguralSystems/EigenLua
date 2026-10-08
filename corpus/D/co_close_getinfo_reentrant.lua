@@ -1,0 +1,15 @@
+-- surface: a coroutine resumed by a close handler keeps its debug frames
+local co = coroutine.create(function()
+  local x <close> = setmetatable({}, {__close = function()
+    local c = coroutine.wrap(function()
+      print("cur", debug.getinfo(1, "l").currentline)
+      print(debug.traceback("tb"))
+      print(pcall(error, "lvl2", 2))
+      local function f() error("pos") end
+      print(pcall(f))
+    end)
+    c()
+  end})
+  coroutine.yield()
+end)
+coroutine.resume(co); print(coroutine.close(co))

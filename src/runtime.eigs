@@ -117,7 +117,7 @@ define lr_argerr(n, fname, msg) as:
         nm is sd[2][8:len of sd[2] - 1]
         n is n - 1
         if n == 0:
-            lr_throw of ((lr_where of (1)) + "calling '" + nm + "' on bad self")
+            lr_throw of ((lr_where of (1)) + "calling '" + nm + "' on bad self (" + msg + ")")
     elif site != 0 and index_of of [sd[1], "'"] >= 0:
         local d is sd[1]
         nm is d[(index_of of [d, "'"]) + 1:len of d - 1]
@@ -1549,8 +1549,15 @@ define lr_b_xpcall(A) as:
 # luaG_errormsg calls it again for an error it raises); past the C-call
 # limit the result is "error in error handling" (LUA_ERRERR).
 define lr_xp_handle(h, v, n, site) as:
-    if n >= 200:
+    # Account for the C levels already live when xpcall catches the error.
+    # ldo.c first reaches LUAI_MAXCCALLS at an absolute level of 199 here;
+    # its emergency allowance ends at 218.  Thus nested C callbacks consume
+    # the same budget as repeated handler failures instead of resetting it.
+    local cn is lr_cc.n + n
+    if cn >= 218:
         return "error in error handling"
+    if cn == 199:
+        v is "C stack overflow"
     local depth is len of lr_stk
     local ccn is lr_cc.n
     local ccg is lr_co_cur[0].rg
@@ -2551,6 +2558,14 @@ define lr_tbc_unwind(tb, e, site) as:
                     e.ev is lr_errobj of (e2)
         elif type of e == "dict" and e.COCLOSE == 1:
             lr_tbc_close of [tb, null, 0]
+        elif lr_co_cur[0].deferclose and len of lr_co_cur[0].ef == 0:
+            # lua_resume leaves an errored coroutine's stack intact.
+            # lua_closethread, invoked later by coroutine.close, performs
+            # the pending closes with the original error object.  A protected
+            # call still closes while unwinding to its catcher, and cowrap
+            # closes before it propagates the thread's error.
+            e is lr_errhd of (e)
+            append of [lr_co_cur[0].pending, [tb, lr_errobj of (e)]]
         else:
             e is lr_errhd of (e)
             lr_tbc_close of [tb, lr_errobj of (e), 0]
@@ -2637,6 +2652,11 @@ define lr_d_upvalueid(A) as:
 # function. Only 'currentline', 'short_src', 'source' and 'what' are filled.
 
 define lr_d_frame(level) as:
+    # lua_closethread calls pending __close methods without leaving a Lua
+    # caller frame on the coroutine stack.
+    local coclose is lr_co_cur[0].coclose
+    if type of coclose == "num" and len of lr_stk - level < coclose:
+        return null
     local fr is lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
     # a chunk compiled by load runs as a main function too (what = "main"):
     # the frame's function is the one the call below it called

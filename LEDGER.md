@@ -1,20 +1,26 @@
-# EigenLua front end: divergence ledger (round 6)
+# EigenLua front end: divergence ledger (round 10)
 
-Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified.
+Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
+failure tables below preserve the round-6 measurements; EigenScript v0.45.1 closes those upstream gaps.
 
-- **Runtime:** EigenScript v0.45.0 (round 6; rounds 3-5 used `main` at 686d3b7d, whose `--version` printed
+- **Runtime:** EigenScript v0.45.1 (round 7); v0.45.0 was used in round 6 (rounds 3-5 used `main` at 686d3b7d, whose `--version` printed
   `0.44.0`). v0.45.0 has a heap use-after-free (EigenScript#1661) on an under-arity call of a 2+ parameter function
   whose missing parameter is read about 1000 calls deep; the emitted code makes no under-arity call of such a function.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
-- **Grader verdict, end of round 6:**
-  `SUMMARY S=2/23 D=96/108 fail=15 diverge=12 hang=2 crash=0 unsupported=4 examined=131 assert=trusted`.
+- **Grader verdict, end of round 10 (Tier D):**
+  `SUMMARY S=0/0 D=113/125 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=125 assert=n/a`.
+- **Before round 7** (same checkout before EigenLua#35's changes, on v0.45.1):
+  `SUMMARY S=23/23 D=108/108 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=131 assert=trusted`.
 - **Before this round** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 108 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16 and round 6 added 9 (7 failing at
+Tier D has 125 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
 79e29669 for the bug they fix, 1 failing there only on a probe-found bug, 1 coverage row; section at the end). The 12 rows that do not match are the same 12 as in round 2,
-all EigenScript gaps.
+all EigenScript gaps on v0.45.0. Round 7 added four programs for EigenLua#35. Round 8 added nine edge-case programs and fixed three
+implementation defects. Round 9 adds two close-time debug rows and fixes the remaining coroutine-local cutoff defect.
+Round 10 adds two deferred-close stack-restoration rows. The 12 current divergences are the longstanding EigenScript
+gaps listed below.
 
 ## Classes
 
@@ -352,6 +358,17 @@ D manifest row whose code names it or declared `uncovered: <reason>` (plants `bu
 row's "naming" is textual (`lib.k`, or `"k"` for a field reached by key), so the gate shows coverage is declared and
 reachable, not that every value is checked.
 
+## Front-end bugs fixed in round 7
+
+Each EigenLua#35 row diverged immediately before its fix and matches now.
+
+| D program | bug | issue |
+|---|---|---|
+| `err_method_bad_self.lua` | `luaL_argerror` discarded its detailed reason when argument 1 was a method's bad `self` | #35 |
+| `co_error_deferred_close.lua` | unwinding an erroring coroutine closed `<close>` variables during `resume`, rather than preserving them for `coroutine.close` | #35 |
+| `xpcall_handler_overflow.lua` | recursively erroring message handlers stopped at 200 calls and never received `C stack overflow`; PUC-Rio makes 215 calls and supplies it at call 197 | #35 |
+| `co_close_getinfo.lua` | a closing method invoked by `coroutine.close` exposed a synthetic caller at `debug.getinfo(2)` | #35 |
+
 ## What remains UNSUPPORTED (exit 3)
 
 - **debug:** `sethook`/`gethook`, `getlocal`/`setlocal`, `getregistry`, `getuservalue`/`setuservalue`, `upvaluejoin`,
@@ -361,3 +378,25 @@ reachable, not that every value is checked.
   `os.time` with a table. Out of scope.
 - **Other:** `string.dump` and binary chunks; `package.loadlib` and a C searcher that finds a library (C modules);
   `loadfile` from stdin.
+
+## Front-end bugs fixed in round 8
+
+Round 8 keeps the bad-method-self fix and repairs the blind critic's three remaining EigenLua#35 defects.
+
+| D program | bug | issue |
+|---|---|---|
+| `co_pcall_close.lua`, `co_pcall_close_error.lua`, `co_wrap_error_close.lua` | Close deferral is limited to an uncaught error escaping a resumable coroutine; protected errors and wrapped coroutine errors close immediately. | #35 |
+| `xpcall_handler_depth0.lua`, `xpcall_handler_depth1.lua`, `xpcall_handler_depth5.lua`, `xpcall_handler_depth20.lua` | Repeated message-handler errors consume the current C-stack budget rather than using shape-specific fixed counts. | #35 |
+| `co_close_getinfo_helper.lua`, `co_close_getinfo_nested.lua` | `debug.getinfo` cuts frames at the active `__close` boundary, and nested closes restore the outer boundary. | #35 |
+
+## Front-end bug fixed in round 9
+
+| D program | bug | issue |
+|---|---|---|
+| `co_close_getinfo_reentrant.lua`, `co_close_getinfo_nested_levels.lua` | The close-frame cutoff was global and was incorrectly applied to a different coroutine resumed or observed during `coroutine.close`; it is now stored on the coroutine whose stack is being cut. | #35 |
+
+## Front-end bug fixed in round 10
+
+| D program | bug | issue |
+|---|---|---|
+| `co_close_deferred_error_levels.lua`, `co_close_deferred_error_stack.lua` | An error from a deferred `__close` left its Lua frames and C-call depth live; each pending close and the caller now see the restored protected-call stack. | #35 |
