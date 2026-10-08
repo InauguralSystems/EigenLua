@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null, "nextfloat": false}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
@@ -61,6 +61,20 @@ define lr_site_source(site) as:
     if len of sd > 4:
         return sd[4]
     return lr_st.source
+
+# Whether argument n at the active Lua call site was a folded float.  Values
+# remain EigenScript nums; this is the source TValue subtype retained by the
+# emitter for C-library operations whose implementation observes it.
+define lr_call_floatarg(n) as:
+    if len of lr_stk == 0:
+        return false
+    local site is lr_stk[len of lr_stk - 1]
+    if site == 0:
+        return false
+    local tag is (lr_sd of (site))[2]
+    if len of tag < 6 or tag[0:6] != "@float":
+        return false
+    return list_contains of [split of [tag, ","], str of n]
 
 # The construct is not handled: say so and exit 3, never run on.
 define lr_unsup(wht, site) as:
@@ -1143,23 +1157,24 @@ define lr_arith_meta(op, a, b, site) as:
             if dn != "":
                 dn is " (" + dn + ")"
             lr_rterr of [site, "number" + dn + " has no integer representation"]
-    elif lr_arnum of (a) == null:
+    elif type of a != "num":
         bad is a
         desc is sd[1]
     if desc != "":
         desc is " (" + desc + ")"
     if isbit:
         lr_rterr of [site, "attempt to perform bitwise operation on a " + (lr_tname of (bad)) + " value" + desc]
-    if type of a == "str" or type of b == "str":
-        # the string library's arithmetic metamethods (lstrlib.c trymt)
-        local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
-        lr_rterr of [site, "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'"]
     lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_tname of (bad)) + " value" + desc]
 
 define lr_arith(op, a, b, site) as:
+    # Lua installs the arithmetic coercions as observable string
+    # metamethods.  Do not bypass them for numeric strings: programs can
+    # inspect and replace these fields.
+    if type of a == "str" or type of b == "str":
+        return lr_arith_meta of [op, a, b, site]
     local x is lr_arnum of (a)
     local y is lr_arnum of (b)
-    if x == null or y == null or (type of a == "str" and lr_metafield of [b, lr_arith_ev of (op)] != null and type of b == "dict") or (type of b == "str" and type of a == "dict"):
+    if x == null or y == null:
         return lr_arith_meta of [op, a, b, site]
     try:
         return lr_arith_num of [op, x, y, site]
@@ -1233,9 +1248,6 @@ define lr_pownum(x, y, site) as:
 define lr_unm(a, site) as:
     if type of a == "num":
         return 0 - a
-    local x is lr_arnum of (a)
-    if x != null and type of a == "str":
-        return 0 - x
     local h is lr_metafield of [a, "__unm"]
     if h != null:
         return lr_callmm1 of [h, "unm", [a, a], site]
@@ -1244,6 +1256,62 @@ define lr_unm(a, site) as:
     if sd[1] != "":
         desc is " (" + sd[1] + ")"
     lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_tname of (a)) + " value" + desc]
+
+# lstrlib.c trymt: only the second operand can supply the fallback metamethod.
+# A right-hand table reusing the string metamethod re-dispatches (as in Lua).
+define lr_s_trymt(a, b, op, self) as:
+    local ev is lr_arith_ev of (op)
+    local h is null
+    if type of b != "str":
+        h is lr_metafield of [b, ev]
+    if h == null:
+        local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
+        lr_throw of ((lr_where of (1)) + "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'")
+    return [lr_callmm1 of [h, ev[2:], [a, b], 0]]
+
+# lstrlib.c's arithmetic functions: tonum both operands, perform raw
+# arithmetic when both convert, and otherwise use trymt above.
+define lr_s_arith(A, op, self) as:
+    local a is lr_arg of [A, 0]
+    local b is lr_arg of [A, 1]
+    local x is lr_arnum of (a)
+    # tonum(L, 1) pushes its conversion before tonum(L, 2).  With no
+    # explicit second argument, that pushed value therefore becomes slot 2.
+    if len of A < 2 and x != null:
+        b is x
+    local y is lr_arnum of (b)
+    if x == null or y == null:
+        return lr_s_trymt of [a, b, op, self]
+    if op == "u-":
+        # lua_arith consumes the top operand even for a unary opcode.  The
+        # normal __unm dispatch duplicates its operand, but a direct call to
+        # this observable function can supply a distinct second argument.
+        return [0 - y]
+    return [lr_arith_num of [op, x, y, 0]]
+
+define lr_s_add(A) as:
+    return lr_s_arith of [A, "+", lr_s_add]
+
+define lr_s_subarith(A) as:
+    return lr_s_arith of [A, "-", lr_s_subarith]
+
+define lr_s_mularith(A) as:
+    return lr_s_arith of [A, "*", lr_s_mularith]
+
+define lr_s_divarith(A) as:
+    return lr_s_arith of [A, "/", lr_s_divarith]
+
+define lr_s_modarith(A) as:
+    return lr_s_arith of [A, "%", lr_s_modarith]
+
+define lr_s_idivarith(A) as:
+    return lr_s_arith of [A, "//", lr_s_idivarith]
+
+define lr_s_powarith(A) as:
+    return lr_s_arith of [A, "^", lr_s_powarith]
+
+define lr_s_unmarith(A) as:
+    return lr_s_arith of [A, "u-", lr_s_unmarith]
 
 # ------------------------------------------------------------ bitwise
 
@@ -1665,11 +1733,18 @@ define lr_b_pcall(A) as:
     local nef is len of ef
     append of [ef, null]
     local r is null
+    local pnf is lr_st.nextfloat
+    # pcall removes its own first argument before making the protected call.
+    # Carry the known subtype of that call's second argument across the C
+    # boundary for next(t, key).
+    lr_st.nextfloat is A[0] == lr_b_next and lr_call_floatarg of (2)
     try:
         r is lr_call of [A[0], list_slice of [A, 1, len of A], 0]
     catch e:
         if type of e == "dict" and (e.COCLOSE == 1 or e.EXIT == 1):
+            lr_st.nextfloat is pnf
             throw of (e)
+        lr_st.nextfloat is pnf
         list_truncate of [ef, nef]
         local rr is lr_co_cur[0]
         rr.nny is nny
@@ -1677,6 +1752,7 @@ define lr_b_pcall(A) as:
         list_truncate of [lr_fstk, depth]
         lr_ccrestore of [ccn, ccg]
         return [false, lr_errobj of (e)]
+    lr_st.nextfloat is pnf
     list_truncate of [ef, nef]
     return concat of [[true], r]
 
@@ -1833,7 +1909,15 @@ define lr_b_getmetatable(A) as:
 
 define lr_b_next(A) as:
     local t is lr_checktable of [A, 0, "next"]
-    return lr_next of [t, lr_arg of [A, 1]]
+    local isfloat is lr_st.nextfloat or lr_call_floatarg of (1)
+    lr_st.nextfloat is false
+    local k is lr_arg of [A, 1]
+    # luaH_next asks the hash part for the exact TValue supplied as its
+    # cursor.  Unlike ordinary table indexing, that lookup does not
+    # canonicalize an integral float to the equal integer key.
+    if isfloat and type of k == "num" and k == floor of k:
+        lr_throw of ("invalid key to 'next'")
+    return lr_next of [t, k]
 
 define lr_b_pairs(A) as:
     local t is lr_arg of [A, 0]
@@ -2717,7 +2801,14 @@ define lr_tbc_unwind(tb, e, site) as:
             append of [lr_co_cur[0].pending, [tb, lr_errobj of (e)]]
         else:
             e is lr_errhd of (e)
+            # luaB_auxwrap uses lua_closethread after an unprotected error.
+            # Its close methods therefore run across that C-call boundary,
+            # even though this direct unwind happens in the coroutine task.
+            if lr_co_cur[0].wrapclose and len of lr_co_cur[0].ef == 0:
+                lr_co_cur[0].nny is lr_co_cur[0].nny + 1
             lr_tbc_close of [tb, lr_errobj of (e), 0]
+            if lr_co_cur[0].wrapclose and len of lr_co_cur[0].ef == 0:
+                lr_co_cur[0].nny is lr_co_cur[0].nny - 1
     throw of (e)
 
 # An error reaching its first to-be-closed variable passes through the
@@ -3041,6 +3132,14 @@ lr_G is lr_newtable of null
 lr_strlib is lr_lib of [{"sub": lr_s_sub, "len": lr_s_len, "upper": lr_s_upper, "lower": lr_s_lower, "rep": lr_s_rep, "reverse": lr_s_reverse, "byte": lr_s_byte, "char": lr_s_char, "format": lr_ny of (lr_s_format), "find": lr_s_find, "match": lr_s_match, "gmatch": lr_s_gmatch, "gsub": lr_ny of (lr_s_gsub), "pack": lr_s_pack, "packsize": lr_s_packsize, "unpack": lr_s_unpack}, lr_stubs of ["string.", "dump"], {}]
 lr_strmt is lr_newtable of null
 lr_rawset of [lr_strmt, "__index", lr_strlib, 0]
+lr_rawset of [lr_strmt, "__add", lr_s_add, 0]
+lr_rawset of [lr_strmt, "__sub", lr_s_subarith, 0]
+lr_rawset of [lr_strmt, "__mul", lr_s_mularith, 0]
+lr_rawset of [lr_strmt, "__div", lr_s_divarith, 0]
+lr_rawset of [lr_strmt, "__mod", lr_s_modarith, 0]
+lr_rawset of [lr_strmt, "__idiv", lr_s_idivarith, 0]
+lr_rawset of [lr_strmt, "__pow", lr_s_powarith, 0]
+lr_rawset of [lr_strmt, "__unm", lr_s_unmarith, 0]
 lr_tablib is lr_lib of [{"insert": lr_ny of (lr_t_insert), "remove": lr_ny of (lr_t_remove), "concat": lr_ny of (lr_t_concat), "pack": lr_t_pack, "unpack": lr_ny of (lr_t_unpack), "sort": lr_ny of (lr_t_sort), "move": lr_ny of (lr_t_move)}, {}, {}]
 lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod, "random": lr_m_random, "randomseed": lr_m_randomseed, "sin": lr_m_sin, "cos": lr_m_cos, "tan": lr_m_tan, "asin": lr_m_asin, "acos": lr_m_acos, "atan": lr_m_atan, "exp": lr_m_exp, "log": lr_m_log, "deg": lr_m_deg, "rad": lr_m_rad, "modf": lr_m_modf, "ult": lr_m_ult}, {}, {}]
 # math.huge is inf in Lua; the direct translation is EigenScript's own

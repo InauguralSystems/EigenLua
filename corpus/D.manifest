@@ -32,6 +32,7 @@ err_index_folded_integer_keys.lua unspecified-audit: ok
 err_index_folded_mod_bitwise_keys.lua unspecified-audit: ok
 err_index_folded_neg_zero_keys.lua unspecified-audit: ok
 err_index_folded_string_keys.lua unspecified-audit: ok
+err_index_explicit_env.lua unspecified-audit: ok
 err_index_varinfo.lua unspecified-audit: ok
 err_level.lua unspecified-audit: ok
 err_method_bad_self.lua unspecified-audit: ok
@@ -109,6 +110,9 @@ str_gmatch_init_end.lua unspecified-audit: ok
 str_gsub.lua unspecified-audit: ok
 str_high_bytes.lua unspecified-audit: ok
 str_len.lua unspecified-audit: ok
+str_metatable_arithmetic.lua unspecified-audit: ok
+str_metatable_arithmetic_override.lua unspecified-audit: ok
+str_metatable_arithmetic_trymt.lua unspecified-audit: ok
 str_nul_lazy.lua unspecified-audit: ok
 str_unpack_signext.lua unspecified-audit: ok
 tbc_genfor_close.lua unspecified-audit: ok
@@ -124,6 +128,7 @@ tbl_next_pairs.lua unspecified-audit: ok
 tbl_next_churn_compaction.lua unspecified-audit: ok
 tbl_next_empty_mixed.lua unspecified-audit: ok
 tbl_next_lazy_array_mix.lua unspecified-audit: ok
+tbl_next_integral_float_hash.lua unspecified-audit: ok
 tbl_pairs_any_argument.lua unspecified-audit: ok
 tbl_pairs_delete_traversal.lua unspecified-audit: ok
 tbl_pairs_after_shrink.lua unspecified-audit: ok
@@ -147,3 +152,4 @@ xpcall_handler_frame.lua unspecified-audit: ok
 xpcall_handler_overflow.lua unspecified-audit: ok
 tbl_pairs_rehash_reinsert.lua unspecified-audit: ok
 operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>
+co_wrap_close_yieldable.lua unspecified-audit: ok

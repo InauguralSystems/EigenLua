@@ -432,3 +432,12 @@ Round 8 keeps the bad-method-self fix and repairs the blind critic's three remai
 | D program | bug | issue |
 |---|---|---|
 | `tbl_pairs_migration_hash_to_array.lua`, `tbl_pairs_after_shrink.lua`, `tbl_pairs_fuzz_mutation.lua` | Array growth left migrated hash-order entries live and array shrink used a stale high-water boundary, allowing `pairs` to revisit keys forever. Traversal now maintains a single-place representation invariant, current array boundary, migration-aware liveness, rebuilt cursor maps, and an empty-order fast path. | #34 |
+
+## Front-end bug fixed in round 15
+
+| D program | bug | issue |
+|---|---|---|
+| `co_wrap_close_yieldable.lua` | A wrap-error `__close` ran as yieldable inside the coroutine task; it now runs across the non-yieldable `lua_closethread` C boundary, so `coroutine.isyieldable()` is false and yielding raises. | #40 |
+| `tbl_next_integral_float_hash.lua` | `next` canonicalized an integral-float cursor to the equal integer hash key instead of rejecting it. The row covers literal float keys only, because EigenScript has no float subtype (EigenLua#49). | #42 |
+| `str_metatable_arithmetic.lua`, `str_metatable_arithmetic_override.lua`, `str_metatable_arithmetic_trymt.lua` | The shared string metatable exposed only `__index`, while arithmetic coercion bypassed the observable lstrlib metamethods; failed coercion then recursively redispatched to that same string metamethod. It now exposes all eight arithmetic fields, honors replacements, and follows lstrlib.c's `trymt` fallback exactly (a right-hand table that reuses the string `__add` recurses to C stack overflow, as in the reference). | #44 |
+| `err_index_explicit_env.lua` | An indexing error through an explicit `_ENV` expression named the key as a field instead of a global. | #45 |
