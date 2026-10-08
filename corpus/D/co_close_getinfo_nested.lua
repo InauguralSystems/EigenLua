@@ -6,7 +6,10 @@ local function levels()
   end
 end
 local inner = coroutine.create(function()
-  local x <close> = setmetatable({}, {__close = function() end})
+  local x <close> = setmetatable({}, {__close = function()
+    print("inner-close")
+    levels()
+  end})
   coroutine.yield()
 end)
 assert(coroutine.resume(inner))

@@ -6,6 +6,8 @@ builtin_values_more.lua unspecified-audit: ok
 co_close_getinfo.lua unspecified-audit: ok
 co_close_getinfo_helper.lua unspecified-audit: ok
 co_close_getinfo_nested.lua unspecified-audit: ok
+co_close_getinfo_nested_levels.lua unspecified-audit: ok
+co_close_getinfo_reentrant.lua unspecified-audit: ok
 co_close_yield.lua unspecified-audit: ok
 co_error.lua unspecified-audit: ok
 co_error_deferred_close.lua unspecified-audit: ok

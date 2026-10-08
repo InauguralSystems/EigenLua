@@ -25,7 +25,7 @@ define lr_co_new(f, main) as:
     if not main:
         lr_st.nid is lr_st.nid + 1
         id is lr_st.nid
-    return [{"id": id, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "pending": [], "deferclose": not main, "nny": 0, "ef": [], "rg": 0}]
+    return [{"id": id, "status": "suspended", "f": f, "tid": null, "transfer": [], "result": null, "resumer": 0, "stk": [], "fstk": [], "main": main, "err": null, "pending": [], "deferclose": not main, "nny": 0, "ef": [], "rg": 0, "coclose": null}]
 
 lr_co_main is lr_co_new of [null, true]
 lr_co_mainrec is lr_co_main[0]
@@ -188,10 +188,10 @@ define lr_co_close(A) as:
     if r.status == "suspended" or r.status == "dead":
         if r.status == "suspended" and r.tid != null:
             r.closing is true
-            local oldclose is lr_st.coclose
-            lr_st.coclose is len of lr_stk + 1
+            local oldclose is r.coclose
+            r.coclose is len of r.stk + 1
             local res is lr_co_resume of [co, []]
-            lr_st.coclose is oldclose
+            r.coclose is oldclose
             r.status is "dead"
             r.err is null
             if res[0] == false:
@@ -201,14 +201,15 @@ define lr_co_close(A) as:
         if r.err != null:
             local e is r.err
             local ev is e[1]
-            local oldclose is lr_st.coclose
-            lr_st.coclose is len of lr_stk + 1
+            local cr is lr_co_cur[0]
+            local oldclose is cr.coclose
+            cr.coclose is len of lr_stk + 1
             for p in r.pending:
                 try:
                     lr_tbc_close of [p[0], ev, 0]
                 catch ce:
                     ev is lr_errobj of (ce)
-            lr_st.coclose is oldclose
+            cr.coclose is oldclose
             r.pending is []
             r.err is null
             return [false, ev]

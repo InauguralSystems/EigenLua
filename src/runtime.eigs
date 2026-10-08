@@ -12,7 +12,7 @@
 # the site id of every active call (0 = called from the runtime, "C"); the
 # site table maps an id to [line, desc_a, desc_b] for positions and messages.
 
-lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null, "coclose": null}
+lr_st is {"asserts": 0, "chunk": "?", "sites": [[-1, "", ""]], "nid": 1, "srcdir": ".", "compiler": null, "curf": null, "mmk": null}
 lr_stk is []
 # lr_fstk parallels lr_stk: the function each entry called.
 lr_fstk is []
@@ -2654,7 +2654,8 @@ define lr_d_upvalueid(A) as:
 define lr_d_frame(level) as:
     # lua_closethread calls pending __close methods without leaving a Lua
     # caller frame on the coroutine stack.
-    if type of lr_st.coclose == "num" and len of lr_stk - level < lr_st.coclose:
+    local coclose is lr_co_cur[0].coclose
+    if type of coclose == "num" and len of lr_stk - level < coclose:
         return null
     local fr is lr_d_framet of [level, lr_stk, lr_co_cur[0].main]
     # a chunk compiled by load runs as a main function too (what = "main"):
