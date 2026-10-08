@@ -1,4 +1,4 @@
-# EigenLua front end: divergence ledger (round 9)
+# EigenLua front end: divergence ledger (round 10)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
 failure tables below preserve the round-6 measurements; EigenScript v0.45.1 closes those upstream gaps.
@@ -7,19 +7,20 @@ failure tables below preserve the round-6 measurements; EigenScript v0.45.1 clos
   `0.44.0`). v0.45.0 has a heap use-after-free (EigenScript#1661) on an under-arity call of a 2+ parameter function
   whose missing parameter is read about 1000 calls deep; the emitted code makes no under-arity call of such a function.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
-- **Grader verdict, end of round 9 (Tier D):**
-  `SUMMARY S=0/0 D=111/123 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=123 assert=n/a`.
+- **Grader verdict, end of round 10 (Tier D):**
+  `SUMMARY S=0/0 D=113/125 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=125 assert=n/a`.
 - **Before round 7** (same checkout before EigenLua#35's changes, on v0.45.1):
   `SUMMARY S=23/23 D=108/108 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=131 assert=trusted`.
 - **Before this round** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 123 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
+Tier D has 125 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
 79e29669 for the bug they fix, 1 failing there only on a probe-found bug, 1 coverage row; section at the end). The 12 rows that do not match are the same 12 as in round 2,
 all EigenScript gaps on v0.45.0. Round 7 added four programs for EigenLua#35. Round 8 added nine edge-case programs and fixed three
 implementation defects. Round 9 adds two close-time debug rows and fixes the remaining coroutine-local cutoff defect.
-The 12 current divergences are the longstanding EigenScript gaps listed below.
+Round 10 adds two deferred-close stack-restoration rows. The 12 current divergences are the longstanding EigenScript
+gaps listed below.
 
 ## Classes
 
@@ -393,3 +394,9 @@ Round 8 keeps the bad-method-self fix and repairs the blind critic's three remai
 | D program | bug | issue |
 |---|---|---|
 | `co_close_getinfo_reentrant.lua`, `co_close_getinfo_nested_levels.lua` | The close-frame cutoff was global and was incorrectly applied to a different coroutine resumed or observed during `coroutine.close`; it is now stored on the coroutine whose stack is being cut. | #35 |
+
+## Front-end bug fixed in round 10
+
+| D program | bug | issue |
+|---|---|---|
+| `co_close_deferred_error_levels.lua`, `co_close_deferred_error_stack.lua` | An error from a deferred `__close` left its Lua frames and C-call depth live; each pending close and the caller now see the restored protected-call stack. | #35 |

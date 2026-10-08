@@ -205,10 +205,19 @@ define lr_co_close(A) as:
             local oldclose is cr.coclose
             cr.coclose is len of lr_stk + 1
             for p in r.pending:
+                local depth is len of lr_stk
+                local ccn is lr_cc.n
+                local ccg is cr.rg
                 try:
                     lr_tbc_close of [p[0], ev, 0]
                 catch ce:
                     ev is lr_errobj of (ce)
+                # A failed close leaves its Lua frames live for an enclosing
+                # protected call to inspect.  lua_closethread instead starts
+                # every pending close from its own restored protected frame.
+                list_truncate of [lr_stk, depth]
+                list_truncate of [lr_fstk, depth]
+                lr_ccrestore of [ccn, ccg]
             cr.coclose is oldclose
             r.pending is []
             r.err is null

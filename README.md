@@ -23,8 +23,8 @@ The runtime library has these parts:
 
 `goto`, `<close>`, `load`/`require`, `_ENV` and the in-scope `debug` functions are compiled.
 
-Measured 2026-10-08 (round 9, v0.45.1) with `tools/grade.sh --candidate bin/eigenlua --tier D`:
-`SUMMARY S=0/0 D=111/123 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=123 assert=n/a`.
+Measured 2026-10-08 (round 10, v0.45.1) with `tools/grade.sh --candidate bin/eigenlua --tier D`:
+`SUMMARY S=0/0 D=113/125 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=125 assert=n/a`.
 Every non-passing row is classified in [LEDGER.md](LEDGER.md) by its first failure:
 - 27 are EigenScript gaps, each with a reproducer in `gaps/` (cstack.lua is now a HANG on v0.45.0: it runs past its
   time budget before its unchanged first failure);
