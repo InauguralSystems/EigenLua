@@ -269,10 +269,97 @@ define em_desc(E, e) as:
         return "constant '" + e.v + "'"
     return ""
 
-# The constant folding relevant to getobjname.  This deliberately mirrors
-# lcode.c's conservative rule rather than evaluating through the runtime:
-# failures, integer overflow, NaN, and floating negative zero must remain RK
-# operands.  Integer negative zero is simply integer zero.
+# lobject.c luaO_tointegerns: conversion used by luaO_rawarith's bitwise arm.
+define em_tointegerns(v) as:
+    if v[0] == "str" or v[1] != floor of v[1] or v[1] < -9223372036854775808 or v[1] >= 9223372036854775808:
+        return null
+    return v[1]
+
+# lvm.c luaV_shiftl.  Work in unsigned 32-bit halves, as the runtime does, so
+# right shifts are logical even though EigenScript's primitive >> is signed.
+define em_shiftl(x, n) as:
+    if n <= -64 or n >= 64:
+        return 0
+    if n == 0:
+        return x
+    local hi is floor of (x / 4294967296)
+    local lo is x - hi * 4294967296
+    if hi < 0:
+        hi is hi + 4294967296
+    local M is 4294967295
+    if n > 0:
+        if n >= 32:
+            hi is (lo << (n - 32)) & M
+            lo is 0
+        else:
+            hi is ((hi << n) & M) | (lo >> (32 - n))
+            lo is (lo << n) & M
+    else:
+        local s is 0 - n
+        if s >= 32:
+            lo is hi >> (s - 32)
+            hi is 0
+        else:
+            lo is (lo >> s) | ((hi << (32 - s)) & M)
+            hi is hi >> s
+    if hi >= 2147483648:
+        hi is hi - 4294967296
+    return hi * 4294967296 + lo
+
+# lobject.c luaO_rawarith, for the operators accepted by lcode.c validop.
+# A null result means either that conversion failed or that the operation is
+# deliberately not foldable (division/modulo by zero).
+define em_rawarith(op, a, b) as:
+    if op == "~u":
+        local ai is em_tointegerns of (a)
+        if ai == null:
+            return null
+        return ["int", bit_not of (ai)]
+    if op == "&" or op == "|" or op == "~" or op == "<<" or op == ">>":
+        local ai is em_tointegerns of (a)
+        local bi is em_tointegerns of (b)
+        if ai == null or bi == null:
+            return null
+        if op == "&":
+            return ["int", bit_and of [ai, bi]]
+        if op == "|":
+            return ["int", bit_or of [ai, bi]]
+        if op == "~":
+            return ["int", bit_xor of [ai, bi]]
+        if op == "<<":
+            return ["int", em_shiftl of [ai, bi]]
+        return ["int", em_shiftl of [ai, 0 - bi]]
+    local fl is a[0] == "float" or (b != null and b[0] == "float")
+    if op == "/" or op == "^":
+        fl is true
+    local v is null
+    if op == "-u":
+        v is 0 - a[1]
+    elif op == "+":
+        v is a[1] + b[1]
+    elif op == "-":
+        v is a[1] - b[1]
+    elif op == "*":
+        v is a[1] * b[1]
+    elif op == "/" and b[1] != 0:
+        v is a[1] / b[1]
+    elif op == "^" and not (a[1] < 0 and b[1] != floor of b[1]):
+        v is pow of [a[1], b[1]]
+    elif op == "%" and b[1] != 0:
+        v is a[1] % b[1]
+        if v != 0 and (v < 0) != (b[1] < 0):
+            v is v + b[1]
+    elif op == "//" and b[1] != 0:
+        v is floor of (a[1] / b[1])
+    else:
+        return null
+    if fl:
+        return ["float", v]
+    return ["int", v]
+
+# lcode.c constfolding, including validop's refusal rules.  Integer overflow
+# beyond EigenScript's exact range stays unfolded (the documented no-int64
+# gap); floating NaN and both signs of floating zero also stay unfolded.
 # The returned tag preserves Lua's integer/float subtype because only an
 # integer in OP_GETI's byte-sized range receives the "integer index" name.
 define em_folded_key(e) as:
@@ -286,66 +373,33 @@ define em_folded_key(e) as:
         return em_folded_key of (e.e)
     if e.k == "Name" and e.var != null and e.var.attr == "const" and e.var.cinit != null:
         return em_folded_key of (e.var.cinit)
-    if e.k == "Un" and e.op == "-":
+    if e.k == "Un" and (e.op == "-" or e.op == "~"):
         local a is em_folded_key of (e.a)
-        if a == null or a[0] == "str" or (a[0] == "float" and a[1] == 0):
+        if a == null or a[0] == "str":
             return null
-        return [a[0], 0 - a[1]]
-    if e.k == "Un" and e.op == "~":
-        local ua is em_folded_key of (e.a)
-        if ua == null or ua[0] == "str" or ua[1] != floor of ua[1] or ua[1] < -9223372036854775808 or ua[1] >= 9223372036854775808:
+        local uop is "~u"
+        if e.op == "-":
+            uop is "-u"
+        local uv is em_rawarith of [uop, a, null]
+        if uv == null or (uv[0] == "float" and (uv[1] != uv[1] or uv[1] == 0)):
             return null
-        return ["int", bit_not of (ua[1])]
+        return uv
     if e.k == "Bin":
         local a is em_folded_key of (e.a)
         local b is em_folded_key of (e.b)
         if a == null or b == null or a[0] == "str" or b[0] == "str":
             return null
-        local fl is a[0] == "float" or b[0] == "float" or e.op == "/"
-        local v is null
-        if e.op == "+":
-            v is a[1] + b[1]
-        elif e.op == "-":
-            v is a[1] - b[1]
-        elif e.op == "*":
-            v is a[1] * b[1]
-        elif e.op == "%" and b[1] != 0:
-            v is a[1] % b[1]
-            if v != 0 and (v < 0) != (b[1] < 0):
-                v is v + b[1]
-        elif e.op == "//" and b[1] != 0:
-            v is floor of (a[1] / b[1])
-        elif e.op == "&" or e.op == "|" or e.op == "~" or e.op == "<<" or e.op == ">>":
-            # luaV_tointegerns: bitwise folding accepts integral floats but
-            # never performs a lossy conversion.
-            if a[1] != floor of a[1] or b[1] != floor of b[1] or a[1] < -9223372036854775808 or a[1] >= 9223372036854775808 or b[1] < -9223372036854775808 or b[1] >= 9223372036854775808:
-                return null
-            fl is false
-            if e.op == "&":
-                v is bit_and of [a[1], b[1]]
-            elif e.op == "|":
-                v is bit_or of [a[1], b[1]]
-            elif e.op == "~":
-                v is bit_xor of [a[1], b[1]]
-            elif b[1] <= -64 or b[1] >= 64:
-                v is 0
-            elif e.op == "<<" and b[1] >= 0:
-                v is bit_shl of [a[1], b[1]]
-            elif e.op == "<<":
-                v is bit_shr of [a[1], 0 - b[1]]
-            elif b[1] >= 0:
-                v is bit_shr of [a[1], b[1]]
-            else:
-                v is bit_shl of [a[1], 0 - b[1]]
-        else:
+        local r is em_rawarith of [e.op, a, b]
+        if r == null:
             return null
+        local v is r[1]
         # All integer values EigenScript can represent exactly are safely
         # inside Lua's int64 range.  Reject rounded arithmetic as overflow.
-        if not fl and (v > 9007199254740991 or v < -9007199254740991):
+        if r[0] == "int" and (v > 9007199254740991 or v < -9007199254740991):
             return null
-        if fl:
-            return ["float", v]
-        return ["int", v]
+        if r[0] == "float" and (v != v or v == 0):
+            return null
+        return r
     return null
 
 # How Lua names the _ENV a global name indexes, for an index error: the

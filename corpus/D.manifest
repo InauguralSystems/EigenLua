@@ -26,6 +26,7 @@ debug_traceback_thread.lua unspecified-audit: ok
 debug_upvalue_computed.lua unspecified-audit: ok
 err_c_function_unlocated.lua unspecified-audit: ok
 err_eigs_located.lua unspecified-audit: ok
+err_index_folded_all_ops.lua unspecified-audit: ok
 err_index_folded_float_keys.lua unspecified-audit: ok
 err_index_folded_integer_keys.lua unspecified-audit: ok
 err_index_folded_mod_bitwise_keys.lua unspecified-audit: ok
