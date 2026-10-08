@@ -1258,13 +1258,13 @@ define lr_unm(a, site) as:
     lr_rterr of [site, "attempt to perform arithmetic on a " + (lr_tname of (a)) + " value" + desc]
 
 # lstrlib.c trymt: only the second operand can supply the fallback metamethod.
-# In particular, never redispatch to the shared string metamethod itself.
+# A right-hand table reusing the string metamethod re-dispatches (as in Lua).
 define lr_s_trymt(a, b, op, self) as:
     local ev is lr_arith_ev of (op)
     local h is null
     if type of b != "str":
         h is lr_metafield of [b, ev]
-    if h == null or lr_fnid of (h) == lr_fnid of (self):
+    if h == null:
         local opn is {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "//": "idiv", "^": "pow", "u-": "unm"}
         lr_throw of ((lr_where of (1)) + "attempt to " + opn[op] + " a '" + (lr_type of (a)) + "' with a '" + (lr_type of (b)) + "'")
     return [lr_callmm1 of [h, ev[2:], [a, b], 0]]
