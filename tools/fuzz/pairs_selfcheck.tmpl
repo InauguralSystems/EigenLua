@@ -2,6 +2,7 @@ local seed = @SEED@
 local STEPS = @STEPS@
 local INSERT_DURING = @INS@
 local LIMIT, BURST = @LIMIT@, @BURST@
+local WARMUP = @WARMUP@
 local function rand(n) seed = (seed * 48271) % 2147483647; return seed % n end
 local TK = {{}, {}, {}}
 local FN = {function() end, function() end}
@@ -75,7 +76,7 @@ for step = 1, STEPS do
   elseif op == 9 then local a = rand(10) + 1; table.move(t, a, a + rand(5), rand(15) + 1)
   elseif op == 10 then for i = 1, rand(6) do t[rand(LIMIT) + 1] = nil end
   else local base = rand(LIMIT - 5); for i = 1, rand(5) + 1 do t[base + i] = i end end
-  if step % 7 == 0 then traverse(t, step) end
+  if step % 7 == 0 and (WARMUP == 0 or step > STEPS / 2) then traverse(t, step) end
   if fail then return end
 end
 print("DONE")

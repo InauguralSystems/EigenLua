@@ -23,6 +23,9 @@ timeout $((6600 * S)) tools/fuzz/pairs_fuzz.sh bin/eigenlua 2000
 echo "RUN scaled pairs fuzz"
 ARRAY_SCALE=1 timeout $((900 * S)) tools/fuzz/pairs_fuzz.sh bin/eigenlua 500 4242
 
+echo "RUN warmup pairs fuzz"
+WARMUP=1 timeout $((2400 * S)) tools/fuzz/pairs_fuzz.sh bin/eigenlua 5000 1 7 42 99 123 555 1001 2024
+
 echo "RUN ghost-range pairs fuzz"
 timeout $((1500 * S)) tools/fuzz/pairs_ghost.sh bin/eigenlua 300 $(seq 1 32)
 echo "RUN hexfloat_fuzz"

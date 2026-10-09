@@ -620,7 +620,7 @@ define lr_s_format(A) as:
                 ps is "0x" + (str_lower of (hex of [pv.id, 8]))
             elif tp == "fn" or tp == "builtin":
                 ps is "0x" + (str_lower of (hex of [lr_fnid of (pv), 8]))
-            elif tp == "list":
+            elif lr_isthread of (pv):
                 ps is "0x" + (str_lower of (hex of [pv[0].id, 8]))
             elif tp == "str":
                 ps is "0x" + (str_lower of (hex of [lr_fx_strptr of (pv), 8]))
