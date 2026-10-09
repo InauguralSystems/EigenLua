@@ -1,0 +1,29 @@
+# EigenLua #31 native EigenScript comparison. Keep allocations reachable.
+# Usage: eigenscript native-table-memory.eigs MODE N
+av is args of null
+mode is av[0]
+n is num of av[1]
+root is []
+i is 1
+
+if mode == "empty":
+    loop while i <= n:
+        append of [root, {}]
+        i is i + 1
+elif mode == "array":
+    loop while i <= n:
+        append of [root, i]
+        i is i + 1
+elif mode == "strings":
+    root is {}
+    loop while i <= n:
+        root["k" + (str of i)] is i
+        i is i + 1
+elif mode == "small4":
+    loop while i <= n:
+        append of [root, {"tag": i, "first": i + 1, "second": i + 2, "value": i + 3}]
+        i is i + 1
+elif mode != "baseline":
+    throw of ("unknown mode: " + mode)
+
+write_bytes of ["/dev/stderr", [77, 69, 65, 83, 85, 82, 69, 45, 67, 72, 69, 67, 75, 10], 1]
