@@ -1,4 +1,5 @@
 -- surface: LUAI_MAXCCALLS per C boundary kind (ldo.c ccall: luaD_call from lua_call/lua_pcall in library functions, luaT_callTM for metamethods, OP_TFORCALL, __close): __tostring, __concat, __eq, __lt, __le, __len, __unm, gsub with a function, format %s, __pairs, __index through table.concat/ipairs/unpack, __close, pcall, xpcall, load's reader, require, sort's comparator, math.max's __lt, coroutine.wrap and resume
+local builtin_refs = {utf8.len}
 local d
 local function rep(name, ok, msg) print(name, d, ok, msg) end
 d = 0 local T1 = setmetatable({}, {__tostring = function(t) d = d + 1 return tostring(t) end})

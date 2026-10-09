@@ -96,7 +96,7 @@ output is the same (vm-op-cost's timings vary).
 | `no-int64.eigs` | No 64-bit integer, so values past 2^53 round and nothing wraps. `math.maxinteger` is the double 2^63, which has no integer representation. | `9007199254740992` / `9.223372036854776e+18` / `true` | D: int_maxinteger, int_past53, int_wrap, rng_xoshiro. S: bitwise, locals, math, nextvar, sort, tpack (hex wrap). |
 | `int64-for-count.eigs` | An instance of no-int64: `for i = maxinteger - 1, maxinteger` cannot count 2 rounds, both bounds are 2^63. | `true` / `true` | None graded (round-3 critic). nextvar.lua's loops over maxinteger end now but count wrongly (690-704). |
 | `no-float-subtype.eigs` | One number type, so 1.0 cannot be told from 1. | `1` / `1` / `3` / `9007199254740992` / `true` | D: int_one_vs_one, ops_matrix, str_format_num. S: math (41), nextvar (624). |
-| `no-nonfinite.eigs` | No inf/nan. Overflow saturates at 1e308, and x/0 raises. | `1e+308` / `division by zero` | D: num_print, ops_matrix. S: events, math. |
+| `no-nonfinite.eigs` | No inf/nan. Every finite value in (1e308, DBL_MAX], including a literal, clamps to 1e308 (and likewise for negatives); x/0 raises. | `1e+308` / `division by zero` | D: num_print, ops_matrix. S: events, math. |
 | `nul-in-string.eigs` | Strings are NUL-terminated. | `1` / `chr of 0: strings are NUL-terminated ...` | D: str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib. S: literals, pm, strings, tpack, utf8, calls (313). |
 | `call-depth.eigs` | 4093 VM frames, against Lua's 200000 levels; a Lua call costs three frames, so a program overflows at 1362 Lua levels (round 3 said about 5000 frames and two per call). | `{"kind": "limit", "message": "call stack overflow", "line": 18}` | S: calls (111), errors (553). |
 | `no-tail-calls.eigs` | No proper tail calls. | `{"kind": "limit", "message": "call stack overflow", "line": 13}` | S: calls (119, 122, 176). |
@@ -361,9 +361,9 @@ The one grader change this round. `tools/grade.sh` exits 2 on a D.manifest line 
 included; plant `dup-manifest`), and checks `corpus/builtins.inventory` against the reference: the inventory must
 list exactly the reference's globals and library fields (the grader asks the reference for them), each cited by a
 D manifest row whose code names it or declared `uncovered: <reason>` (plants `builtin-missing`, `builtin-uncited`).
-150 names: 128 covered, 22 uncovered (out of scope per GAPS.md, or a process or file-system operation). A
-row's "naming" is textual (`lib.k`, or `"k"` for a field reached by key), so the gate shows coverage is declared and
-reachable, not that every value is checked.
+142 names: 121 covered, 21 uncovered (out of scope per GAPS.md, or a process or file-system operation). A
+row's citation must contain the `lib.k` identifier tokens in executable code (or the base-name token for a global);
+comments and string literals do not count. The gate shows coverage is declared and reachable, not that every value is checked.
 
 ## Front-end bugs fixed in round 7
 

@@ -27,6 +27,7 @@ run_at_grade() {
 }
 stage() {
   rm -rf "$1" && mkdir -p "$1/tools" && cp -a "$ROOT/corpus" "$1/corpus" && cp -a "$GRADE" "$1/tools/grade.sh"
+  cp -a "$ROOT/tools/lua_code_tokens.awk" "$1/tools/lua_code_tokens.awk"
   chmod +x "$1/tools/grade.sh"
   printf '%s\n' "$1"
 }
@@ -247,6 +248,22 @@ do_builtin_uncited() {
   run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
   harness builtin-uncited "does not mention string.rep"
 }
+do_builtin_comment_citation() {
+  local dest
+  dest=$(stage "$WORK/bicomment")
+  printf '\n-- string.rep is cited only by this trailing comment\n' >>"$dest/corpus/D/break_outside_loop.lua"
+  sed -i 's/^string\.rep .*/string.rep break_outside_loop.lua/' "$dest/corpus/builtins.inventory"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness builtin-comment-citation "does not mention string.rep in code tokens"
+}
+do_builtin_string_citation() {
+  local dest
+  dest=$(stage "$WORK/bistring")
+  printf '\nlocal builtin_citation = "string.rep"\n' >>"$dest/corpus/D/break_outside_loop.lua"
+  sed -i 's/^string\.rep .*/string.rep break_outside_loop.lua/' "$dest/corpus/builtins.inventory"
+  run_at_grade "$dest/tools/grade.sh" --candidate "$REF" --ref "$REF" --tier D --only int_one_vs_one.lua
+  harness builtin-string-citation "does not mention string.rep in code tokens"
+}
 do_compat_ref() {
   local c p
   "$ROOT/tools/build_ref.sh" --check-not-compat "${REF%/*}/lua-compat" 2>/dev/null; c=$?
@@ -264,7 +281,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D dup-manifest builtin-missing builtin-uncited; do
+  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D dup-manifest builtin-missing builtin-uncited builtin-comment-citation builtin-string-citation; do
     dispatch "$p"
   done
 fi

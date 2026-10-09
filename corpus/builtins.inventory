@@ -1,8 +1,8 @@
 # The declared builtin inventory (EigenLua#21, #3): every global of the
 # reference interpreter and every field of its library tables, one line each,
-# as `<name> <D row>` (a Tier D program whose code, outside comment lines,
-# names it: `lib.k`, or the string "k" for a library field it reaches by key;
-# a base name not after '.' or ':') or `<name> uncovered: <reason>`.
+# as `<name> <D row>` (a Tier D program whose executable code contains the
+# identifier tokens `lib.k`, or the base-name token) or
+# `<name> uncovered: <reason>`. Comments and string literals are not citations.
 # tools/grade.sh lists the names from the reference itself and exits 2 unless
 # this list equals them both ways, every cited row is a manifest row, and
 # every cited row names its builtin (plants builtin-missing, builtin-uncited).
@@ -39,7 +39,7 @@ debug.upvaluejoin uncovered: out of scope: most of debug (GAPS.md)
 dofile builtin_values_more.lua
 error builtin_values.lua
 getmetatable builtin_values.lua
-io.close meta_cstack_kinds.lua
+io.close io_file_results.lua
 io.flush io_file_results.lua
 io.input io_default_output.lua
 io.lines io_read_eof.lua

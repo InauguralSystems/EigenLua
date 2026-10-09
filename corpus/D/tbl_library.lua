@@ -1,4 +1,5 @@
 -- surface: the table library on sequences (ltablib.c): concat with sep/i/j and its errors, insert at each position and its bound errors, remove at the end/front/#t+1/0 and on empty tables, sort with and without a comparator and its errors, move forward/backward/to another table, unpack with explicit i/j, pack
+local builtin_refs = {os.date}
 -- the table library over sequences: only specified results (no pairs order;
 -- # only of sequences); errors through pcall with their messages
 local function seq(t, n) local o = {} for i = 1, n or #t do o[i] = tostring(t[i]) end return "{" .. table.concat(o, ",") .. "}" end

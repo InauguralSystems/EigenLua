@@ -29,7 +29,7 @@ All 9 new D rows MATCH. At 79e29669 (`--candidate <79e29669 checkout> --only <th
 | #27 one id space | FIXED | ptr_id_space.lua: 31 duplicate `%p` addresses at 79e29669, 0 now. tostring's address is lower case, as `%p`. |
 | #28 argument errors | FIXED + GAP | lib_argerr_names.lua: random #1; getinfo `'>'`/invalid option (an out-of-range level returns nil first; only the 'S'/'l' fields asked for); setupvalue #3 first; metamethod C functions named 'index', 'add', 'len', 'unm', ... The errno text: `gaps/no-errno.eigs` prints `["", false]` / `["", true]` / `["", true]` (missing, unreadable as root, empty: no reason). |
 | #29 sites | FIXED (no stdout divergence) | Sites of a loaded chunk are its own list, freed with it. load_chunk_sites.lua guards positions and debug info in loaded code; it diverges at 79e29669 only on a probe-found `what` bug, since memory is not visible on stdout. Measurements below. |
-| #21 grader gates | DONE (grader change) | `guard:dup-manifest` (plant dup-manifest) and `guard:builtins` (plants builtin-missing, builtin-uncited): 150 names, 128 covered, 22 uncovered with reasons. Coverage row builtin_values_more.lua (found `os.setlocale` ignoring a bad category, fixed). All 31 plants OK. |
+| #21 grader gates | DONE (grader change) | `guard:dup-manifest` (plant dup-manifest) and `guard:builtins` (plants builtin-missing, builtin-uncited): 142 names, 121 covered, 21 uncovered with reasons. Coverage row builtin_values_more.lua (found `os.setlocale` ignoring a bad category, fixed). All 31 plants OK. |
 | #22 genfor close line | FIXED | genfor_close_line.lua: loop `end` line on normal exit and break; label line on goto; return line; -1 on error. |
 | probe | FIXED | err_index_varinfo.lua: `pcall(print).y` said `(field 'y')`; now getobjname's rules. |
 
@@ -75,7 +75,7 @@ All 31 PLANT lines are OK, including dup-manifest, builtin-missing and builtin-u
 
 - #29's D row cannot show the fix on stdout (`collectgarbage("count")` is out of scope); it is a regression guard
   that diverges at 79e29669 on a different bug.
-- The #21 coverage check is textual: a cited row must name the builtin (`lib.k` or `"k"`) in code. It shows that
+- The #21 coverage check uses code tokens: a cited row must name the builtin as `lib.k` (or the base-name token for a global); comments and strings do not count. It shows that
   coverage is declared and reachable, not that every value is checked.
 - num_hexfloat_subnormal.lua takes about 7 s on the candidate against a 20 s row budget.
 - No new trigger of EigenScript#1661 was found. A `grep -q` in a pipe under `pipefail` made the first version of the

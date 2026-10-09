@@ -1,6 +1,12 @@
 -- surface: builtin return values, each through pcall as type and value or err: tonumber with and without a base, the math functions over a fixed argument set, next, select, type, rawequal, rawlen, rawget, rawset, getmetatable, setmetatable, tostring, assert, pcall, error, ipairs, collectgarbage
 -- each call through pcall: the type and value of every result, or err
 -- (numbers as %.17g, so an integer and an equal float print alike; NaN as nan)
+-- Direct references make the dynamically indexed functions below explicit to
+-- the builtin-inventory gate.
+local builtin_refs = {io.type, math.abs, math.acos, math.asin, math.atan,
+  math.ceil, math.cos, math.deg, math.exp, math.floor, math.fmod, math.log,
+  math.max, math.min, math.modf, math.rad, math.sin, math.sqrt, math.tan,
+  math.tointeger, math.type, math.ult}
 local function show(...)
   local out = {}
   for i = 1, select("#", ...) do

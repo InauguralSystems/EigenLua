@@ -8,7 +8,8 @@
 # Run as root the unreadable case is readable; run as a user:
 #   touch /tmp/f && chmod 000 /tmp/f && eigenscript gaps/no-errno.eigs
 # Expected: three different reasons (missing, unreadable, empty).
-# Actual v0.45.0: ["", false] / ["", true] / ["", true]
+# Actual v0.45.0 after the touch/chmod setup above, when run as a user:
+# ["", false] / ["", true] / ["", true]
 write_text of ["/tmp/eigenlua-empty", ""]
 for p in ["/nonexistent", "/tmp/f", "/tmp/eigenlua-empty"]:
     print of [read_text of p, file_exists of p]
