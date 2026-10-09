@@ -33,7 +33,7 @@ lr_co_mainrec.status is "running"
 lr_co_cur is lr_co_main
 
 define lr_isthread(v) as:
-    return type of v == "list"
+    return type of v == "list" and not (lr_istable of (v))
 
 define lr_co_runner(co) as:
     define lr_co_run(x) as:

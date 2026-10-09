@@ -2,11 +2,12 @@
 #
 # Value mapping (owner decision, 2026-10-06: direct mapping, no shims):
 #   nil -> null; true/false -> 1/0; number -> num (one IEEE double);
-#   string -> str; function -> fn; table -> dict
-#     {"id": n, "a": [...], "h": {...}, "o": {...}, "mt": table-or-null}
+#   string -> str; function -> fn; table -> fixed list record
+#     [tag, id, array, string-hash-or-null, other-store-or-null,
+#      traversal-sidecar-or-null, metatable, userdata-flag, trap-or-null]
 #   a: the array part, keys 1..len(a); holes are null, the last element is
 #      never null, and key len(a)+1 is never in o, so len(a) is a border;
-#   h: string keys; o: every other key, encoded -> [key, value].
+#   h: lazy string dictionary; o: lazy [encoded-key map, keys, values, numeric slots].
 # A Lua function takes one list of arguments and returns a list of results.
 # Errors are thrown as {"LUAERR": 1, "v": value}. The call-site stack lr_stk holds
 # the site id of every active call (0 = called from the runtime, "C"); the
@@ -144,15 +145,15 @@ define lr_argerr(n, fname, msg) as:
 define lr_globalfuncname(f) as:
     if f == null:
         return null
-    for k in keys of lr_G.h:
-        local v is lr_G.h[k]
+    for k in keys of lr_G[3]:
+        local v is lr_G[3][k]
         if (type of v == "fn" or type of v == "builtin") and lr_fnid of (v) == lr_fnid of (f):
             return k
     for lib in ["string", "table", "math", "io", "os", "coroutine", "utf8", "debug"]:
-        local t is lr_G.h[lib]
-        if type of t == "dict":
-            for k in keys of t.h:
-                local v is t.h[k]
+        local t is lr_G[3][lib]
+        if lr_istable of (t) and t[3] != null:
+            for k in keys of t[3]:
+                local v is t[3][k]
                 if (type of v == "fn" or type of v == "builtin") and lr_fnid of (v) == lr_fnid of (f):
                     return lib + "." + k
     return null
@@ -168,7 +169,7 @@ define lr_msgh(v) as:
         msg is lr_tostr of (v)
     else:
         local h is lr_metafield of [v, "__tostring"]
-        if h != null and type of v == "dict":
+        if h != null and lr_istable of (v):
             msg is lr_tostr of (v)
             trace is false
         else:
@@ -240,10 +241,12 @@ define lr_type(v) as:
         return "number"
     if t == "str":
         return "string"
-    if t == "dict":
-        if v.ud == true:
+    if lr_istable of (v):
+        if v[7] == true:
             return "userdata"
         return "table"
+    if t == "dict" and v.ud == true:
+        return "userdata"
     if t == "none":
         return "nil"
     if t == "bool":
@@ -257,8 +260,12 @@ define lr_type(v) as:
 # luaT_objtypename: a table or userdata with a string __name in its
 # metatable is named by it in error messages.
 define lr_tname(v) as:
-    if type of v == "dict" and v.mt != null:
-        local nm is v.mt.h["__name"]
+    if lr_istable of (v) and v[6] != null:
+        local nm is lr_rawget of [v[6], "__name"]
+        if type of nm == "str":
+            return nm
+    if type of v == "dict" and v.ud == true and v.mt != null:
+        local nm is lr_rawget of [v.mt, "__name"]
         if type of nm == "str":
             return nm
     return lr_type of (v)
@@ -550,7 +557,7 @@ define lr_tostr(v) as:
         return lr_numstr of (v)
     if t == "none":
         return "nil"
-    if t == "dict":
+    if lr_istable of (v):
         local h is lr_metafield of [v, "__tostring"]
         if h != null:
             local r is lr_call1 of [h, [v], 0]
@@ -561,10 +568,15 @@ define lr_tostr(v) as:
             return r
         local nm is lr_metafield of [v, "__name"]
         if type of nm == "str":
-            return nm + ": 0x" + (str_lower of (hex of [v.id, 8]))
-        if v.ud == true:
-            return "userdata: 0x" + (str_lower of (hex of [v.id, 8]))
-        return "table: 0x" + (str_lower of (hex of [v.id, 8]))
+            return nm + ": 0x" + (str_lower of (hex of [v[1], 8]))
+        if v[7] == true:
+            return "userdata: 0x" + (str_lower of (hex of [v[1], 8]))
+        return "table: 0x" + (str_lower of (hex of [v[1], 8]))
+    if t == "dict" and v.ud == true:
+        local h is lr_metafield of [v, "__tostring"]
+        if h != null:
+            return lr_call1 of [h, [v], 0]
+        return "userdata: 0x" + (str_lower of (hex of [v.id, 8]))
     if t == "fn" or t == "builtin":
         return "function: 0x" + (str_lower of (hex of [lr_fnid of (v), 8]))
     if t == "list":
@@ -586,7 +598,12 @@ define lr_newtable as:
     lr_st.nid is lr_st.nid + 1
     # Hash iteration state is allocated lazily by the first next.  Array keys
     # never enter it: next scans the array storage directly.
-    return {"id": lr_st.nid, "a": [], "h": {}, "o": {}, "it": null, "im": null, "is": null, "il": 0, "ih": 0, "mt": null}
+    return ["@table", lr_st.nid, [], null, null, null, null, false, null]
+
+# Keep knowledge of the compact record tag in one place.  Threads are lists
+# too, but carry their state dictionary rather than this private tag at zero.
+define lr_istable(v) as:
+    return type of v == "list" and len of v > 0 and v[0] == "@table"
 
 # Encoded key for the o part (numbers that are not array indices, tables,
 # functions).
@@ -600,8 +617,10 @@ define lr_okey(k) as:
         if k == 0:
             return "n0"
         return "n" + (str of k)
+    if lr_istable of (k):
+        return "t" + (str of k[1])
     if t == "dict":
-        return "t" + (str of k.id)
+        return "u" + (str of k.id)
     if t == "list":
         return "c" + (str of k[0].id)
     return "f" + (str of (lr_fnid of (k)))
@@ -609,17 +628,25 @@ define lr_okey(k) as:
 define lr_rawget(t, k) as:
     local tk is type of k
     if tk == "str":
-        return t.h[k]
+        if t[3] == null:
+            return null
+        return t[3][k]
     if tk == "none":
         return null
     if tk == "num":
-        local a is t.a
+        local a is t[2]
         if k >= 1 and k <= len of a and k == floor of k:
             return a[k - 1]
-    local p is t.o[lr_okey of (k)]
-    if p == null:
+        if t[4] != null and k >= 1 and k <= len of t[4][3] and k == floor of k:
+            local nv is t[4][3][k - 1]
+            if nv != null:
+                return nv
+    if t[4] == null:
         return null
-    return p[1]
+    local slot is t[4][0][lr_okey of (k)]
+    if slot == null:
+        return null
+    return t[4][2][slot]
 
 # A representation key used only by the table's iteration cursor.  Prefixing
 # strings keeps them disjoint from lr_okey's encodings.
@@ -640,8 +667,10 @@ define lr_iterkey(k) as:
 # below is also allowed to discard the order before a new traversal starts.
 define lr_iter_hashlive(t, k) as:
     if type of k == "str":
-        return has_key of [t.h, k]
-    return has_key of [t.o, lr_okey of (k)]
+        return t[3] != null and has_key of [t[3], k]
+    if t[4] != null and type of k == "num" and k >= 1 and k <= len of t[4][3] and k == floor of k:
+        return t[4][3][k - 1] != null
+    return t[4] != null and has_key of [t[4][0], lr_okey of (k)]
 
 # Rebuild the iteration order and its position map, dropping tombstones.
 # This is called only while installing an absent key: adding keys during a
@@ -651,7 +680,7 @@ define lr_iter_compact(t) as:
     local ni is []
     local nm is {}
     local ns is {}
-    for k in t.it:
+    for k in t[5][0]:
         if lr_iter_hashlive of [t, k]:
             append of [ni, k]
             if type of k == "str":
@@ -662,90 +691,105 @@ define lr_iter_compact(t) as:
     # may retain a discarded dictionary until its next collection, and those
     # encoded string keys otherwise make churn's peak proportional to every
     # distinct key ever seen.
-    for ek in keys of t.im:
-        dict_remove of [t.im, ek]
-    for sk in keys of t.is:
-        dict_remove of [t.is, sk]
-    t.it is ni
-    t.im is nm
-    t.is is ns
+    for ek in keys of t[5][1]:
+        dict_remove of [t[5][1], ek]
+    for sk in keys of t[5][2]:
+        dict_remove of [t[5][2], sk]
+    t[5][0] is ni
+    t[5][1] is nm
+    t[5][2] is ns
     # Compaction happens during an insertion, not while a traversal can be
     # paused in a delete.  Its rebuilt order starts a new ghost epoch.
-    t.ih is len of t.a
+    t[5][4] is len of t[2]
     return null
 
 # Build the persistent order once, from the current hash storage.  Runtime
 # tables also install some fields directly, so raw storage is authoritative.
 define lr_iter_init(t) as:
-    if t.it != null:
+    if t[5] != null:
         return null
-    t.it is []
-    t.im is {}
-    t.is is {}
-    t.il is 0
-    t.ih is len of t.a
-    for k in keys of t.h:
-        append of [t.it, k]
-        t.is[k] is len of t.it
-        t.il is t.il + 1
-    for ok in keys of t.o:
-        local k is t.o[ok][0]
-        local ek is lr_iterkey of (k)
-        append of [t.it, k]
-        t.im[ek] is len of t.it
-        t.il is t.il + 1
+    t[5] is [[], {}, {}, 0, len of t[2]]
+    if t[3] != null:
+        for k in keys of t[3]:
+            append of [t[5][0], k]
+            t[5][2][k] is len of t[5][0]
+            t[5][3] is t[5][3] + 1
+    if t[4] != null:
+        # Once mutation-aware traversal is requested, fold the compact
+        # numeric path into the general identity store.  Untouched/build-only
+        # tables retain the low-object representation; traversed tables reuse
+        # the proven cursor/migration machinery below.
+        local nk is 1
+        loop while nk <= len of t[4][3]:
+            local nv is t[4][3][nk - 1]
+            if nv != null:
+                local slot is len of t[4][1]
+                t[4][0][lr_okey of (nk)] is slot
+                append of [t[4][1], nk]
+                append of [t[4][2], nv]
+            nk is nk + 1
+        t[4][3] is []
+        for ok in keys of t[4][0]:
+            local slot is t[4][0][ok]
+            local k is t[4][1][slot]
+            local ek is lr_iterkey of (k)
+            append of [t[5][0], k]
+            t[5][1][ek] is len of t[5][0]
+            t[5][3] is t[5][3] + 1
     return null
 
 # Register an absent key at insertion time.  A retained tombstone is revived
 # in place unless compaction was warranted, preserving deleted-current-key
 # traversal without accumulating unbounded dead entries.
 define lr_iter_insert(t, k) as:
-    if t.it == null:
+    if t[5] == null:
         return null
-    local dead is len of t.it - t.il
-    local threshold is t.il
+    local dead is len of t[5][0] - t[5][3]
+    local threshold is t[5][3]
     if threshold < 16:
         threshold is 16
-    if dead > t.il and dead >= threshold:
+    if dead > t[5][3] and dead >= threshold:
         lr_iter_compact of (t)
     local at is null
     if type of k == "str":
-        at is t.is[k]
+        at is t[5][2][k]
     else:
-        at is t.im[lr_iterkey of (k)]
+        at is t[5][1][lr_iterkey of (k)]
     if at != null and at < 0:
         # A trimmed migrated key keeps its sole order slot, but a negative
         # position marks that slot as a ghost until a sparse write revives it.
         if type of k == "str":
-            t.is[k] is 0 - at
+            t[5][2][k] is 0 - at
         else:
-            t.im[lr_iterkey of (k)] is 0 - at
+            t[5][1][lr_iterkey of (k)] is 0 - at
     elif at == null or at == 0:
-        append of [t.it, k]
+        append of [t[5][0], k]
         if type of k == "str":
-            t.is[k] is len of t.it
+            t[5][2][k] is len of t[5][0]
         else:
-            t.im[lr_iterkey of (k)] is len of t.it
-    t.il is t.il + 1
+            t[5][1][lr_iterkey of (k)] is len of t[5][0]
+    t[5][3] is t[5][3] + 1
     return null
 
 define lr_rawset(t, k, v, site) as:
     local tk is type of k
     if tk == "str":
         if v == null:
-            if has_key of [t.h, k]:
-                dict_remove of [t.h, k]
-                if t.it != null:
-                    t.il is t.il - 1
+            if t[3] != null and has_key of [t[3], k]:
+                dict_remove of [t[3], k]
+                if t[5] != null:
+                    t[5][3] is t[5][3] - 1
         else:
-            if not has_key of [t.h, k]:
+            if t[3] == null:
+                t[3] is {}
+            if not has_key of [t[3], k]:
                 lr_iter_insert of [t, k]
-            t.h[k] is v
+            t[3][k] is v
         return null
     if tk == "none":
         lr_rterr of [site, "table index is nil"]
     if tk == "num":
-        local a is t.a
+        local a is t[2]
         local n is len of a
         if k == floor of k and k >= 1 and k <= n + 1:
             if k <= n:
@@ -755,16 +799,16 @@ define lr_rawset(t, k, v, site) as:
                     loop while m > 0 and a[m - 1] == null:
                         m is m - 1
                     list_truncate of [a, m]
-                    if t.it != null:
+                    if t[5] != null:
                         # A migrated key can still own a dead hash-order
                         # position.  Mark it as an implicit ghost in place;
                         # a sparse rewrite revives that sole order slot.
                         local j is m + 1
                         loop while j <= n:
                             local gek is lr_iterkey of (j)
-                            local gat is t.im[gek]
+                            local gat is t[5][1][gek]
                             if gat != null and gat > 0:
-                                t.im[gek] is 0 - gat
+                                t[5][1][gek] is 0 - gat
                             j is j + 1
                 return null
             if v == null:
@@ -772,27 +816,63 @@ define lr_rawset(t, k, v, site) as:
             append of [a, v]
             # migrate the keys that now continue the sequence
             local nk is lr_okey of (n + 2)
-            loop while has_key of [t.o, nk]:
-                append of [a, t.o[nk][1]]
-                dict_remove of [t.o, nk]
-                if t.it != null:
-                    t.il is t.il - 1
+            loop while t[4] != null and ((len of t[4][3] >= len of a + 1 and t[4][3][len of a] != null) or has_key of [t[4][0], nk]):
+                if len of t[4][3] >= len of a + 1 and t[4][3][len of a] != null:
+                    append of [a, t[4][3][len of a]]
+                    t[4][3][len of a - 1] is null
+                else:
+                    local slot is t[4][0][nk]
+                    append of [a, t[4][2][slot]]
+                    dict_remove of [t[4][0], nk]
+                    t[4][1][slot] is null
+                    t[4][2][slot] is null
+                if t[5] != null:
+                    t[5][3] is t[5][3] - 1
                     # Keep the old position as a tombstone: a later sparse
                     # write can revive it without moving a paused cursor.
                 nk is lr_okey of (len of a + 1)
-            if t.it != null and len of a > t.ih:
-                t.ih is len of a
+            if t[5] != null and len of a > t[5][4]:
+                t[5][4] is len of a
+            return null
+        # Moderately sparse positive integers use their numeric position
+        # directly.  This avoids both an encoded string and a per-entry pair;
+        # very large isolated integers still use the identity map below.
+        local nek is lr_okey of (k)
+        if t[5] == null and k == floor of k and k > 1000 and t[4] != null and not (has_key of [t[4][0], nek]) and k <= 2 * (len of t[4][3] + len of t[4][1] + 1):
+            if t[4] == null:
+                t[4] is [{}, [], [], []]
+            local old is null
+            if k <= len of t[4][3]:
+                old is t[4][3][k - 1]
+            if old == null and v != null:
+                lr_iter_insert of [t, k]
+            if old != null and v == null and t[5] != null:
+                t[5][3] is t[5][3] - 1
+            loop while len of t[4][3] < k:
+                append of [t[4][3], null]
+            t[4][3][k - 1] is v
             return null
     local ek is lr_okey of (k)
     if v == null:
-        if has_key of [t.o, ek]:
-            dict_remove of [t.o, ek]
-            if t.it != null:
-                t.il is t.il - 1
+        if t[4] != null and has_key of [t[4][0], ek]:
+            local slot is t[4][0][ek]
+            dict_remove of [t[4][0], ek]
+            t[4][1][slot] is null
+            t[4][2][slot] is null
+            if t[5] != null:
+                t[5][3] is t[5][3] - 1
     else:
-        if not has_key of [t.o, ek]:
+        if t[4] == null:
+            t[4] is [{}, [], [], []]
+        local slot is t[4][0][ek]
+        if slot == null:
             lr_iter_insert of [t, k]
-        t.o[ek] is [k, v]
+            slot is len of t[4][1]
+            t[4][0][ek] is slot
+            append of [t[4][1], k]
+            append of [t[4][2], v]
+        else:
+            t[4][2][slot] is v
     return null
 
 define lr_tnew(pos, kv, site) as:
@@ -810,7 +890,7 @@ define lr_tnew(pos, kv, site) as:
     return t
 
 define lr_rawlen(t) as:
-    return len of t.a
+    return len of t[2]
 
 # The metatable of a value: a table's or full userdata's own, else the one
 # its type shares (lstate.h G(L)->mt, set by debug.setmetatable).
@@ -818,7 +898,9 @@ lr_typemt is {}
 
 define lr_metatable(v) as:
     local t is type of v
-    if t == "dict":
+    if lr_istable of (v):
+        return v[6]
+    if t == "dict" and v.ud == true:
         return v.mt
     if t == "str":
         return lr_strmt
@@ -828,36 +910,36 @@ define lr_metafield(v, name) as:
     local mt is lr_metatable of (v)
     if mt == null:
         return null
-    return mt.h[name]
+    return lr_rawget of [mt, name]
 
 # next(t, k) -> [key, value] or [null].
 define lr_next(t, k) as:
     # Do not pay a function call on every step of an established traversal.
-    if t.it == null:
+    if t[5] == null:
         lr_iter_init of (t)
     # Once an empty table starts a fresh traversal there is no live cursor to
     # preserve.  Reclaim both the order and its key map, so churn does not
     # retain one encoded map key per value ever inserted.
-    if k == null and t.il == 0 and len of t.a == 0:
+    if k == null and t[5][3] == 0 and len of t[2] == 0:
         # Explicitly sever the small maps produced by churn (which the VM can
         # otherwise retain until a later collection).  For a large table that
         # was emptied in one batch, replacing the maps is the linear-time
         # skip: walking every tombstone here would defeat this fast path.
-        if len of t.it < 1000:
-            for ek in keys of t.im:
-                dict_remove of [t.im, ek]
-            for sk in keys of t.is:
-                dict_remove of [t.is, sk]
-        t.it is []
-        t.im is {}
-        t.is is {}
-        t.ih is len of t.a
+        if len of t[5][0] < 1000:
+            for ek in keys of t[5][1]:
+                dict_remove of [t[5][1], ek]
+            for sk in keys of t[5][2]:
+                dict_remove of [t[5][2], sk]
+        t[5][0] is []
+        t[5][1] is {}
+        t[5][2] is {}
+        t[5][4] is len of t[2]
     local ai is 0
     local i is 0
     local kt is type of k
     if k == null:
         ai is 0
-    elif kt == "num" and k == floor of k and k >= 1 and k <= len of t.a:
+    elif kt == "num" and k == floor of k and k >= 1 and k <= len of t[2]:
         # The overwhelmingly common array cursor needs no position-map or
         # hash-storage probes.  Its physical slot is authoritative even when
         # an old migration tombstone still has a mapped order position.
@@ -865,46 +947,54 @@ define lr_next(t, k) as:
     else:
         local at is null
         if kt == "str":
-            at is t.is[k]
+            at is t[5][2][k]
             if at == null:
                 lr_throw of ("invalid key to 'next'")
             # String cursors cannot be ghosts, so their one map lookup is
             # sufficient to resume directly in hash order.
             i is at
-            ai is len of t.a
+            ai is len of t[2]
         else:
-            at is t.im[lr_iterkey of (k)]
+            at is t[5][1][lr_iterkey of (k)]
             # One position-map lookup distinguishes an ordinary hash cursor
             # from an implicit ghost.  Sparse rewrites revive the negative
             # position assigned to a migrated entry in the ghost range.
             if at != null and at > 0:
                 i is at
-                ai is len of t.a
-            elif kt == "num" and k == floor of k and k > len of t.a and k <= t.ih and (at == null or at < 0):
+                ai is len of t[2]
+            elif kt == "num" and k == floor of k and k > len of t[2] and k <= t[5][4] and (at == null or at < 0):
                 # Leaving a just-trimmed array key is the same boundary as
                 # leaving the array: start hash order.
-                ai is len of t.a
+                ai is len of t[2]
             else:
                 lr_throw of ("invalid key to 'next'")
-    loop while ai < len of t.a:
-        local value is t.a[ai]
+    loop while ai < len of t[2]:
+        local value is t[2][ai]
         if value != null:
             return [ai + 1, value]
         ai is ai + 1
-    loop while i < len of t.it:
-        local key is t.it[i]
+    loop while i < len of t[5][0]:
+        local key is t[5][0][i]
         # Read the authoritative hash slot once.  Calling hash-live and then
         # rawget duplicated both the dictionary probe and numeric-key
         # encoding on every visited key, which dominated pairs-only time.
         if type of key == "str":
-            local value is t.h[key]
+            local value is null
+            if t[3] != null:
+                value is t[3][key]
             if value != null:
                 return [key, value]
         else:
             local okey is lr_okey of (key)
-            local pair is t.o[okey]
-            if pair != null:
-                return [key, pair[1]]
+            if t[4] != null:
+                if type of key == "num" and key >= 1 and key <= len of t[4][3] and key == floor of key:
+                    local value is t[4][3][key - 1]
+                    if value != null:
+                        return [key, value]
+                else:
+                    local slot is t[4][0][okey]
+                    if slot != null:
+                        return [key, t[4][2][slot]]
         i is i + 1
     return [null]
 
@@ -914,16 +1004,16 @@ define lr_index(o, k, site) as:
     local d is 0
     loop while d < 2000:
         local t is type of o
-        if t == "dict":
+        if t == "list" and o[0] == "@table":
             local v is lr_rawget of [o, k]
-            if v != null or o.mt == null:
-                if v == null and has_key of [o, "trap"] and type of k == "str" and has_key of [o.trap, k]:
-                    lr_unsup of [o.trap[k], site]
+            if v != null or o[6] == null:
+                if v == null and o[8] != null and type of k == "str" and has_key of [o[8], k]:
+                    lr_unsup of [o[8][k], site]
                 return v
-            local h is o.mt.h["__index"]
+            local h is lr_rawget of [o[6], "__index"]
             if h == null:
-                if has_key of [o, "trap"] and type of k == "str" and has_key of [o.trap, k]:
-                    lr_unsup of [o.trap[k], site]
+                if o[8] != null and type of k == "str" and has_key of [o[8], k]:
+                    lr_unsup of [o[8][k], site]
                 return null
             if type of h == "fn" or type of h == "builtin":
                 return lr_callmm1 of [h, "index", [o, k], site]
@@ -948,11 +1038,11 @@ define lr_idxerr(o, k, site, depth) as:
 define lr_setindex(o, k, v, site) as:
     local d is 0
     loop while d < 2000:
-        if type of o == "dict":
-            if o.mt == null:
+        if type of o == "list" and o[0] == "@table":
+            if o[6] == null:
                 lr_rawset of [o, k, v, site]
                 return null
-            local h is o.mt.h["__newindex"]
+            local h is lr_rawget of [o[6], "__newindex"]
             if h == null or lr_rawget of [o, k] != null:
                 lr_rawset of [o, k, v, site]
                 return null
@@ -1393,7 +1483,18 @@ define lr_eq(a, b, site) as:
     local ta is type of a
     if ta != type of b:
         return false
-    if ta == "dict":
+    if lr_istable of (a) or lr_istable of (b):
+        if not (lr_istable of (a) and lr_istable of (b)):
+            return false
+        if a[1] == b[1]:
+            return true
+        local h is lr_metafield of [a, "__eq"]
+        if h == null:
+            h is lr_metafield of [b, "__eq"]
+        if h == null:
+            return false
+        return lr_t of (lr_callmm1 of [h, "eq", [a, b], site])
+    if ta == "dict" and a.ud == true and b.ud == true:
         if a.id == b.id:
             return true
         local h is lr_metafield of [a, "__eq"]
@@ -1484,8 +1585,8 @@ define lr_len(a, site) as:
     if h != null:
         # luaT_callTMres(L, tm, rb, rb, ra): the operand is passed twice
         return lr_callmm1 of [h, "len", [a, a], site]
-    if ta == "dict":
-        return len of a.a
+    if lr_istable of (a):
+        return len of a[2]
     local sd is (lr_sd of (site))
     local desc is ""
     if sd[1] != "":
@@ -1545,7 +1646,7 @@ define lr_arg(A, i) as:
 # the access needs: what holds "r" (__index), "w" (__newindex), "l" (__len).
 define lr_checktab(A, i, fname, what) as:
     local v is lr_arg of [A, i]
-    if type of v == "dict" and v.ud != true:
+    if lr_istable of (v) and v[7] != true:
         return v
     local mt is lr_metatable of (v)
     if mt != null and (index_of of [what, "r"] < 0 or lr_rawget of [mt, "__index"] != null) and (index_of of [what, "w"] < 0 or lr_rawget of [mt, "__newindex"] != null) and (index_of of [what, "l"] < 0 or lr_rawget of [mt, "__len"] != null):
@@ -1565,7 +1666,7 @@ define lr_checkfn(A, i, fname) as:
 
 define lr_checktable(A, i, fname) as:
     local v is lr_arg of [A, i]
-    if type of v != "dict" or v.ud == true:
+    if not (lr_istable of (v)) or v[7] == true:
         lr_argerr of [i + 1, fname, "table expected, got " + (lr_typearg of [A, i])]
     return v
 
@@ -1615,7 +1716,7 @@ define lr_b_print(A) as:
     local parts is []
     local meta is false
     for v in A:
-        if type of v == "dict":
+        if lr_istable of (v):
             meta is true
     if not meta:
         for v in A:
@@ -1871,8 +1972,10 @@ define lr_b_rawequal(A) as:
     local b is lr_arg of [A, 1]
     if type of a != type of b:
         return [false]
-    if type of a == "dict":
-        return [a.id == b.id]
+    if lr_istable of (a):
+        return [lr_istable of (b) and a[1] == b[1]]
+    if type of a == "dict" and a.ud == true:
+        return [type of b == "dict" and b.ud == true and a.id == b.id]
     if type of a == "fn" or type of a == "builtin":
         return [lr_fnid of (a) == lr_fnid of (b)]
     if type of a == "list":
@@ -1881,8 +1984,8 @@ define lr_b_rawequal(A) as:
 
 define lr_b_rawlen(A) as:
     local v is lr_arg of [A, 0]
-    if type of v == "dict" and v.ud != true:
-        return [len of v.a]
+    if lr_istable of (v) and v[7] != true:
+        return [len of v[2]]
     if type of v == "str":
         return [len of v]
     lr_argerr of [1, "rawlen", "table or string expected, got " + (lr_typearg of [A, 0])]
@@ -1890,11 +1993,11 @@ define lr_b_rawlen(A) as:
 define lr_b_setmetatable(A) as:
     local t is lr_checktable of [A, 0, "setmetatable"]
     local mt is lr_arg of [A, 1]
-    if (mt != null and (type of mt != "dict" or mt.ud == true)) or len of A < 2:
+    if (mt != null and (not (lr_istable of (mt)) or mt[7] == true)) or len of A < 2:
         lr_argerr of [2, "setmetatable", "nil or table expected, got " + (lr_typearg of [A, 1])]
-    if t.mt != null and lr_rawget of [t.mt, "__metatable"] != null:
+    if t[6] != null and lr_rawget of [t[6], "__metatable"] != null:
         lr_throw of ((lr_where of (1)) + "cannot change a protected metatable")
-    t.mt is mt
+    t[6] is mt
     return [t]
 
 define lr_b_getmetatable(A) as:
@@ -2640,7 +2743,7 @@ define lr_b_require(A) as:
     if lr_t of (have):
         return [have]
     local ss is lr_index of [lr_pkglib, "searchers", 0]
-    if type of ss != "dict" or ss.ud == true:
+    if not (lr_istable of (ss)) or ss[7] == true:
         lr_throw of ((lr_where of (1)) + "'package.searchers' must be a table")
     local msg is []
     local loader is null
@@ -3096,9 +3199,12 @@ define lr_d_getmetatable(A) as:
 define lr_d_setmetatable(A) as:
     local v is lr_arg of [A, 0]
     local mt is lr_arg of [A, 1]
-    if (mt != null and type of mt != "dict") or len of A < 2:
+    if (mt != null and not (lr_istable of (mt))) or len of A < 2:
         lr_argerr of [2, "setmetatable", "nil or table expected"]
-    if type of v == "dict":
+    if lr_istable of (v):
+        v[6] is mt
+        return [v]
+    if type of v == "dict" and v.ud == true:
         v.mt is mt
         return [v]
     if type of v == "str":
@@ -3116,7 +3222,7 @@ define lr_lib(fns, stubs, trap) as:
     for k in keys of stubs:
         lr_rawset of [t, k, lr_stub of (stubs[k]), 0]
     if len of trap > 0:
-        t.trap is trap
+        t[8] is trap
     return t
 
 define lr_stubs(prefix, names) as:

@@ -461,7 +461,7 @@ define lr_pm_add_value(ms, parts, s, e, repl, tr) as:
     local v is null
     if tr == "fn":
         v is lr_call1 of [repl, lr_pm_caps of [ms, s, e, true], 0]
-    elif tr == "dict":
+    elif tr == "table":
         v is lr_index of [repl, lr_pm_onecap of [ms, 0, s, e], 0]
     else:
         lr_pm_add_s of [ms, parts, s, e, repl]
@@ -480,12 +480,14 @@ define lr_s_gsub(A) as:
     local p is lr_checkstr of [A, 1, "gsub"]
     local repl is lr_arg of [A, 2]
     local tr is type of repl
+    if lr_istable of (repl):
+        tr is "table"
     if tr == "num":
         repl is lr_numstr of (repl)
         tr is "str"
     if tr == "builtin":
         tr is "fn"
-    if tr != "str" and tr != "dict" and tr != "fn":
+    if tr != "str" and tr != "table" and tr != "fn":
         lr_argerr of [3, "gsub", "string/function/table expected, got " + (lr_typearg of [A, 2])]
     local srcl is len of src
     local max_s is lr_optint of [A, 3, "gsub", srcl + 1]
