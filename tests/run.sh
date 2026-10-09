@@ -28,6 +28,8 @@ WARMUP=1 timeout $((2400 * S)) tools/fuzz/pairs_fuzz.sh bin/eigenlua 5000 1 7 42
 
 echo "RUN ghost-range pairs fuzz"
 timeout $((1500 * S)) tools/fuzz/pairs_ghost.sh bin/eigenlua 300 $(seq 1 32)
+echo "RUN table memory bound"
+timeout $((600 * S)) tools/fuzz/mem_bound.sh bin/eigenlua
 echo "RUN hexfloat_fuzz"
 timeout $((900 * S)) tools/fuzz/hexfloat_fuzz.sh bin/eigenlua
 

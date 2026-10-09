@@ -8,6 +8,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REF=$(sed -n 's/^ARG EIGS_REF=//p' "$ROOT/.devcontainer/Dockerfile")
 [[ -n $REF ]] || { echo "cloud_setup: no EIGS_REF in .devcontainer/Dockerfile" >&2; exit 1; }
+command -v /usr/bin/time >/dev/null || sudo apt-get install -y -q time >/dev/null
 SRC=$(mktemp -d)
 git clone -q --depth 1 --branch "$REF" https://github.com/InauguralSystems/EigenScript "$SRC/eigs"
 make -s -C "$SRC/eigs" CC=gcc
