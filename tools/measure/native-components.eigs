@@ -1,0 +1,24 @@
+# EigenLua #31 component attribution, N independently live objects.
+# core3 is the three containers in an lr table; base5 adds id/mt; full10 adds
+# lazy iteration state. dict and list isolate EigenScript container costs.
+# Usage: eigenscript native-components.eigs MODE N
+av is args of null
+mode is av[0]
+n is num of av[1]
+root is []
+i is 1
+loop while i <= n:
+    if mode == "dict":
+        append of [root, {}]
+    elif mode == "list":
+        append of [root, []]
+    elif mode == "core3":
+        append of [root, {"a": [], "h": {}, "o": {}}]
+    elif mode == "base5":
+        append of [root, {"id": i, "a": [], "h": {}, "o": {}, "mt": null}]
+    elif mode == "full10":
+        append of [root, {"id": i, "a": [], "h": {}, "o": {}, "it": null, "im": null, "is": null, "il": 0, "ih": 0, "mt": null}]
+    else:
+        throw of ("unknown mode: " + mode)
+    i is i + 1
+write_bytes of ["/dev/stderr", [77, 69, 65, 83, 85, 82, 69, 45, 67, 72, 69, 67, 75, 10], 1]
