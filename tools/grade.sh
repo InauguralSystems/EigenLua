@@ -30,7 +30,7 @@
 # --selftest execs tools/selftest.sh. Membership is the files on disk, both ways.
 # Gates (exit 2): no D.manifest line twice (plant dup-manifest); ops_matrix.lua
 # covers the operators: line (ops-drop); corpus/builtins.inventory equals the
-# reference's globals and library fields, each cited by a D row that names it
+# reference's globals and library fields, each cited by code tokens in a D row
 # or declared uncovered with a reason (builtin-missing, builtin-uncited).
 set -u
 set -o pipefail
@@ -230,7 +230,7 @@ have=$(sed -n 's/^  {"\([^"]*\)", function.*/\1/p' "$DDIR/ops_matrix.lua" | LC_A
 [[ $have == "$(tr ' ' '\n' <<<"$OPS" | grep . | LC_ALL=C sort -u | tr '\n' ' ')" ]] || die "ops_matrix.lua operator table [$have] != D.manifest operators: [$OPS]"
 # <<< guard:ops
 # >>> guard:builtins (corpus/builtins.inventory lists exactly the reference's globals and library fields; each is
-# cited by a D manifest row whose code names it, or declared uncovered with a reason)
+# cited by a D manifest row whose code tokens name it, or declared uncovered with a reason)
 INV="$ROOT/corpus/builtins.inventory"
 [[ -f $INV ]] || die "missing builtin inventory: corpus/builtins.inventory"
 ref_names=$("$REF" -e 'local libs = {"coroutine", "debug", "io", "math", "os", "package", "string", "table", "utf8"}
@@ -246,13 +246,13 @@ while read -r bname bcite; do
   inv_have[$bname]=1
   [[ $bcite =~ ^uncovered:\ +[^\ ] ]] && continue
   [[ $bcite =~ ^[A-Za-z0-9_]+\.lua$ && -n ${d_have[$bcite]:-} ]] || die "builtin inventory: $bname cites no D manifest row: '$bcite'"
+  code_tokens=$(awk -f "$ROOT/tools/lua_code_tokens.awk" "$DDIR/$bcite" | tr '\n' ' ')
   if [[ $bname == *.* ]]; then
-    bre="(^|[^A-Za-z0-9_.])${bname//./\\.}([^A-Za-z0-9_]|\$)|\"${bname#*.}\""
+    btoken="${bname%%.*} . ${bname#*.}"
   else
-    bre="(^|[^A-Za-z0-9_.:])${bname}([^A-Za-z0-9_]|\$)"
+    btoken=$bname
   fi
-  # (no grep -q in a pipe: under pipefail its early exit fails the first grep)
-  [[ -n $(grep -v '^[[:space:]]*--' "$DDIR/$bcite" | grep -E "$bre") ]] || die "builtin inventory: D/$bcite does not mention $bname"
+  [[ " $code_tokens " == *" $btoken "* ]] || die "builtin inventory: D/$bcite does not mention $bname in code tokens"
 done <"$INV"
 inv_names=$(printf '%s\n' "${!inv_have[@]}" | LC_ALL=C sort)
 if [[ $inv_names != "$ref_names" ]]; then

@@ -1,5 +1,6 @@
-# EigenScript gap: no inf/nan. Division by zero raises, overflow saturates at
-# +/-1e308 (EigenScript#1286 row "One overloaded number type").
+# EigenScript gap: no inf/nan. Division by zero raises. EigenScript clamps
+# every finite value in (1e308, DBL_MAX] to 1e308 (and the negative interval
+# to -1e308), including literals (EigenScript#1286, "One overloaded number type").
 # Lua:      print(1/0, -1/0, 1e308 * 10, 0/0 ~= 0/0) -> inf  -inf  inf  true
 #           math.huge -> inf
 # Expected: IEEE inf/-inf/nan values (Lua's float semantics), or a loud

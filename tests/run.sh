@@ -24,6 +24,6 @@ echo "RUN scaled pairs fuzz"
 ARRAY_SCALE=1 timeout $((900 * S)) tools/fuzz/pairs_fuzz.sh bin/eigenlua 500 4242
 
 echo "RUN ghost-range pairs fuzz"
-timeout $((1500 * S)) tools/fuzz/pairs_ghost.sh bin/eigenlua 100 1 7 42 99
+timeout $((1500 * S)) tools/fuzz/pairs_ghost.sh bin/eigenlua 300 $(seq 1 32)
 
 echo "RUN ok"

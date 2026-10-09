@@ -3143,7 +3143,8 @@ lr_rawset of [lr_strmt, "__unm", lr_s_unmarith, 0]
 lr_tablib is lr_lib of [{"insert": lr_ny of (lr_t_insert), "remove": lr_ny of (lr_t_remove), "concat": lr_ny of (lr_t_concat), "pack": lr_t_pack, "unpack": lr_ny of (lr_t_unpack), "sort": lr_ny of (lr_t_sort), "move": lr_ny of (lr_t_move)}, {}, {}]
 lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_abs, "sqrt": lr_m_sqrt, "max": lr_m_max, "min": lr_m_min, "type": lr_m_type, "tointeger": lr_m_tointeger, "fmod": lr_m_fmod, "random": lr_m_random, "randomseed": lr_m_randomseed, "sin": lr_m_sin, "cos": lr_m_cos, "tan": lr_m_tan, "asin": lr_m_asin, "acos": lr_m_acos, "atan": lr_m_atan, "exp": lr_m_exp, "log": lr_m_log, "deg": lr_m_deg, "rad": lr_m_rad, "modf": lr_m_modf, "ult": lr_m_ult}, {}, {}]
 # math.huge is inf in Lua; the direct translation is EigenScript's own
-# overflow, which saturates at 1e308 (gaps/no-nonfinite.eigs)
+# EigenScript clamps finite values above 1e308, literals included
+# (gaps/no-nonfinite.eigs)
 lr_rawset of [lr_mathlib, "huge", 1e308 * 10, 0]
 lr_rawset of [lr_mathlib, "pi", pi of null, 0]
 lr_rawset of [lr_mathlib, "maxinteger", 9223372036854775807, 0]
