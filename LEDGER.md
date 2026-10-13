@@ -320,7 +320,7 @@ each case the reference raises nothing (`no-nonfinite`, `call-depth`). The remai
 ## Front-end bugs fixed in round 6
 
 Each issue row's D program diverges at round 5 (79e29669, run on v0.45.0) and MATCHes now, except where noted.
-`tools/grade.sh --candidate <79e29669 checkout> --only <the 9>`: see R6-REPORT.md.
+`tools/grade.sh --candidate <79e29669 checkout> --only <the 9>`: see docs/rounds/R6-REPORT.md.
 
 | D program | bug | issue |
 |---|---|---|
