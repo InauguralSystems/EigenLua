@@ -60,8 +60,13 @@ lr_io_in is {"cur": "", "pos": 0, "q": [], "qi": 0, "eof": false, "mode": null}
 define lr_io_chunk as:
     local I is lr_io_in
     if I.mode == null:
-        local b is read_bytes of "/dev/stdin"
-        if type of b == "list":
+        # Decide the mode by the stream's type, not by whether reading it
+        # fails: a regular file (a `<` redirect) is read whole, and a pipe,
+        # FIFO or terminal a line at a time, so an interactive program is not
+        # blocked until end of file. read_bytes of an unseekable stream returns
+        # null today and will read it to EOF (EigenScript#1845).
+        if is_file of "/dev/stdin":
+            local b is read_bytes of "/dev/stdin"
             I.mode is "file"
             I.eof is true
             local parts is split of [str_from_bytes of (b), "\n"]
