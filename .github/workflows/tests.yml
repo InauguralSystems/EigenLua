@@ -10,6 +10,17 @@ permissions:
   contents: read
 
 jobs:
+  grade:
+    name: grade (in devcontainer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build devcontainer and grade EigenLua
+        uses: devcontainers/ci@v0.3
+        with:
+          runCmd: tools/build_ref.sh && EIGS=eigenscript tools/grade.sh --candidate "$PWD/bin/eigenlua" --tier all --ledger
+
   test:
     name: suite (in devcontainer)
     runs-on: ubuntu-latest
