@@ -17,16 +17,24 @@ failure tables below preserve the round-6 measurements; the current measurement 
   `SUMMARY S=0/0 D=124/136 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=136 assert=n/a`.
 - **Grader verdict, end of round 13 (Tier D):**
   `SUMMARY S=0/0 D=125/137 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=137 assert=n/a`.
+- **Library-edge additions for #61/#62 (Tier D, 2026-10-28):** `utf8_codes_offset.lua` MATCHes;
+  `math_fmod_ult_reverse.lua` DIVERGEs only for the pre-existing non-finite,
+  float-subtype, 64-bit-integer, and NUL-string EigenScript gaps itemized
+  below.
+- **Grader verdict after the #61/#62 additions (Tier D):**
+  `SUMMARY S=0/0 D=146/159 fail=0 diverge=13 hang=0 crash=0 unsupported=0 examined=159 assert=n/a`.
 - **Before round 7** (same checkout before EigenLua#35's changes, on v0.45.1):
   `SUMMARY S=23/23 D=108/108 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=131 assert=trusted`.
 - **Before round 6** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 157 rows: 145 match and the 12 current divergences are the longstanding EigenScript gaps listed below.
+Tier D has 159 rows: 146 match, and the 13 current divergences are the longstanding EigenScript gaps listed below.
 Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
-20 matching rows without changing the divergence classes. Tier S has 23 rows. Across both tiers, the first-failure
-classes remain 27 EigenScript gaps, 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
+20 matching rows without changing the divergence classes, and the #61/#62 library-edge programs add one MATCH
+(`utf8_codes_offset.lua`) and one row (`math_fmod_ult_reverse.lua`) that diverges only within the existing gap
+classes. Tier S has 23 rows. Across both tiers, the first-failure classes are 28 EigenScript gaps (27 before the
+#61/#62 additions), 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
 
 ## Classes
 
@@ -43,11 +51,11 @@ A row's class is the class of its **first failure**. Its first ten failures were
 
 | class | rows | S | D |
 |---|---|---|---|
-| EigenScript gap | 27 | 15 | 12 |
+| EigenScript gap | 28 | 15 | 13 |
 | out of scope | 6 | 6 | 0 |
 | front-end bug (open) | 0 | 0 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 147 | 2 | 145 |
+| PASS / MATCH | 148 | 2 | 146 |
 
 **Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
 known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
@@ -178,9 +186,11 @@ fails correctly.
 | vararg.lua | **PASS** | 80 | | |
 | verybig.lua | UNSUPPORTED | 5 | out of scope | 141 OOS (`os.tmpname`); 147 OOS (`io.close`); 148 OOS (`dofile` of the file); 149 OOS (`os.remove`). Then it runs to the end. |
 
-## Tier D: DIVERGE (12 rows)
+## Tier D: DIVERGE (13 rows)
 
-Unchanged from round 2: each row's first difference, and every differing line of ops_matrix, is one of the gaps.
+The original 12 rows are unchanged from round 2; round 14 adds the final row.
+Each first difference, every differing line of `ops_matrix.lua`, and every
+difference in the new row is one of the recorded EigenScript gaps.
 
 | row | first difference | class | evidence |
 |---|---|---|---|
@@ -196,6 +206,7 @@ Unchanged from round 2: each row's first difference, and every differing line of
 | str_format_num.lua | line 11 `1 1.0` vs `1 1` | EigenScript gap | `no-float-subtype` (`%s` of 1.0) |
 | str_len.lua | line 3 `3` vs `1` | EigenScript gap | `nul-in-string` |
 | utf8_lib.lua | line 9 `utf8.charpattern` bytes | EigenScript gap | `nul-in-string` |
+| math_fmod_ult_reverse.lua | line 5: float zero divisor returns `-nan` in Lua but raises `(zero)` in EigenLua; line 7: `2.0` prints as `2`; lines 12-13: `math.maxinteger` has no integer representation; line 16: reversed embedded-NUL string is truncated | EigenScript gaps | `no-nonfinite` and `no-float-subtype` (lines 5 and 7), `no-int64` (lines 12-13), and `nul-in-string` (line 16). These are the complete stdout differences; both arms exit 0. |
 
 ## Front-end bugs fixed in round 3
 
