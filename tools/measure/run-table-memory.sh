@@ -26,7 +26,7 @@ for n in 0 10000 100000 1000000; do
   measure lua empty "$n" "$REF" "$ROOT/tools/measure/table-memory.lua"
   measure eigenlua empty "$n" env EIGENLUA_ARGV0=eigenlua MEASURE_MODE=empty MEASURE_N="$n" "$EIGS" "$OUT/table-memory.eigs"
 done
-for mode in array strings sparse; do
+for mode in array strings sparse sparse_offset sparse_descending; do
   measure lua "$mode" 1000000 "$REF" "$ROOT/tools/measure/table-memory.lua"
   measure eigenlua "$mode" 1000000 env EIGENLUA_ARGV0=eigenlua MEASURE_MODE="$mode" MEASURE_N=1000000 "$EIGS" "$OUT/table-memory.eigs"
 done
