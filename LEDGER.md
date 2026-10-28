@@ -1,12 +1,14 @@
-# EigenLua front end: divergence ledger (round 13)
+# EigenLua front end: divergence ledger (round 15)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
-failure tables below preserve the round-6 measurements; EigenScript v0.45.1 closes those upstream gaps.
+failure tables below preserve the round-6 measurements; the current measurement uses EigenScript v0.47.0.
 
-- **Runtime:** EigenScript v0.45.1 (round 7); v0.45.0 was used in round 6 (rounds 3-5 used `main` at 686d3b7d, whose `--version` printed
-  `0.44.0`). v0.45.0 has a heap use-after-free (EigenScript#1661) on an under-arity call of a 2+ parameter function
-  whose missing parameter is read about 1000 calls deep; the emitted code makes no under-arity call of such a function.
+- **Runtime:** EigenScript v0.47.0 at commit `3d8a14b49e88a59a37e1d3501891afe2d430ffcb` (round 15).
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
+- **Grader verdict, round 15 (Tier D, measured 2026-10-28):**
+  `SUMMARY S=0/0 D=145/157 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=157 assert=n/a`.
+- **Grader verdict, round 15 (Tier S, measured 2026-10-28):**
+  `SUMMARY S=2/23 D=0/0 fail=17 diverge=0 hang=1 crash=0 unsupported=3 examined=23 assert=trusted`.
 - **Grader verdict, end of round 10 (Tier D):**
   `SUMMARY S=0/0 D=113/125 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=125 assert=n/a`.
 - **Grader verdict, end of round 11 (Tier D):**
@@ -17,17 +19,14 @@ failure tables below preserve the round-6 measurements; EigenScript v0.45.1 clos
   `SUMMARY S=0/0 D=125/137 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=137 assert=n/a`.
 - **Before round 7** (same checkout before EigenLua#35's changes, on v0.45.1):
   `SUMMARY S=23/23 D=108/108 fail=0 diverge=0 hang=0 crash=0 unsupported=0 examined=131 assert=trusted`.
-- **Before this round** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
+- **Before round 6** (round 5, 79e29669, re-measured on v0.45.0): `SUMMARY S=2/23 D=87/99 fail=15 diverge=12
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 136 rows. Round 3 added 23 programs, round 4 added 8, round 5 added 16, round 6 added 9 (7 failing at
-79e29669 for the bug they fix, 1 failing there only on a probe-found bug, 1 coverage row; section at the end). The 12 rows that do not match are the same 12 as in round 2,
-all EigenScript gaps on v0.45.0. Round 7 added four programs for EigenLua#35. Round 8 added nine edge-case programs and fixed three
-implementation defects. Round 9 adds two close-time debug rows and fixes the remaining coroutine-local cutoff defect.
-Round 10 adds two deferred-close stack-restoration rows, round 11 adds nine table-traversal rows, and round 12 adds two more.
-The 12 current divergences are the longstanding EigenScript
-gaps listed below.
+Tier D has 157 rows: 145 match and the 12 current divergences are the longstanding EigenScript gaps listed below.
+Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
+20 matching rows without changing the divergence classes. Tier S has 23 rows. Across both tiers, the first-failure
+classes remain 27 EigenScript gaps, 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
 
 ## Classes
 
@@ -48,7 +47,7 @@ A row's class is the class of its **first failure**. Its first ten failures were
 | out of scope | 6 | 6 | 0 |
 | front-end bug (open) | 0 | 0 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 98 | 2 | 96 |
+| PASS / MATCH | 147 | 2 | 145 |
 
 **Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
 known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding

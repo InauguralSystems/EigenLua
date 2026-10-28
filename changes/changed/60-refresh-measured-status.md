@@ -1,0 +1,1 @@
+- The README measured status now reports the current pinned EigenScript grade results (#60).
