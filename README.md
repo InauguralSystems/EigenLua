@@ -7,7 +7,7 @@ inherits EigenScript's observer, trace tape and sandbox.
 It is graded against reference Lua 5.4.9 and the official Lua test suite. The bar and the gap ledger are in
 [GAPS.md](GAPS.md).
 
-Status: front end round 9. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
+Status: front end round 15. `bin/eigenlua prog.lua` compiles with `src/compile.eigs` (written in EigenScript)
 and runs the result on the EigenScript VM: `$EIGENSCRIPT`, else `eigenscript` on `PATH`. It needs the `bool` type,
 which arrived in EigenScript v0.45.0 (EigenScript#1647).
 
@@ -23,8 +23,11 @@ The runtime library has these parts:
 
 `goto`, `<close>`, `load`/`require`, `_ENV` and the in-scope `debug` functions are compiled.
 
-Measured 2026-10-08 (round 10, v0.45.1) with `tools/grade.sh --candidate bin/eigenlua --tier D`:
-`SUMMARY S=0/0 D=113/125 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=125 assert=n/a`.
+Measured 2026-10-28 (round 15) on EigenScript v0.47.0 at commit
+`3d8a14b49e88a59a37e1d3501891afe2d430ffcb` with `tools/grade.sh --candidate bin/eigenlua --tier D`:
+`SUMMARY S=0/0 D=145/157 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=157 assert=n/a`.
+The Tier S run with `tools/grade.sh --candidate bin/eigenlua --tier S` produced:
+`SUMMARY S=2/23 D=0/0 fail=17 diverge=0 hang=1 crash=0 unsupported=3 examined=23 assert=trusted`.
 Every non-passing row is classified in [LEDGER.md](LEDGER.md) by its first failure:
 - 27 are EigenScript gaps, each with a reproducer in `gaps/` (cstack.lua is now a HANG on v0.45.0: it runs past its
   time budget before its unchanged first failure);
