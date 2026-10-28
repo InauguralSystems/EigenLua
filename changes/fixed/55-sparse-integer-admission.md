@@ -1,0 +1,1 @@
+- Compact numeric table storage now admits half-dense integer keys regardless of their offset or insertion direction (#55).

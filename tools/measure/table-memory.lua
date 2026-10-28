@@ -1,6 +1,7 @@
 -- EigenLua #31 table-memory workload.  Keep every allocation live until exit.
 -- Usage: lua table-memory.lua MODE N
--- MODE: empty, array, strings, sparse, small4, or baseline.
+-- MODE: empty, array, strings, sparse, sparse_offset, sparse_descending,
+-- small4, or baseline.
 -- EigenLua currently does not forward host argv to a compiled chunk, so the
 -- environment fallback makes the identical source runnable in both arms.
 local mode = assert(arg[1] or os.getenv("MEASURE_MODE"))
@@ -16,6 +17,10 @@ elseif mode == "strings" then
 elseif mode == "sparse" then
   -- Stay outside the array part in both implementations.
   for i = 1, n do root[2 * i] = i end
+elseif mode == "sparse_offset" then
+  for i = 1, n do root[1001 + 2 * i] = i end
+elseif mode == "sparse_descending" then
+  for i = n, 1, -1 do root[2 * i] = i end
 elseif mode == "small4" then
   for i = 1, n do
     root[i] = { tag = i, first = i + 1, second = i + 2, value = i + 3 }

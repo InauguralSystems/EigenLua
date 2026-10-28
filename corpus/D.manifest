@@ -155,6 +155,7 @@ operators: not u- # u~ + - * / // % ^ .. == ~= < <= > >= and or & | ~ << >>
 co_wrap_close_yieldable.lua unspecified-audit: ok
 tbl_table_value_type_matrix.lua unspecified-audit: ok
 tbl_sparse_geometric_keys.lua unspecified-audit: ok
+tbl_sparse_offset_descending.lua unspecified-audit: ok
 tbl_set_churn_bounded.lua unspecified-audit: ok
 utf8_codes_offset.lua unspecified-audit: ok
 math_fmod_ult_reverse.lua unspecified-audit: ok
