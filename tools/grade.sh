@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Grade a candidate against PUC-Rio Lua 5.4.9.
 # tools/grade.sh --candidate <cmd> [--tier S|D|all] [--ref <path>] [--only a,b]
+#                [--ledger] (accept exactly the divergences recorded in LEDGER.md)
 #                [--repeat K]   (each S candidate run K times; all must pass)
 # Candidate argv is exactly: <cmd> <file>, LUA_INIT and LUA_INIT_5_4 unset.
 # --ref names the pristine reference; tools/build_ref.sh puts lua-count,
@@ -103,12 +104,14 @@ classify() {
 }
 examined=0 s_n=0 d_n=0 s_pass=0 d_match=0
 fail=0 diverge=0 hang=0 crash=0 unsup=0 unstable=0
+declare -A row_verdict=()
 emit() {
   local tier=$1 name=$2 verdict=$3 detail=$4
   detail=${detail//$'\n'/ }
   detail=${detail//$'\t'/ }
   if (( ${#detail} > 180 )); then detail=${detail:0:180}; fi
   printf 'ROW %s %s %s %s\n' "$tier" "$name" "$verdict" "$detail"
+  row_verdict["$tier/$name"]=$verdict
   examined=$((examined + 1))
   [[ $tier == S ]] && s_n=$((s_n + 1))
   [[ $tier == D ]] && d_n=$((d_n + 1))
@@ -138,8 +141,13 @@ TIER=all
 REF="$ROOT/.ref/bin/lua"
 ONLY=""
 REPEAT=1
+LEDGER=0
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --ledger)
+      LEDGER=1
+      shift
+      ;;
     --candidate|--tier|--ref|--only|--repeat)
       [[ $# -ge 2 ]] || die "missing value for $1"
       case $1 in
@@ -163,6 +171,9 @@ case $REPEAT in
   *) die "bad --repeat: $REPEAT" ;;
 esac
 [[ -n $CAND ]] || die "missing --candidate"
+if (( LEDGER )) && { [[ $TIER != all ]] || [[ -n $ONLY ]]; }; then
+  die "--ledger requires --tier all without --only"
+fi
 if [[ $CAND != /* && -e $CAND ]]; then CAND=$PWD/$CAND; fi
 if [[ $REF != /* && -e $REF ]]; then REF=$PWD/$REF; fi
 # >>> guard:candidate
@@ -474,6 +485,55 @@ for name in "${d_sel[@]}"; do grade_d "$name"; done
 if (( examined == 0 )); then die "zero rows examined"; fi
 printf 'SUMMARY S=%s/%s D=%s/%s fail=%s diverge=%s hang=%s crash=%s unsupported=%s examined=%s assert=%s\n' \
   "$s_pass" "$s_n" "$d_match" "$d_n" "$fail" "$diverge" "$hang" "$crash" "$unsup" "$examined" "$TRUST"
+if (( LEDGER )); then
+  declare -A ledgered=()
+  ledger_file="$ROOT/LEDGER.md"
+  [[ -f $ledger_file ]] || die "missing divergence ledger: LEDGER.md"
+  while read -r key; do
+    [[ -n $key ]] || continue
+    [[ -z ${ledgered[$key]:-} ]] || die "duplicate ledger row: $key"
+    ledgered[$key]=1
+  done < <(awk -F'|' '
+    /^## Tier S / { section = "S"; next }
+    /^## Tier D: DIVERGE/ { section = "D"; next }
+    /^## / { section = "" }
+    section && $2 ~ /^[[:space:]]*[A-Za-z0-9_]+\.lua[[:space:]]*$/ {
+      name = $2
+      sub(/^[[:space:]]*/, "", name); sub(/[[:space:]]*$/, "", name)
+      if (section == "D" || $3 !~ /PASS/) print section "/" name
+    }
+  ' "$ledger_file")
+  expected_n=${#ledgered[@]}
+  (( expected_n > 0 )) || die "divergence ledger has no Tier S or Tier D rows"
+  observed_n=0 unexpected_n=0 missing_n=0
+  for key in "${!row_verdict[@]}"; do
+    case ${row_verdict[$key]} in
+      PASS|MATCH) ;;
+      *)
+        observed_n=$((observed_n + 1))
+        if [[ -z ${ledgered[$key]:-} ]]; then
+          printf 'LEDGER unexpected %s verdict=%s\n' "$key" "${row_verdict[$key]}" >&2
+          unexpected_n=$((unexpected_n + 1))
+        fi
+        ;;
+    esac
+  done
+  for key in "${!ledgered[@]}"; do
+    if [[ -z ${row_verdict[$key]:-} ]]; then
+      die "ledger names no graded row: $key"
+    fi
+    case ${row_verdict[$key]} in
+      PASS|MATCH)
+        printf 'LEDGER stale %s unexpectedly=%s\n' "$key" "${row_verdict[$key]}" >&2
+        missing_n=$((missing_n + 1))
+        ;;
+    esac
+  done
+  printf 'LEDGER expected=%s observed=%s unexpected=%s missing=%s\n' \
+    "$expected_n" "$observed_n" "$unexpected_n" "$missing_n"
+  (( unexpected_n == 0 && missing_n == 0 )) && exit 0
+  exit 1
+fi
 if (( fail == 0 && diverge == 0 && hang == 0 && crash == 0 && unsup == 0 && unstable == 0 \
       && s_pass == s_n && d_match == d_n )); then
   exit 0

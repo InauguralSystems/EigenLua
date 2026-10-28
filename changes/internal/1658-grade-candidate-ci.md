@@ -1,0 +1,1 @@
+- CI now grades EigenLua itself against Lua 5.4.9 and rejects unledgered or stale semantic divergences (#1658).
