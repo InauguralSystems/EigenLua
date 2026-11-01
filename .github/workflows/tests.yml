@@ -10,17 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  grade:
-    name: grade (in devcontainer)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Build devcontainer and grade EigenLua
-        uses: devcontainers/ci@v0.3
-        with:
-          runCmd: tools/build_ref.sh && EIGS=eigenscript tools/grade.sh --candidate "$PWD/bin/eigenlua" --tier all --ledger
-
   test:
     name: suite (in devcontainer)
     runs-on: ubuntu-latest
@@ -29,7 +18,9 @@ jobs:
 
       # Build the devcontainer (EigenScript pinned by .devcontainer/Dockerfile's
       # EIGS_REF) and run the full suite inside it — the same image a Codespace
-      # opens. tests/run.sh builds the Lua 5.4.9 reference inside the image.
+      # opens. tests/run.sh builds the Lua 5.4.9 reference inside the image and
+      # grades bin/eigenlua against the corpus and LEDGER.md (hq#58: this is the
+      # required check, so the product grade lives here, not in its own job).
       - name: Build devcontainer and run suite
         uses: devcontainers/ci@v0.3
         with:
