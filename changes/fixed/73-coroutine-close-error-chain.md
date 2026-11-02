@@ -1,0 +1,1 @@
+- `coroutine.close` runs every pending `__close` of a suspended coroutine after one of them raises, passing each the latest error and returning false plus the last error; errors inside a `__close` close that method's own variables at once, with no message handler, at the closer's C level (#73). `coroutine.lua` is back to UNSUPPORTED 107 from FAIL 78.

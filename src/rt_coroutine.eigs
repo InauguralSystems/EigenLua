@@ -50,7 +50,10 @@ define lr_co_runner(co) as:
                 r.exitx is e
                 res is [true]
             elif type of e == "dict" and e.COCLOSE == 1:
+                # coroutine.close: false and the last __close error, if any
                 res is [true]
+                if e.err == true:
+                    res is [false, e.ev]
             else:
                 res is [false, lr_errobj of (e)]
                 # the line a Lua function raised at stays its current line
@@ -75,6 +78,9 @@ define lr_co_close_runner(co) as:
         local r is co[0]
         local ev is r.err[1]
         r.nny is r.nny + 1
+        # an error inside a __close closes that method's own variables at
+        # once (lr_tbc_unwind), before the next pending close
+        r.deferclose is false
         for p in r.pending:
             local depth is len of lr_stk
             local ccn is lr_cc.n
@@ -176,8 +182,18 @@ define lr_co_yield(A) as:
     task_recv of null
     if r.closing == true:
         # coroutine.close: unwind the body, closing its pending variables;
-        # lua_closethread runs them from C, so they cannot yield
+        # lua_closethread runs them from C, so they cannot yield, and with
+        # no message handler (luaE_resetthread: L->errfunc = 0), even when
+        # the coroutine yielded inside an xpcall.  With deferclose off, an
+        # error inside a __close closes that method's own variables at once
+        # (lr_tbc_unwind) instead of deferring them.
         r.nny is r.nny + 1
+        r.ef is []
+        r.deferclose is false
+        # lua_closethread runs them at the closer's C level (nCcalls =
+        # getCcalls(from)), not one above it as a resume does
+        lr_cc.n is lr_cc.n - 1
+        lr_cc.base is lr_cc.n
         throw of ({"COCLOSE": 1})
     return r.transfer
 
