@@ -2937,7 +2937,27 @@ define lr_tbc_unwind(tb, e, site) as:
                         throw of (e2)
                     e.ev is lr_errobj of (e2)
         elif type of e == "dict" and e.COCLOSE == 1:
-            lr_tbc_close of [tb, null, 0]
+            # coroutine.close of a suspended coroutine (lua_closethread ->
+            # luaD_closeprotected): every pending variable is closed.  An
+            # error in a __close becomes the error passed to the next one,
+            # and the unwind goes on as the close, never as a Lua error a
+            # pcall in the body could catch.  The stack is restored before
+            # each following close.
+            local depth is len of lr_stk
+            local ccn is lr_cc.n
+            local ccg is lr_co_cur[0].rg
+            local nny is lr_co_cur[0].nny
+            try:
+                lr_tbc_close of [tb, e.ev, 0]
+            catch ce:
+                if type of ce == "dict" and ce.EXIT == 1:
+                    throw of (ce)
+                e.ev is lr_errobj of (ce)
+                e.err is true
+                list_truncate of [lr_stk, depth]
+                list_truncate of [lr_fstk, depth]
+                lr_ccrestore of [ccn, ccg]
+                lr_co_cur[0].nny is nny
         elif lr_co_cur[0].deferclose and len of lr_co_cur[0].ef == 0:
             # lua_resume leaves an errored coroutine's stack intact.
             # lua_closethread, invoked later by coroutine.close, performs

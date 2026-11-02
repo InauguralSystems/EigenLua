@@ -29,9 +29,9 @@ failure tables below preserve the round-6 measurements; the current measurement 
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 160 rows: 147 match, and the 13 current divergences are the longstanding EigenScript gaps listed below
+Tier D has 164 rows: 151 match, and the 13 current divergences are the longstanding EigenScript gaps listed below
 (159 rows measured after the #61/#62 additions, plus #55's `tbl_sparse_offset_descending.lua`, which MATCHed in its
-own run, D=146/158, EigenLua#67).
+own run, D=146/158, EigenLua#67, plus EigenLua#73's four matching rows, D=151/164 on v0.48.0).
 Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
 20 matching rows without changing the divergence classes, and the #61/#62 library-edge programs add one MATCH
 (`utf8_codes_offset.lua`) and one row (`math_fmod_ult_reverse.lua`) that diverges only within the existing gap
@@ -57,7 +57,7 @@ A row's class is the class of its **first failure**. Its first ten failures were
 | out of scope | 6 | 6 | 0 |
 | front-end bug (open) | 0 | 0 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 149 | 2 | 147 |
+| PASS / MATCH | 153 | 2 | 151 |
 
 **Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
 known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
@@ -453,3 +453,15 @@ Round 8 keeps the bad-method-self fix and repairs the blind critic's three remai
 | `tbl_next_integral_float_hash.lua` | `next` canonicalized an integral-float cursor to the equal integer hash key instead of rejecting it. The row covers literal float keys only, because EigenScript has no float subtype (EigenLua#49). | #42 |
 | `str_metatable_arithmetic.lua`, `str_metatable_arithmetic_override.lua`, `str_metatable_arithmetic_trymt.lua` | The shared string metatable exposed only `__index`, while arithmetic coercion bypassed the observable lstrlib metamethods; failed coercion then recursively redispatched to that same string metamethod. It now exposes all eight arithmetic fields, honors replacements, and follows lstrlib.c's `trymt` fallback exactly (a right-hand table that reuses the string `__add` recurses to C stack overflow, as in the reference). | #44 |
 | `err_index_explicit_env.lua` | An indexing error through an explicit `_ENV` expression named the key as a field instead of a global. | #45 |
+
+## Front-end bugs fixed for EigenLua#73
+
+Each row DIVERGEs on a302c4e (main, EigenScript v0.48.0) and MATCHes with the fix. `coroutine.lua` had regressed
+from UNSUPPORTED 107 to FAIL 78 (`coroutine.lua:217: assertion failed!`) at 2e8561f (#35); it is UNSUPPORTED 107
+again, matching its row above.
+
+| D program | bug | issue |
+|---|---|---|
+| `co_close_error_chain.lua`, `co_close_error_chain_edges.lua` | `coroutine.close` of a suspended coroutine stopped at the first `__close` that raised: the error became a Lua error, so the remaining variables were deferred (and never closed) or a `pcall` in the body caught it. Every pending variable is now closed, each receiving the latest error, and close returns false plus the last error (`luaD_closeprotected`). | #73 |
+| `co_close_error_inner_tbc.lua` | An error inside a `__close` run by `coroutine.close` deferred that method's own `<close>` variables, which then never ran, instead of closing them before the next pending close, and the body's `xpcall` handler ran although `lua_closethread` clears the message handler. | #73 |
+| `co_close_suspended_cdepth.lua` | A suspended coroutine's closes ran one C level above the closer (a resume's level) instead of at the closer's level (`lua_closethread`: `nCcalls = getCcalls(from)`). | #73 |

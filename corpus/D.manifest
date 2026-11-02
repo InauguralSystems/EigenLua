@@ -159,3 +159,7 @@ tbl_sparse_offset_descending.lua unspecified-audit: ok
 tbl_set_churn_bounded.lua unspecified-audit: ok
 utf8_codes_offset.lua unspecified-audit: ok
 math_fmod_ult_reverse.lua unspecified-audit: ok
+co_close_error_chain.lua unspecified-audit: ok
+co_close_error_chain_edges.lua unspecified-audit: ok
+co_close_error_inner_tbc.lua unspecified-audit: ok
+co_close_suspended_cdepth.lua unspecified-audit: ok
