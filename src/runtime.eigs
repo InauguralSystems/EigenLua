@@ -1443,18 +1443,39 @@ define lr_modnum(x, y, site) as:
         m is m + y
     return m
 
+# Divide signed int64 operands without converting them to doubles.  The
+# unsigned primitives operate on int64 bit patterns (EigenScript N9).
+define lr_ari_idivint(x, y) as:
+    # lvm.c luaV_idiv: division by -1 is wrapping negation.
+    if y == -1:
+        return i64_wrapping_sub of [0, x]
+    local ax is x
+    local ay is y
+    if x < 0:
+        ax is i64_wrapping_sub of [0, x]
+    if y < 0:
+        ay is i64_wrapping_sub of [0, y]
+    local q is u64_div of [ax, ay]
+    local r is u64_rem of [ax, ay]
+    if (x < 0) != (y < 0):
+        q is i64_wrapping_sub of [0, q]
+        if r != 0:
+            q is i64_wrapping_sub of [q, 1]
+    return q
+
 define lr_idivnum(x, y, site) as:
     if y == 0:
         if lr_isintegerkind of (x) and lr_isintegerkind of (y):
             lr_rterr of [site, "attempt to divide by zero"]
     local ints is lr_isintegerkind of (x) and lr_isintegerkind of (y)
-    # Lua wraps the sole overflowing integer floor division.
-    if ints and x == -9223372036854775808 and y == -1:
-        return -9223372036854775808
+    if ints:
+        return lr_ari_idivint of [x, y]
+    # luai_numidiv is floor division, except that IEEE infinity and NaN
+    # remain values rather than being passed to EigenScript's finite floor.
+    if y == 0:
+        return x / y
     local q is floor of (x / y)
-    if not ints:
-        return q * 1.0
-    return q
+    return q * 1.0
 
 define lr_pownum(x, y, site) as:
     return pow of [x, y]
@@ -1725,6 +1746,11 @@ define lr_len(a, site) as:
 # number of iterations of an integer loop, -1 for a float loop. An integer
 # loop needs an integer initial value and step; anything else, strings
 # included (luaV_tonumber_ converts them), makes a float loop.
+define lr_ari_forstep(i, step, count) as:
+    if count >= 0:
+        return i64_wrapping_add of [i, step]
+    return i + step
+
 define lr_forprep(a, b, c, site) as:
     if type of a == "num" and type of c == "num" and lr_isint of (a) and lr_isint of (c):
         if c == 0:
@@ -1734,14 +1760,25 @@ define lr_forprep(a, b, c, site) as:
         # an integer loop runs a precomputed number of times (lvm.c
         # forprep), so it ends even where a double absorbs the step
         if c > 0:
-            lim is floor of lb
+            if lb > 9223372036854775807:
+                lim is 9223372036854775807
+            else:
+                lim is floor of lb
             if a > lim:
                 return [a, 0, c, 1, 0]
         else:
-            lim is ceil of lb
+            if lb < -9223372036854775807:
+                lim is i64_wrapping_sub of [-9223372036854775807, 1]
+            else:
+                lim is ceil of lb
             if a < lim:
                 return [a, 0, c, 1, 0]
-        return [a, 0, c, 1, (floor of ((lim - a) / c)) + 1]
+        local span is i64_wrapping_sub of [lim, a]
+        local magstep is c
+        if c < 0:
+            magstep is i64_wrapping_sub of [0, c]
+            span is i64_wrapping_sub of [a, lim]
+        return [a, 0, c, 1, i64_wrapping_add of [(u64_div of [span, magstep]), 1]]
     local fl is lr_fornum of [b, "limit", site]
     local fs is lr_fornum of [c, "step", site]
     local fi is lr_fornum of [a, "initial value", site]
@@ -2564,6 +2601,9 @@ define lr_m_ceil(A) as:
 
 define lr_m_abs(A) as:
     local x is lr_checknum of [A, 0, "abs"]
+    # lmathlib.c math_abs uses unsigned negation for lua_Integer.
+    if lr_isintegerkind of (x) and x < 0:
+        return [i64_wrapping_sub of [0, x]]
     return [abs of x]
 
 define lr_m_sqrt(A) as:
@@ -2607,7 +2647,8 @@ define lr_m_type(A) as:
 # math.tointeger: lua_tointegerx, so a numeric string converts too.
 define lr_m_tointeger(A) as:
     local x is lr_arnum of (lr_arg of [A, 0])
-    if x != null and lr_isint of (x):
+    local mini is 0 - 9223372036854775807 - 1
+    if x != null and x == x and x <= 9223372036854775807 and x >= mini and lr_isint of (x):
         return [x]
     lr_checkany of [A, 0, "tointeger"]
     return [null]
@@ -2620,8 +2661,13 @@ define lr_m_fmod(A) as:
         if lr_isintegerkind of (a) and lr_isintegerkind of (b):
             lr_argerr of [2, "fmod", "zero"]
         return [a % b]
-    # Lua's fmod is the remainder after division rounded toward zero; `%`
-    # instead follows the divisor's sign (floor division).
+    if lr_isintegerkind of (a) and lr_isintegerkind of (b):
+        local r is a % b
+        # EigenScript remainder follows floor division; lmathlib.c's integer
+        # fmod instead has the dividend's sign.
+        if r != 0 and (r < 0) != (a < 0):
+            r is r - b
+        return [r]
     local q is a / b
     if q < 0:
         q is ceil of q
