@@ -304,12 +304,21 @@ define lr_at(l, i) as:
 define lr_isint(x) as:
     return x == floor of x and x >= -9223372036854775808 and x < 9223372036854775808
 
+define lr_isintegerkind(x) as:
+    return num_type of (x) == "int"
+
 # ------------------------------------------------------------ numbers <-> strings
+
+define lr_integral_text(x) as:
+    local s is str of x
+    if len of s >= 2 and s[len of s - 2:] == ".0":
+        return s[0:len of s - 2]
+    return s
 
 # Decimal digits of a non-negative integral double below 2^63, exactly.
 define lr_intdigits(x) as:
     if x < 1e15:
-        return str of x
+        return lr_integral_text of (x)
     local b is f64_to_bytes of x
     local e2 is (bit_and of [b[0], 127]) * 16 + (floor of (b[1] / 16)) - 1075
     local m is (bit_and of [b[1], 15]) + 16
@@ -344,10 +353,10 @@ define lr_intdigits(x) as:
             append of [limbs, 1]
     loop while len of limbs > 1 and limbs[len of limbs - 1] == 0:
         list_truncate of [limbs, len of limbs - 1]
-    local s is str of limbs[len of limbs - 1]
+    local s is lr_integral_text of (limbs[len of limbs - 1])
     local j is len of limbs - 2
     loop while j >= 0:
-        local d is str of limbs[j]
+        local d is lr_integral_text of (limbs[j])
         loop while len of d < 7:
             d is "0" + d
         s is s + d
@@ -360,11 +369,9 @@ define lr_fmt_g(x, P) as:
         return "-" + (lr_fx_g of [0 - x, P, false, false])
     return lr_fx_g of [x, P, false, false]
 
-# Lua's number-to-string: integers (here: integral values below 2^63) in
-# full, everything else %.14g. One double cannot tell 1 from 1.0, so integral
-# floats print as integers: an EigenScript gap (gaps/no-float-subtype.eigs).
+# Lua's number-to-string: integer-kind values in full, floats as %.14g.
 define lr_numstr(x) as:
-    if lr_isint of (x):
+    if num_type of (x) == "int":
         if x < 0:
             return "-" + (lr_intdigits of (0 - x))
         return lr_intdigits of (x)
@@ -468,13 +475,22 @@ define lr_str2num(s) as:
         i is i + 1
     if i + 1 < n and s[i] == "0" and (s[i + 1] == "x" or s[i + 1] == "X"):
         i is i + 2
-        local m is 0
+        # Keep the integer spelling in two 32-bit limbs.  Accumulating it in
+        # a scalar used to be harmless when every number was a double, but an
+        # exact int64 now overflows before a following `p` can identify this
+        # as a hexadecimal float.
+        local whi is 0
+        local wlo is 0
         local ex is 0
         local any is 0
         local isf is 0
         local ds is []
         loop while i < n and lr_hexval of (s[i]) >= 0:
-            m is m * 16 + (lr_hexval of (s[i]))
+            local wd is lr_hexval of (s[i])
+            local wl is wlo * 16 + wd
+            local wc is floor of (wl / 4294967296)
+            wlo is wl - wc * 4294967296
+            whi is (whi * 16 + wc) % 4294967296
             if len of ds > 0 or s[i] != "0":
                 append of [ds, lr_hexval of (s[i])]
             any is 1
@@ -509,9 +525,14 @@ define lr_str2num(s) as:
             return null
         # a hex integer wraps modulo 2^64 in Lua (gaps/no-int64.eigs); a hex
         # float is strtod's
-        local v is m
+        local v is 0
         if isf:
             v is lr_hexd of [ds, ex]
+        else:
+            local shi is whi
+            if shi >= 2147483648:
+                shi is shi - 4294967296
+            v is shi * 4294967296 + wlo
         if neg:
             return 0 - v
         return v
@@ -1365,11 +1386,11 @@ define lr_idiv(a, b, site) as:
 define lr_pow(a, b, site) as:
     return lr_arith of ["^", a, b, site]
 
-# Integral operands follow Lua's integer rules (one double cannot tell an
-# integer from an integral float; see lr_numstr), the rest float rules.
+# Integer-kind operands follow Lua's integer rules; float-kind operands keep
+# float division-by-zero and result-kind semantics even when integral.
 define lr_modnum(x, y, site) as:
     if y == 0:
-        if lr_isint of (x) and lr_isint of (y):
+        if lr_isintegerkind of (x) and lr_isintegerkind of (y):
             lr_rterr of [site, "attempt to perform 'n%0'"]
     local m is x % y
     if m != 0 and (m < 0) != (y < 0):
@@ -1378,9 +1399,12 @@ define lr_modnum(x, y, site) as:
 
 define lr_idivnum(x, y, site) as:
     if y == 0:
-        if lr_isint of (x) and lr_isint of (y):
+        if lr_isintegerkind of (x) and lr_isintegerkind of (y):
             lr_rterr of [site, "attempt to divide by zero"]
-    return floor of (x / y)
+    local q is floor of (x / y)
+    if not (lr_isintegerkind of (x) and lr_isintegerkind of (y)):
+        return q * 1.0
+    return q
 
 define lr_pownum(x, y, site) as:
     return pow of [x, y]
@@ -2518,15 +2542,13 @@ define lr_m_min(A) as:
         i is i + 1
     return [m]
 
-# math.type: one double cannot tell an integer from an integral float, so
-# every integral value answers "integer" (EigenScript gap).
 define lr_m_type(A) as:
     if len of A == 0:
         lr_argerr of [1, "type", "value expected"]
     local x is A[0]
     if type of x != "num":
         return [null]
-    if lr_isint of (x):
+    if lr_isintegerkind of (x):
         return ["integer"]
     return ["float"]
 
@@ -2543,7 +2565,7 @@ define lr_m_fmod(A) as:
     local b is lr_checknum of [A, 1, "fmod"]
     local a is lr_checknum of [A, 0, "fmod"]
     if b == 0:
-        if lr_isint of (a) and lr_isint of (b):
+        if lr_isintegerkind of (a) and lr_isintegerkind of (b):
             lr_argerr of [2, "fmod", "zero"]
     return [a % b]
 
