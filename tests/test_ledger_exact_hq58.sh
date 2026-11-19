@@ -110,7 +110,10 @@ plant ungraded-row 2 "ledger names no graded row: S/$fs" "/^ROW S $(esc "$fs") /
 # difference that does not start "line <n>" is a harness error, not a pass.
 sed -E "s/^\| $(esc "$fs") \| FAIL \|/| $fs | FAIL (round 6; HANG in round 5) |/" "$LEDGER" >"$WORK/prose-verdict.md"
 plant ledger-prose-verdict 2 "verdict column must be exactly one verdict" '' "$WORK/prose-verdict.md"
-sed -E "s/^\| $(esc "$dl") \| line $dll /| $dl | the line after line $((dll - 1)) /" "$LEDGER" >"$WORK/prose-diff.md"
+# The number may be followed by a space or by punctuation ("line 5717: ...");
+# a plant that did not apply would be an honest ledger and say nothing.
+sed -E "s/^\| $(esc "$dl") \| line $dll([^0-9])/| $dl | the line after line $((dll - 1))\1/" "$LEDGER" >"$WORK/prose-diff.md"
+cmp -s "$LEDGER" "$WORK/prose-diff.md" && { echo "LEDGER_PLANTS HARNESS: the prose-diff plant did not apply to row $dl" >&2; exit 2; }
 plant ledger-prose-diff 2 "first difference must start 'line <n>'" '' "$WORK/prose-diff.md"
 
 echo "LEDGER_PLANTS examined=$examined expected=$EXPECT_PLANTS wrong=$wrong"
