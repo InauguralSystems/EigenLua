@@ -184,7 +184,7 @@ fails correctly.
 | gengc.lua | FAIL | 18 (19) | EigenScript gap | 122 WK. Then it runs to the end. |
 | goto.lua | **PASS** | 65 | | |
 | literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
-| locals.lua | FAIL | 2581 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
+| locals.lua | FAIL | 2606 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
 | math.lua | FAIL | 18 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
@@ -195,21 +195,15 @@ fails correctly.
 | vararg.lua | **PASS** | 80 | | |
 | verybig.lua | UNSUPPORTED | 5 | out of scope | 141 OOS (`os.tmpname`); 147 OOS (`io.close`); 148 OOS (`dofile` of the file); 149 OOS (`os.remove`). Then it runs to the end. |
 
-## Tier D: DIVERGE (13 rows)
+## Tier D: DIVERGE (9 rows)
 
-The original 12 rows are unchanged from round 2; round 14 adds the final row.
-Each first difference, every differing line of `ops_matrix.lua`, and every
-difference in the new row is one of the recorded EigenScript gaps.
+Nine rows retain documented EigenScript gaps. Integer-kind decimal formatting and wrapping arithmetic moved `int_maxinteger.lua`, `int_past53.lua`, `int_wrap.lua`, and `rng_xoshiro.lua` from DIVERGE to MATCH on the next runtime; they are therefore no longer divergence rows. Each remaining first difference, every differing line of `ops_matrix.lua`, and every difference in the final row is one of the recorded EigenScript gaps.
 
 | row | first difference | class | evidence |
 |---|---|---|---|
-| int_maxinteger.lua | line 1 `9223372036854775807` vs `9.2233720368548e+18` | EigenScript gap | `no-int64`: maxinteger maps to 2^63. |
 | int_one_vs_one.lua | line 2 `1.0` vs `1` | EigenScript gap | `no-float-subtype` |
-| int_past53.lua | line 2 `9007199254740993` vs `...992` | EigenScript gap | `no-int64` (line 5 is the float subtype) |
-| int_wrap.lua | line 1 mininteger vs `9.2233720368548e+18` | EigenScript gap | `no-int64`: no wrap |
 | num_print.lua | line 1 (nothing printed) | EigenScript gap | `no-nonfinite`: its value table holds `1/0`, which raises |
 | ops_matrix.lua | line 24 `float -0` vs `integer 0` | EigenScript gap | `no-float-subtype`, `no-int64`, `no-nonfinite` |
-| rng_xoshiro.lua | line 3 `math.random(0)` | EigenScript gap | `no-int64`. Floats, ranged integers and seeds match; only full 64-bit integers round. |
 | str_byte_char_sub_rep.lua | line 1 `65 0 200` vs `65 nil` | EigenScript gap | `nul-in-string` |
 | str_embedded_nul.lua | line 1 `4` vs `1` | EigenScript gap | `nul-in-string` |
 | str_format_num.lua | line 11 `1 1.0` vs `1 1` | EigenScript gap | `no-float-subtype` (`%s` of 1.0) |

@@ -366,23 +366,41 @@ define em_rawarith(op, a, b) as:
         fl is true
     local v is null
     if op == "-u":
-        v is 0 - a[1]
+        if fl:
+            v is 0.0 - a[1]
+        else:
+            v is i64_wrapping_sub of [0, a[1]]
     elif op == "+":
-        v is a[1] + b[1]
+        if fl:
+            v is a[1] + b[1]
+        else:
+            v is i64_wrapping_add of [a[1], b[1]]
     elif op == "-":
-        v is a[1] - b[1]
+        if fl:
+            v is a[1] - b[1]
+        else:
+            v is i64_wrapping_sub of [a[1], b[1]]
     elif op == "*":
-        v is a[1] * b[1]
+        if fl:
+            v is a[1] * b[1]
+        else:
+            v is i64_wrapping_mul of [a[1], b[1]]
     elif op == "/" and b[1] != 0:
         v is a[1] / b[1]
     elif op == "^" and not (a[1] < 0 and b[1] != floor of b[1]):
         v is pow of [a[1], b[1]]
     elif op == "%" and b[1] != 0:
-        v is a[1] % b[1]
+        if not fl and a[1] == -9223372036854775808 and b[1] == -1:
+            v is 0
+        else:
+            v is a[1] % b[1]
         if v != 0 and (v < 0) != (b[1] < 0):
             v is v + b[1]
     elif op == "//" and b[1] != 0:
-        v is floor of (a[1] / b[1])
+        if not fl and a[1] == -9223372036854775808 and b[1] == -1:
+            v is -9223372036854775808
+        else:
+            v is floor of (a[1] / b[1])
     else:
         return null
     if fl:

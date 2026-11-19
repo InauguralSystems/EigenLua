@@ -372,6 +372,10 @@ define lr_fmt_g(x, P) as:
 # Lua's number-to-string uses the reference interpreter's whole-number spelling
 # for integral values, including integral floats.
 define lr_numstr(x) as:
+    # Integer-kind values already have exact decimal text on the next runtime;
+    # do not route them through the double-only digit decomposition.
+    if (x > 9007199254740991 or x < -9007199254740991) and lr_isintegerkind of (x):
+        return str of x
     if x != x:
         return "-nan"
     if x > 9223372036854775807:
@@ -1352,15 +1356,18 @@ define lr_arith(op, a, b, site) as:
         lr_eserr of [e, site, true]
 
 define lr_arith_num(op, x, y, site) as:
+    local ints is num_type of (x) == "int" and num_type of (y) == "int"
     if op == "+":
+        if ints:
+            return i64_wrapping_add of [x, y]
         return x + y
     if op == "-":
-        # Lua integer subtraction wraps.  This boundary is the one reachable
-        # while the remaining no-int64 operations retain their ledgered gap.
-        if x == -9223372036854775808 and y == 1 and lr_isintegerkind of (x) and lr_isintegerkind of (y):
+        if ints:
             return i64_wrapping_sub of [x, y]
         return x - y
     if op == "*":
+        if ints:
+            return i64_wrapping_mul of [x, y]
         return x * y
     if op == "/":
         return x / y
@@ -1374,16 +1381,22 @@ define lr_arith_num(op, x, y, site) as:
 
 define lr_add(a, b, site) as:
     if type of a == "num" and type of b == "num":
+        if num_type of (a) == "int" and num_type of (b) == "int":
+            return i64_wrapping_add of [a, b]
         return a + b
     return lr_arith of ["+", a, b, site]
 
 define lr_sub(a, b, site) as:
     if type of a == "num" and type of b == "num":
-        return lr_arith_num of ["-", a, b, site]
+        if num_type of (a) == "int" and num_type of (b) == "int":
+            return i64_wrapping_sub of [a, b]
+        return a - b
     return lr_arith of ["-", a, b, site]
 
 define lr_mul(a, b, site) as:
     if type of a == "num" and type of b == "num":
+        if num_type of (a) == "int" and num_type of (b) == "int":
+            return i64_wrapping_mul of [a, b]
         return a * b
     return lr_arith of ["*", a, b, site]
 
@@ -1405,6 +1418,9 @@ define lr_modnum(x, y, site) as:
     if y == 0:
         if lr_isintegerkind of (x) and lr_isintegerkind of (y):
             lr_rterr of [site, "attempt to perform 'n%0'"]
+    # Lua defines mininteger % -1 as zero without overflowing.
+    if lr_isintegerkind of (x) and lr_isintegerkind of (y) and x == -9223372036854775808 and y == -1:
+        return 0
     local m is x % y
     if m != 0 and (m < 0) != (y < 0):
         m is m + y
@@ -1414,8 +1430,12 @@ define lr_idivnum(x, y, site) as:
     if y == 0:
         if lr_isintegerkind of (x) and lr_isintegerkind of (y):
             lr_rterr of [site, "attempt to divide by zero"]
+    local ints is lr_isintegerkind of (x) and lr_isintegerkind of (y)
+    # Lua wraps the sole overflowing integer floor division.
+    if ints and x == -9223372036854775808 and y == -1:
+        return -9223372036854775808
     local q is floor of (x / y)
-    if not (lr_isintegerkind of (x) and lr_isintegerkind of (y)):
+    if not ints:
         return q * 1.0
     return q
 
@@ -1424,7 +1444,9 @@ define lr_pownum(x, y, site) as:
 
 define lr_unm(a, site) as:
     if type of a == "num":
-        return 0 - a
+        if num_type of (a) == "int":
+            return i64_wrapping_sub of [0, a]
+        return 0.0 - a
     local h is lr_metafield of [a, "__unm"]
     if h != null:
         return lr_callmm1 of [h, "unm", [a, a], site]
