@@ -1,1 +1,1 @@
-- Lua-defined integer results now retain integer kind across UTF-8 decoding, bitwise shifts, and table unpack bounds (#0).
+- Lua-defined integer results now retain integer kind across UTF-8 decoding, bitwise shifts, and table unpack bounds (#77).

@@ -1605,9 +1605,8 @@ define lr_bitop(op, a, b, site) as:
 # on the two's complement halves, so every representable result is exact.
 define lr_shiftl(x, n) as:
     if n <= -64 or n >= 64:
-        # lvm.c luaV_shiftl returns integer zero for an oversized shift;
-        # EigenScript's documented bitwise operation supplies that kind.
-        return num of "0"
+        # lvm.c luaV_shiftl returns integer zero for an oversized shift.
+        return 0
     if n == 0:
         if lr_isintegerkind of (x):
             return x
