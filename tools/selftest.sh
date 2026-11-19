@@ -270,6 +270,7 @@ do_compat_ref() {
   "$ROOT/tools/build_ref.sh" --check-not-compat "$REF" 2>/dev/null; p=$?
   plant compat-ref "compat=1 pristine=0" "compat=$c pristine=$p"
 }
+do_numlines() { "$ROOT/tools/numlines.sh" --selftest || bad=1; }
 dispatch() {
   local fn="do_${1//-/_}"
   if declare -F "$fn" >/dev/null; then "$fn"; else printf 'selftest: unknown plant %s\n' "$1" >&2; bad=1; fi
@@ -281,7 +282,7 @@ fi
 if [[ $# -eq 1 ]]; then
   dispatch "$1"
 else
-  for p in canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D dup-manifest builtin-missing builtin-uncited builtin-comment-citation builtin-string-citation; do
+  for p in numlines canary perturb silent early-exit floor-exit count-unspec-canary no-fraction floor-zero toothless callsite-toothless off-by-one assert-edges no-count lying-count unspecified-D unspecified-rc ops-drop rc99 compat-ref unstable-ref hang crash unsupported no-candidate wrong-ref orphan-file edited-test nondet-D dup-manifest builtin-missing builtin-uncited builtin-comment-citation builtin-string-citation; do
     dispatch "$p"
   done
 fi

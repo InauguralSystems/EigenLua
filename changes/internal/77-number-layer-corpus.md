@@ -1,0 +1,1 @@
+- Added non-stopping differential coverage for Lua number-layer edge cases. (#runtime-next)
