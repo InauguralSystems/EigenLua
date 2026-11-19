@@ -5,6 +5,8 @@ failure tables below preserve historical measurements; the number-layer measurem
 
 - **Runtime:** EigenScript v0.48.0 at pinned tag `phase2-consumers-1`. Older measurements below are explicitly historical.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
+- **Current grade (commit `987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19):**
+  `SUMMARY S=3/23 D=165/172 fail=15 diverge=7 hang=1 crash=0 unsupported=4 examined=195 assert=trusted`.
 - **Grader verdict, round 15 (Tier D, measured 2026-10-28):**
   `SUMMARY S=0/0 D=145/157 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=157 assert=n/a`.
 - **Grader verdict, round 15 (Tier S, measured 2026-10-28):**
@@ -35,8 +37,9 @@ own run, D=146/158, EigenLua#67, plus EigenLua#73's four matching rows, D=151/16
 Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
 20 matching rows without changing the divergence classes, and the #61/#62 library-edge programs add one MATCH
 (`utf8_codes_offset.lua`) and one row (`math_fmod_ult_reverse.lua`) that diverges only within the existing gap
-classes. Tier S has 23 rows. Across both tiers, the first-failure classes are 28 EigenScript gaps (27 before the
-#61/#62 additions), 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
+classes. Tier S has 23 rows.  The current class totals are computed from the
+current tables in the **Counts** section rather than carried forward from those
+historical measurements.
 
 ## Integer-kind row: before repair
 
@@ -66,15 +69,10 @@ the fourteen-row measurement was `TOTAL differ=105 incomplete=0`.  Per row:
 
 These historical differences were repaired or removed from the measured output in review 3. The former `float-sign` entry was a false gap: v0.48.0 documents `f64_bits`, and multiplication by `-1.0` constructs negative zero while its bits expose the sign.
 
-The current Tier D grade is `D=160/169`: the divergence rows are
-`math_fmod_ult_reverse` (embedded NUL), `nil_number` (not number-layer),
-`ops_matrix`
-(shift result kind),
-`str_byte_char_sub_rep`, `str_embedded_nul`, `str_len`, and `utf8_lib`
-(the string/NUL gap, plus `utf8_lib`'s current integer-kind front-end
-difference).  Compared with the historical table, `int_one_vs_one`,
-`num_print`, and `str_format_num` moved to MATCH; `nil_number`, the three
-number rows, and `utf8_lib` are now explicitly recorded.
+On commit `987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19,
+the Tier D grade is `D=165/172`.  Its seven divergence rows are exactly the
+seven rows in the Tier D table below; `nil_number.lua` and `ops_matrix.lua`
+both MATCH.
 
 ## Classes
 
@@ -91,15 +89,15 @@ A row's class is the class of its **first failure**. Its first ten failures were
 
 | class | rows | S | D |
 |---|---|---|---|
-| EigenScript gap | 28 | 15 | 13 |
-| out of scope | 6 | 6 | 0 |
-| front-end bug (open) | 0 | 0 | 0 |
+| EigenScript gap | 19 | 12 | 7 |
+| out of scope | 7 | 7 | 0 |
+| front-end bug (open) | 1 | 1 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 153 | 2 | 151 |
+| PASS / MATCH | 168 | 3 | 165 |
 
-**Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
-known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
-front-end bugs. Probe-found bugs, by issue:
+**Scope of the "front-end bug (open)" row: graded rows only.** Its one row is
+`sort.lua`; the count says nothing about code the corpus does not reach, and
+probing beyond it keeps finding front-end bugs. Probe-found bugs, by issue:
 - round-4 blind critic: EigenLua#13 (load reader), #14 (positions in C functions), #15 (three number bugs), #16
   (traceback of a thread), #17 (os.exit close), #18 (load mode), #19 (table.move hang), #20 (`<close>` with labels),
   #12 (`%p` substitute). All fixed in round 5, each with a D row (section below).
@@ -144,7 +142,7 @@ output is the same (vm-op-cost's timings vary).
 | `int64-for-count.eigs` | **Closed in v0.48.0.** | `false`, then `integer overflow in +` at line 14 | None. |
 | `no-float-subtype.eigs` | **Closed in v0.48.0.** | `1` / `1.0` / `3.0` / `9007199254740992.0` / `false` | None. |
 | `no-nonfinite.eigs` | **Closed in v0.48.0.** | `inf` / `inf` | None. |
-| `nul-in-string.eigs` | Strings are NUL-terminated. | `1` / `chr of 0: strings are NUL-terminated ...` | D: str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib. S: literals, pm, strings, tpack, utf8, calls (313). |
+| `nul-in-string.eigs` | Strings are NUL-terminated. | `1` | D: number_review_nul_pack, review2_kinds, str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib, math_fmod_ult_reverse. S: literals, pm, strings, tpack, utf8, calls (313). |
 | `call-depth.eigs` | 4093 VM frames, against Lua's 200000 levels; a Lua call costs three frames, so a program overflows at 1362 Lua levels (round 3 said about 5000 frames and two per call). | `{"kind": "limit", "message": "call stack overflow", "line": 18}` | S: calls (111), errors (553). |
 | `no-tail-calls.eigs` | No proper tail calls. | `{"kind": "limit", "message": "call stack overflow", "line": 13}` | S: calls (119, 122, 176). |
 | `no-weak-refs.eigs` | No weak references and no finalizers. | `[{"x": 1}]` (and `eigenscript --api` lists no weak/finalizer builtin) | S: closure (HANG), gengc, coroutine (417), gc. |
@@ -152,12 +150,12 @@ output is the same (vm-op-cost's timings vary).
 | `expr-nesting.eigs` | The parser refuses an expression about 60 levels deep; each Lua operator or constructor is a call with a list, two levels. Round 2 hoisted every 16th level to dodge this; round 3 removed that workaround. | `51` / `eval: parse error in code string` | S: errors (639, 100 nested table constructors). |
 | `list-literal-cap.eigs` | A list literal holds at most 1024 elements. Round 2 split long literals; round 3 removed that workaround. | `1024` / `eval: parse error in code string` | None graded. |
 | `nesting-limits.eigs` | 64 indentation levels and 128 compile-nesting levels, against Lua's ~200. | `eval: parse error in code string` / `eval: compile error in code string` | None graded (errors.lua's deeper testrep cases would reach it). |
-| `subscript-nesting.eigs` | Each subscript in one expression leaks a nesting level. Round 2 kept subscripts out of loaded chunks to dodge this; round 3 removed that workaround. | `300` / `eval: parse error in code string` | None graded. |
+| `subscript-nesting.eigs` | **Closed in v0.48.0.** Historical probe for a nesting leak from repeated subscripts. | `300` / `300` | None graded. |
 | `no-string-identity.eigs` | A string has no identity. `%p` of a string names its value (round 5, EigenLua#12): one string always formats alike, as in Lua, but an equal long string built elsewhere formats like the original. | `true` / `str` | S: literals (230: `getadd(sd) ~= a1`). pm.lua 413/416/426 and literals 225-228 now hold. |
 | `vm-op-cost.eigs` | Speed: the VM's cost per basic operation (0.25 us per character looked at, 0.18 us per call, 0.68 us per dict literal, 17 us per eval of a 7-line chunk) floors a front end written in EigenScript at about 534 us per constructs.lua chunk, 1.8 x the 300 us per load the row's budget allows (EigenLua#7). | four timings (vary by about 20%) | S: constructs (time, after its OOS line 306). |
 | `handler-after-overflow.eigs` | A catch runs only after the VM has unwound; nothing runs at the raise point, so an xpcall handler after a call-depth overflow has the whole stack again (EigenLua#11 item 3). | `[true, 0, true, 4094]` | S: errors (549-557, CD). |
-| `pipe-read-line.eigs` | `read_line` on a pipe drops a "\r" before "\n" and hides a missing final newline (EigenLua#10). Run with a pipe on stdin. | `["a", 1, "b", 1, null]` for both `a\r\nb` and `a\r\nb\n` | None graded (the grader feeds an empty pipe). |
-| `no-errno.eigs` | A failed file open gives no reason: `read_text` returns "" for a missing, an unreadable and an empty file alike, and nothing exposes errno, so `dofile`/`loadfile`'s `: No such file or directory` (strerror) cannot be translated (EigenLua#28). | `["", false]` / `["", true]` / `["", true]` (as root; see the file) | None graded (D rows avoid it; verybig.lua's `dofile` is OOS). |
+| `pipe-read-line.eigs` | **Closed in v0.48.0.** `read_line` now preserves CRLF and distinguishes a missing final newline. | for `a\r\nb`: `["a\r\n", 3, "b", 1, null]`; with final newline: `["a\r\n", 3, "b\n", 2, null]` | None graded (the grader feeds an empty pipe). |
+| `no-errno.eigs` | **Closed in v0.48.0.** A missing-file `read_text` now exposes the OS reason. | located `No such file or directory` error at line 15 | None graded (D rows avoid it; verybig.lua's `dofile` is OOS). |
 
 ## Round 4: peel to the row's end, with a count check
 
@@ -223,7 +221,7 @@ fails correctly.
 | goto.lua | **PASS** | 65 | | |
 | literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
 | locals.lua | FAIL | 2606 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
-| math.lua | FAIL | 22 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
+| math.lua | FAIL | 634 (floor 28098) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the first failure is now the result kind of `math.modf(3)` at line 106. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
 | sort.lua | FAIL | 20 (258507) | front-end difference | Unsigned-equivalent endpoint counting repairs line 54 and reaches 20 assertions; a later endpoint still raises `integer overflow in '+'` and remains to repair. |
@@ -233,9 +231,13 @@ fails correctly.
 | vararg.lua | **PASS** | 80 | | |
 | verybig.lua | UNSUPPORTED | 5 | out of scope | 141 OOS (`os.tmpname`); 147 OOS (`io.close`); 148 OOS (`dofile` of the file); 149 OOS (`os.remove`). Then it runs to the end. |
 
-## Tier D: DIVERGE (9 rows)
+## Tier D: DIVERGE (7 rows)
 
-Nine rows retain documented EigenScript gaps. Integer-kind decimal formatting and wrapping arithmetic moved `int_maxinteger.lua`, `int_past53.lua`, `int_wrap.lua`, and `rng_xoshiro.lua` from DIVERGE to MATCH on the next runtime; they are therefore no longer divergence rows. Each remaining first difference, every differing line of `ops_matrix.lua`, and every difference in the final row is one of the recorded EigenScript gaps.
+Seven rows retain the `nul-in-string` EigenScript gap. Integer-kind decimal
+formatting and wrapping arithmetic moved `int_maxinteger.lua`,
+`int_past53.lua`, `int_wrap.lua`, and `rng_xoshiro.lua` from DIVERGE to MATCH
+on the next runtime; `ops_matrix.lua` also MATCHes.  The first difference of
+each remaining row is recorded from the grade below.
 
 | row | first difference | class | evidence |
 |---|---|---|---|
@@ -836,8 +838,11 @@ ROW nil_number.lua lines=31 differ=2
 TOTAL differ=296
 ```
 
-### After repair
+### After repair (`987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19)
 
-No repair class was started, so the after measurement is identical to the before measurement:
-81, 57, 143, 13, and 2 differing lines respectively (296 total). Every residual line is
-listed in the paired output above and assigned to a not-started class in its row.
+`tools/numlines.sh` measures three differing lines across the fourteen-row
+population and no incomplete output.  Each is one expression charged to
+`nul-in-string`: the focused `number_review_nul_pack.lua` row and the literal,
+variable, and loaded forms of review expression E210 occupy three output lines
+in `review2-kinds.lua`.  The five rows in the historical table above now have
+zero differences.

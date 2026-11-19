@@ -1,1 +1,1 @@
-- Match Lua numeric parsing, arithmetic, endpoint loops, and formatting on EigenScript v0.48.0 (#78).
+- Match Lua's numeric parsing, endpoint loops, formatting, and result kinds in the pinned number-layer corpus (#77).
