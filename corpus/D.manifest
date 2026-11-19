@@ -169,3 +169,6 @@ number_text.lua unspecified-audit: ok
 number_keys.lua unspecified-audit: ok
 nil_number.lua unspecified-audit: ok
 number_kinds.lua unspecified-audit: ok
+
+review2_kinds.lua unspecified-audit: ok
+number_review_nul_pack.lua unspecified-audit: ok

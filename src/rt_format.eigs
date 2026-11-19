@@ -558,12 +558,23 @@ define lr_fx_literal(A, arg) as:
     if t == "str":
         return lr_fx_quoted of (v)
     if t == "num":
-        if lr_isint of (v):
+        if lr_isintegerkind of (v):
             if v == -9223372036854775808:
                 return "0x8000000000000000"
             return lr_numstr of (v)
-        local h is lr_fx_a of [abs of v, null, false, false]
-        if v < 0:
+        local cls is lr_txt_floatclass of (v)
+        if cls == "inf":
+            return "1e9999"
+        if cls == "-inf":
+            return "-1e9999"
+        if cls != "finite":
+            return "(0/0)"
+        local neg is v < 0 or (v == 0 and (f64_bits of v) < 0)
+        local av is v
+        if neg:
+            av is av * -1.0
+        local h is lr_fx_a of [av, null, false, false]
+        if neg:
             return "-" + h
         return h
     if v == null or t == "bool":

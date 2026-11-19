@@ -303,7 +303,7 @@ define em_desc(E, e) as:
 
 # lobject.c luaO_tointegerns: conversion used by luaO_rawarith's bitwise arm.
 define em_tointegerns(v) as:
-    if v[0] == "str" or v[1] != floor of v[1] or v[1] < -9223372036854775808 or v[1] >= 9223372036854775808:
+    if v[0] == "str" or v[1] != v[1] or v[1] < -9223372036854775808 or v[1] >= 9223372036854775808 or v[1] != floor of v[1]:
         return null
     return v[1]
 
@@ -312,31 +312,9 @@ define em_tointegerns(v) as:
 define em_shiftl(x, n) as:
     if n <= -64 or n >= 64:
         return 0
-    if n == 0:
-        return x
-    local hi is floor of (x / 4294967296)
-    local lo is x - hi * 4294967296
-    if hi < 0:
-        hi is hi + 4294967296
-    local M is 4294967295
-    if n > 0:
-        if n >= 32:
-            hi is (lo << (n - 32)) & M
-            lo is 0
-        else:
-            hi is ((hi << n) & M) | (lo >> (32 - n))
-            lo is (lo << n) & M
-    else:
-        local s is 0 - n
-        if s >= 32:
-            lo is hi >> (s - 32)
-            hi is 0
-        else:
-            lo is (lo >> s) | ((hi << (32 - s)) & M)
-            hi is hi >> s
-    if hi >= 2147483648:
-        hi is hi - 4294967296
-    return hi * 4294967296 + lo
+    if n >= 0:
+        return x << n
+    return x >> (0 - n)
 
 # Constant-folding counterpart of the runtime's exact signed division.
 define lr_ari_emit_idivint(x, y) as:
@@ -405,7 +383,7 @@ define em_rawarith(op, a, b) as:
             v is i64_wrapping_mul of [a[1], b[1]]
     elif op == "/" and b[1] != 0:
         v is a[1] / b[1]
-    elif op == "^" and not (a[1] < 0 and b[1] != floor of b[1]):
+    elif op == "^" and not (a[1] < 0 and (b[1] != b[1] or b[1] == 1.0 / 0 or b[1] == -1.0 / 0 or b[1] != floor of b[1])):
         v is pow of [a[1], b[1]]
     elif op == "%" and b[1] != 0:
         if not fl and a[1] == -9223372036854775808 and b[1] == -1:

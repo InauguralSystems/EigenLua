@@ -181,13 +181,16 @@ define lr_m_modf(A) as:
     if x != x:
         return [x, x]
     if x == 1e308 * 10 or x == 0 - (1e308 * 10):
-        return [x, 1.0 / x]
+        return [x, 0.0]
     local ip is 0
     if x >= 0:
         ip is floor of x
     else:
         ip is ceil of x
-    return [ip, x - ip]
+    local fp is x - ip
+    if fp == 0:
+        fp is 0.0
+    return [ip, fp]
 
 define lr_m_ult(A) as:
     local a is lr_checkint of [A, 0, "ult"]

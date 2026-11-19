@@ -8,9 +8,6 @@
 # Rows: str_embedded_nul, str_len, str_byte_char_sub_rep, utf8_lib (line 9:
 #       utf8.charpattern) (D); pm.lua (27), strings.lua (22), literals.lua
 #       (11), utf8.lua (57) (S).
-s is str_from_bytes of [97, 0, 98]
+bytes is [97, 0, 98]
+s is str_from_bytes of bytes
 print of (len of s)
-try:
-    print of (len of (chr of 0))
-catch e:
-    print of e.message

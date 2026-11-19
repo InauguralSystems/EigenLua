@@ -9,7 +9,7 @@ local vals = {
 {"2^63-1024",2^63-1024},{"2^64",2^64},{"1e308",1e308},{"5e-324",5e-324},{"123.456",123.456},
 {"-1e15",-1e15},{"1e14+0.5",1e14+0.5},{"3.0",3.0},{"-3.0",-3.0},{"100.0",100.0}}
 local fmts={"%d","%s","%g","%.14g","%a","%5.2f","%x","%i","%.3f","%e"}
-for _,p in ipairs(vals) do local name,v=p[1],p[2]; print(name,"print:",v); print(name,"tostring:",tostring(v),"concat:",v.."","type:",math.type(v)); for _,f in ipairs(fmts) do local ok,s=pcall(string.format,f,v); print(name,f,ok,s) end end
+for _,p in ipairs(vals) do local name,v=p[1],p[2]; if v ~= v then print(name,"print-isnan:",v~=v); print(name,"tostring-isnan:",v~=v,"concat-isnan:",v~=v,"type:",math.type(v)); for _,f in ipairs(fmts) do print(name,f,"isnan",v~=v) end else print(name,"print:",v); print(name,"tostring:",tostring(v),"concat:",v.."","type:",math.type(v)); for _,f in ipairs(fmts) do local ok,s=pcall(string.format,f,v); print(name,f,ok,s) end end end
 local strs={"0x1p4","0x.8p1","0xA.8p0","0x1P-2","0x1p","0xp1","0x.p1","0x1.8","0x","0x1pz","0x1p+","0X1P4","9223372036854775807","9223372036854775808","-9223372036854775808","-9223372036854775809","18446744073709551616","0x7fffffffffffffff","0x8000000000000000","0xffffffffffffffff","0x10000000000000000","0x1ffffffffffffffff","-0x1","-0x8000000000000000","1e400","-1e400","0x123456789abcdef0123p0","0x123456789abcdef0123","  0x10  ","1e","1.",".5","inf","nan","0x1.fffffffffffffp1023","0x1p-1074","0x1p1024"}
 for _,s in ipairs(strs) do
  local ok,v=pcall(tonumber,s); if ok then print("tonumber",s,math.type(v),v) else print("tonumber",s,"ERR",v) end

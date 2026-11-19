@@ -144,6 +144,11 @@ define lr_pk_f32bits(x) as:
     local sign is 0
     if x < 0 or (x == 0 and (f64_to_bytes of x)[0] >= 128):
         sign is 2147483648
+    local cls is lr_txt_floatclass of (x)
+    if cls == "inf" or cls == "-inf":
+        return sign + 2139095040
+    if cls != "finite":
+        return 2143289344
     local ax is abs of x
     if ax == 0:
         return sign

@@ -2,4 +2,6 @@
 # docs/SPEC.md N12 says every float NaN becomes 0x7FF8000000000000, so no
 # documented scalar operation can distinguish Lua's positive and negative
 # NaN spellings after construction.
-print of [(f64_bits of (0.0 / 0.0)), (f64_bits of (-(0.0 / 0.0)))]
+positive is f64_bits of (0.0 / 0.0)
+negative is f64_bits of (-(0.0 / 0.0))
+print of [positive, negative]

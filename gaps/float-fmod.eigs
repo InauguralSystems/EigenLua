@@ -1,5 +1,0 @@
-# EigenScript exposes `%` (floor remainder), but no documented scalar fmod
-# operation.  Computing a truncating remainder through a / b loses the
-# remainder for huge quotients, while the runtime's internal libm fmod is not
-# a language builtin.
-print of ((1e308 / 3) * 3)

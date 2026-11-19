@@ -302,7 +302,13 @@ define lr_at(l, i) as:
     return null
 
 define lr_isint(x) as:
-    return x == floor of x and x >= -9223372036854775808 and x < 9223372036854775808
+    return lr_isfinite of (x) and x == floor of x and x >= -9223372036854775808 and x < 9223372036854775808
+
+# EigenScript's rounding and absolute-value builtins deliberately reject
+# non-finite floats.  Keep the test in one place so Lua values are classified
+# before any such builtin is reached.
+define lr_isfinite(x) as:
+    return lr_txt_floatclass of (x) == "finite"
 
 define lr_isintegerkind(x) as:
     return num_type of (x) == "int"
@@ -1494,6 +1500,8 @@ define lr_idivnum(x, y, site) as:
     if y == 0:
         return x / y
     local d is x / y
+    if not (lr_isfinite of (d)):
+        return d
     # floor(-0.0) canonicalizes on EigenScript; Lua's float floor division
     # preserves the quotient's negative zero.
     if d == 0:
@@ -1582,7 +1590,7 @@ define lr_toint(v) as:
     if type of v != "num":
         return null
     local x is v
-    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+    if not (lr_isfinite of (x)) or x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         return null
     return x
 
@@ -1607,30 +1615,9 @@ define lr_shiftl(x, n) as:
     if n <= -64 or n >= 64:
         # lvm.c luaV_shiftl returns integer zero for an oversized shift.
         return 0
-    if n == 0:
-        if lr_isintegerkind of (x):
-            return x
-        return i64_wrapping_add of [x, 0]
-    local w is lr_u64 of (x)
-    local hi is w[0]
-    local lo is w[1]
-    local M is 4294967295
-    if n > 0:
-        if n >= 32:
-            hi is (lo << (n - 32)) & M
-            lo is 0
-        else:
-            hi is ((hi << n) & M) | (lo >> (32 - n))
-            lo is (lo << n) & M
-    else:
-        local s is 0 - n
-        if s >= 32:
-            lo is hi >> (s - 32)
-            hi is 0
-        else:
-            lo is (lo >> s) | ((hi << (32 - s)) & M)
-            hi is hi >> s
-    return lr_rng_toint of ([hi, lo])
+    if n >= 0:
+        return x << n
+    return x >> (0 - n)
 
 define lr_band(a, b, site) as:
     return lr_bitop of ["&", a, b, site]
@@ -1793,6 +1780,8 @@ define lr_forprep(a, b, c, site) as:
         if c > 0:
             if lb > 9223372036854775807:
                 lim is 9223372036854775807
+            elif not (lr_isfinite of (lb)):
+                return [a, 0, c, 1, 0]
             else:
                 lim is floor of lb
             if a > lim:
@@ -1800,6 +1789,8 @@ define lr_forprep(a, b, c, site) as:
         else:
             if lb < -9223372036854775807:
                 lim is i64_wrapping_sub of [-9223372036854775807, 1]
+            elif not (lr_isfinite of (lb)):
+                return [a, 0, c, 1, 0]
             else:
                 lim is ceil of lb
             if a < lim:
@@ -1881,7 +1872,7 @@ define lr_checknum(A, i, fname) as:
 # representation here: that row diverges, the direct translation.
 define lr_checkint(A, i, fname) as:
     local x is lr_checknum of [A, i, fname]
-    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+    if not (lr_isfinite of (x)) or x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         lr_argerr of [i + 1, fname, "number has no integer representation"]
     return x
 
@@ -2212,7 +2203,7 @@ define lr_b_next(A) as:
     # luaH_next asks the hash part for the exact TValue supplied as its
     # cursor.  Unlike ordinary table indexing, that lookup does not
     # canonicalize an integral float to the equal integer key.
-    if isfloat and type of k == "num" and k == floor of k:
+    if isfloat and type of k == "num" and lr_isfinite of (k) and k == floor of k:
         lr_throw of ("invalid key to 'next'")
     return lr_next of [t, k]
 
@@ -2449,20 +2440,21 @@ define lr_t_unpack(A) as:
         j is lr_checkint of [A, 2, "unpack"]
     if i > j:
         return []
-    # ltablib.c tunpack computes (lua_Unsigned)e - i, so opposite signed
-    # endpoints become a huge unsigned span instead of overflowing in `-`.
+    # ltablib.c tunpack rejects when lua_checkstack cannot reserve the result
+    # count.  In a library call the reference's 1,000,000-slot stack has 12
+    # live slots, so 999,987 results fit and 999,988 do not.
     local huge is false
     if i >= 0:
-        if j >= 999900:
-            huge is i <= j - 999900
+        if j >= 999987:
+            huge is i <= j - 999987
     elif j < 0:
-        if i <= -999900:
-            huge is j >= i + 999900
+        if i <= -999987:
+            huge is j >= i + 999987
     else:
-        if i < -999900:
+        if i < -999987:
             huge is true
         else:
-            huge is j >= 999900 + i
+            huge is j >= 999987 + i
     if huge:
         lr_throw of ((lr_where of (1)) + "too many results to unpack")
     local n is j - i
@@ -2637,10 +2629,14 @@ define lr_auxsort(t, cmp, lo, up, rnd) as:
 
 define lr_m_floor(A) as:
     local x is lr_checknum of [A, 0, "floor"]
+    if not (lr_isfinite of (x)):
+        return [x]
     return [floor of x]
 
 define lr_m_ceil(A) as:
     local x is lr_checknum of [A, 0, "ceil"]
+    if not (lr_isfinite of (x)):
+        return [x]
     return [ceil of x]
 
 define lr_m_abs(A) as:
@@ -2648,6 +2644,10 @@ define lr_m_abs(A) as:
     # lmathlib.c math_abs uses unsigned negation for lua_Integer.
     if lr_isintegerkind of (x) and x < 0:
         return [i64_wrapping_sub of [0, x]]
+    if not (lr_isfinite of (x)):
+        if (f64_bits of x) < 0:
+            return [x * -1.0]
+        return [x]
     return [abs of x]
 
 define lr_m_sqrt(A) as:
@@ -2716,18 +2716,21 @@ define lr_m_fmod(A) as:
         return [r]
     # C fmod(x, +/-inf) is x, while fmod(+/-inf, y) is NaN.  These cases
     # are settled without needing the runtime's missing truncating remainder.
+    if a != a or b != b:
+        return [(a * 1.0) + (b * 1.0)]
     if b == 1.0 / 0 or b == -1.0 / 0:
         return [a * 1.0]
     if a == 1.0 / 0 or a == -1.0 / 0:
         return [a - a]
-    local q is a / b
-    if q < 0:
-        q is ceil of q
-    else:
-        q is floor of q
-    local r2 is a - q * b
-    if r2 == 0:
-        return [a * 0.0]
+    local aa is a
+    local bb is b
+    if aa < 0:
+        aa is aa * -1.0
+    if bb < 0:
+        bb is bb * -1.0
+    local r2 is aa % bb
+    if (f64_bits of a) < 0:
+        r2 is r2 * -1.0
     return [r2]
 
 # ------------------------------------------------------------ io / os
