@@ -632,7 +632,12 @@ define lr_s_format(A) as:
                 lr_throw of ((lr_where of (1)) + "specifier '%q' cannot have modifiers")
             append of [parts, lr_fx_literal of [A, arg]]
         elif conv == "s":
-            local s is lr_tostr of (A[arg])
+            local sv is A[arg]
+            local s is lr_tostr of (sv)
+            # `%s` is often used to emit Lua source.  Preserve every exact
+            # integer digit instead of routing an int64 through double bytes.
+            if type of sv == "num" and lr_isintegerkind of (sv):
+                s is str of sv
             if len of spec == 0:
                 append of [parts, s]
             else:

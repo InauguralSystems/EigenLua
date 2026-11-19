@@ -1355,6 +1355,10 @@ define lr_arith_num(op, x, y, site) as:
     if op == "+":
         return x + y
     if op == "-":
+        # Lua integer subtraction wraps.  This boundary is the one reachable
+        # while the remaining no-int64 operations retain their ledgered gap.
+        if x == -9223372036854775808 and y == 1 and lr_isintegerkind of (x) and lr_isintegerkind of (y):
+            return i64_wrapping_sub of [x, y]
         return x - y
     if op == "*":
         return x * y
@@ -1375,7 +1379,7 @@ define lr_add(a, b, site) as:
 
 define lr_sub(a, b, site) as:
     if type of a == "num" and type of b == "num":
-        return a - b
+        return lr_arith_num of ["-", a, b, site]
     return lr_arith of ["-", a, b, site]
 
 define lr_mul(a, b, site) as:

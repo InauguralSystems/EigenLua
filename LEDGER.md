@@ -184,8 +184,8 @@ fails correctly.
 | gengc.lua | FAIL | 18 (19) | EigenScript gap | 122 WK. Then it runs to the end. |
 | goto.lua | **PASS** | 65 | | |
 | literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
-| locals.lua | FAIL | 2175 (2735) | EigenScript gap | 88-104 I64 (`until p <= 0` waits for overflow; past 2^53 the loaded chunk's `a == 2^i` fails); 262 OOS (`getinfo(2).name`); 463 C of 451 OOS (`getinfo(2).name` in `__close`); 493 OOS (`traceback` function names); 797, 804 OOS (`sethook`); 574, 576 C. Then it runs to the end. |
-| math.lua | FAIL | 3 (floor 28124) | EigenScript gap | 13 I64; 29, 30 INF; 41 FLT (`math.type(0.0)`); 99, 100, 101, 102, 103 INF; 104 C. |
+| locals.lua | FAIL | 2581 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
+| math.lua | FAIL | 18 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
 | sort.lua | FAIL | 18 (258507) | EigenScript gap | Exact int64 values now pass four more assertions; the remaining first failure is still an EigenScript gap. |
