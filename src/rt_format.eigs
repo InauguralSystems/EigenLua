@@ -577,6 +577,8 @@ define lr_fx_checkint(A, arg) as:
         lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
     if lr_txt_floatclass of (x) != "finite" or x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         lr_argerr of [arg + 1, "format", "number has no integer representation"]
+    if x == 0:
+        return 0
     return x
 
 define lr_fx_checknum(A, arg) as:

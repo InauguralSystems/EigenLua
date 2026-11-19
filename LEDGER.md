@@ -1,9 +1,9 @@
-# EigenLua front end: divergence ledger (round 15)
+# EigenLua front end: divergence ledger (number-layer repair 3)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
 failure tables below preserve historical measurements; the number-layer measurement below uses EigenScript v0.48.0.
 
-- **Historical runtime:** EigenScript v0.47.0 at commit `3d8a14b49e88a59a37e1d3501891afe2d430ffcb` (round 15). The current number-layer run uses pinned EigenScript v0.48.0 (`phase2-consumers-1`).
+- **Runtime:** EigenScript v0.48.0 at pinned tag `phase2-consumers-1`. Older measurements below are explicitly historical.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
 - **Grader verdict, round 15 (Tier D, measured 2026-10-28):**
   `SUMMARY S=0/0 D=145/157 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=157 assert=n/a`.
@@ -29,7 +29,7 @@ failure tables below preserve historical measurements; the number-layer measurem
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-The historical Tier D measurement had 164 rows: 151 matches and 13 divergences listed below
+The historical Tier D measurement had 164 rows; its historical counts are retained below
 (159 rows measured after the #61/#62 additions, plus #55's `tbl_sparse_offset_descending.lua`, which MATCHed in its
 own run, D=146/158, EigenLua#67, plus EigenLua#73's four matching rows, D=151/164 on v0.48.0).
 Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
@@ -37,6 +37,28 @@ Rounds 3 through 13 and their additions are described in the historical material
 (`utf8_codes_offset.lua`) and one row (`math_fmod_ult_reverse.lua`) that diverges only within the existing gap
 classes. Tier S has 23 rows. Across both tiers, the first-failure classes are 28 EigenScript gaps (27 before the
 #61/#62 additions), 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
+
+## Current five-row number-layer measurement
+
+| row | lines | differing |
+|---|---:|---:|
+| `number_arith.lua` | 1428 | 0 |
+| `number_arith2.lua` | 142 | 1 |
+| `number_text.lua` | 555 | 9 |
+| `number_keys.lua` | 30 | 0 |
+| `nil_number.lua` | 31 | 2 |
+
+All 12 differences have exactly one owner: `number_arith2.lua` f24 is the exact huge-quotient truncating remainder in `gaps/float-fmod.eigs`; the nine negative-NaN printing lines in `number_text.lua` are the canonical sign loss in `gaps/nan-sign.eigs`; and the two `nil_number.lua` lines (`#{nil, 1}` and `select('#', table.unpack({1, nil, 3}))`) are not the number layer. The former `float-sign` entry was a false gap: v0.48.0 documents `f64_bits`, and multiplication by `-1.0` constructs negative zero while its bits expose the sign.
+
+The current Tier D grade is `D=160/169`: the divergence rows are
+`math_fmod_ult_reverse` (embedded NUL), `nil_number` (not number-layer),
+`number_arith2` (float-fmod), `number_text` (NaN sign), `ops_matrix`
+(shift result kind),
+`str_byte_char_sub_rep`, `str_embedded_nul`, `str_len`, and `utf8_lib`
+(the string/NUL gap, plus `utf8_lib`'s current integer-kind front-end
+difference).  Compared with the historical table, `int_one_vs_one`,
+`num_print`, and `str_format_num` moved to MATCH; `nil_number`, the three
+number rows, and `utf8_lib` are now explicitly recorded.
 
 ## Classes
 
@@ -102,10 +124,10 @@ output is the same (vm-op-cost's timings vary).
 
 | file | gap | stdout | rows it explains |
 |---|---|---|---|
-| `no-int64.eigs` | No 64-bit integer, so values past 2^53 round and nothing wraps. `math.maxinteger` is the double 2^63, which has no integer representation. | `9007199254740992` / `9.223372036854776e+18` / `true` | D: int_maxinteger, int_past53, int_wrap, rng_xoshiro. S: bitwise, locals, math, nextvar, sort, tpack (hex wrap). |
-| `int64-for-count.eigs` | An instance of no-int64: `for i = maxinteger - 1, maxinteger` cannot count 2 rounds, both bounds are 2^63. | `true` / `true` | None graded (round-3 critic). nextvar.lua's loops over maxinteger end now but count wrongly (690-704). |
-| `no-float-subtype.eigs` | One number type, so 1.0 cannot be told from 1. | `1` / `1` / `3` / `9007199254740992` / `true` | D: int_one_vs_one, ops_matrix, str_format_num. S: math (41), nextvar (624). |
-| `no-nonfinite.eigs` | No inf/nan. Every finite value in (1e308, DBL_MAX], including a literal, clamps to 1e308 (and likewise for negatives); x/0 raises. | `1e+308` / `division by zero` | D: num_print, ops_matrix. S: events, math. |
+| `no-int64.eigs` | **Closed in v0.48.0.** | `9007199254740993`, then `integer overflow in +` at line 13 | Historical rows only. |
+| `int64-for-count.eigs` | **Closed in v0.48.0.** | `false`, then `integer overflow in +` at line 14 | None. |
+| `no-float-subtype.eigs` | **Closed in v0.48.0.** | `1` / `1.0` / `3.0` / `9007199254740992.0` / `false` | None. |
+| `no-nonfinite.eigs` | **Closed in v0.48.0.** | `inf` / `inf` | None. |
 | `nul-in-string.eigs` | Strings are NUL-terminated. | `1` / `chr of 0: strings are NUL-terminated ...` | D: str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib. S: literals, pm, strings, tpack, utf8, calls (313). |
 | `call-depth.eigs` | 4093 VM frames, against Lua's 200000 levels; a Lua call costs three frames, so a program overflows at 1362 Lua levels (round 3 said about 5000 frames and two per call). | `{"kind": "limit", "message": "call stack overflow", "line": 18}` | S: calls (111), errors (553). |
 | `no-tail-calls.eigs` | No proper tail calls. | `{"kind": "limit", "message": "call stack overflow", "line": 13}` | S: calls (119, 122, 176). |
@@ -171,7 +193,7 @@ fails correctly.
 
 | row | verdict | count (ref) | class | first ten failures (line: class); round 3. Rows re-peeled in round 4 are in the section above |
 |---|---|---|---|---|
-| bitwise.lua | FAIL | 12 (1326) | EigenScript gap | Historical classification; the current first failure must be remeasured because number formatting and subtraction are front-end differences. |
+| bitwise.lua | FAIL | 19 (1326) | front-end difference | Current run reaches 19 assertions, then `integer overflow in -`; no longer a runtime gap. |
 | calls.lua | FAIL | 28 (20114) | EigenScript gap | 119 TC (`deep(30000)`); 111 CD; 120 C; 122 TC; 123 C; 176 TC (tail calls through 100 `__call`s); 313 NUL; 314 OOS (`getinfo(f).source`); 331 OOS (`string.dump`); 332 C. |
 | closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
 | constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
@@ -185,10 +207,10 @@ fails correctly.
 | goto.lua | **PASS** | 65 | | |
 | literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
 | locals.lua | FAIL | 2606 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
-| math.lua | FAIL | 18 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
+| math.lua | FAIL | 22 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
-| sort.lua | FAIL | 18 (258507) | EigenScript gap | Historical classification; the current first failure must be remeasured because number formatting and subtraction are front-end differences. |
+| sort.lua | FAIL | 18 (258507) | front-end difference | Current first failure is line 54: the endpoint `unpack` call lacks the expected `too many results` error. |
 | strings.lua | FAIL | 3 (332) | EigenScript gap | 22, 23, 24, 25, 27, 29, 30, 33 NUL; 51 I64; 53 NUL. |
 | tpack.lua | FAIL | 6 (471) | EigenScript gap | 51, 53, 54, 55 NUL (packed bytes hold zeros); 68, 69, 70 NUL; 75 I64 (a hex literal that wraps mod 2^64); 76, 77 C. Line 63 (`unpack("i7", ...)` of -1 gave 0) was a front-end bug, fixed. |
 | utf8.lua | FAIL | 61 (1193) | EigenScript gap | 57, 83 NUL (`utf8.charpattern`); 85, 87, 89, 90 C; 42, 51, 52 NUL (`check` of strings with U+0000, lines 218 and 236); 80 C. With `utf8.charpattern` replaced and those two checks blanked, the whole file passes (871 asserts). |
@@ -201,15 +223,15 @@ Nine rows retain documented EigenScript gaps. Integer-kind decimal formatting an
 
 | row | first difference | class | evidence |
 |---|---|---|---|
-| int_one_vs_one.lua | line 2 `1.0` vs `1` | EigenScript gap | `no-float-subtype` |
-| num_print.lua | line 1 (nothing printed) | EigenScript gap | front-end Class C: `3 // 0.0` raises before the later probes |
-| ops_matrix.lua | line 24 `float -0` vs `integer 0` | EigenScript gap | `no-float-subtype`, `no-int64`, `no-nonfinite` |
+| ops_matrix.lua | line 5665 `<< 7 4 integer 0` vs `float 0` | front-end difference | Shift result kind remains to repair; not a runtime gap. |
 | str_byte_char_sub_rep.lua | line 1 `65 0 200` vs `65 nil` | EigenScript gap | `nul-in-string` |
 | str_embedded_nul.lua | line 1 `4` vs `1` | EigenScript gap | `nul-in-string` |
-| str_format_num.lua | line 11 `1 1.0` vs `1 1` | EigenScript gap | `no-float-subtype` (`%s` of 1.0) |
 | str_len.lua | line 3 `3` vs `1` | EigenScript gap | `nul-in-string` |
-| utf8_lib.lua | line 9 `utf8.charpattern` bytes | EigenScript gap | `nul-in-string` |
-| math_fmod_ult_reverse.lua | line 7: `2.0` prints as `2`; line 16: reversed embedded-NUL string is truncated | EigenScript gaps | `no-float-subtype` (line 7) and `nul-in-string` (line 16). The signed `fmod` remainder and float zero divisor match; the int64 endpoint probes at lines 12 and 13 raise. |
+| utf8_lib.lua | line 2 integer code points print as floats | front-end difference | Integer-kind UTF-8 decoding remains to repair; later differences are `nul-in-string`. |
+| math_fmod_ult_reverse.lua | line 16: reversed embedded-NUL string is truncated | EigenScript gap | `nul-in-string`; output lines 12 and 13 at the int64 endpoints match exactly. |
+| nil_number.lua | line 22 `2 2 7` vs `2 0 7` | not number layer | `#{nil,1}` and the later `table.unpack` arity line are table semantics. |
+| number_arith2.lua | line 99 f24 `2.0` vs `0.0` | EigenScript gap | `float-fmod` |
+| number_text.lua | line 289 `nan` vs `-nan` | EigenScript gap | `nan-sign`; all nine differences are formatting of that value. |
 
 ## Front-end bugs fixed in round 3
 

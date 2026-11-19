@@ -550,9 +550,11 @@ define lr_str2num(s) as:
             local shi is whi
             if shi >= 2147483648:
                 shi is shi - 4294967296
-            v is shi * 4294967296 + wlo
+            # Lua 5.4 manual §3.1: hexadecimal integer constants wrap
+            # modulo 2^64; build the signed word with wrapping operations.
+            v is i64_wrapping_add of [i64_wrapping_mul of [shi, 4294967296], wlo]
         if neg:
-            return 0 - v
+            return i64_wrapping_sub of [0, v]
         return v
     local st is i
     local nd is 0
@@ -581,6 +583,23 @@ define lr_str2num(s) as:
         text is "0" + text
     if text[len of text - 1] == ".":
         text is text + "0"
+    # lobject.c l_str2int consumes the sign together with decimal digits.
+    # Accumulate negative so Lua's -2^63 endpoint never requires +2^63.
+    if index_of of [text, "."] < 0 and index_of of [text, "e"] < 0 and index_of of [text, "E"] < 0:
+        local z is st
+        local acc is 0
+        local ok is 1
+        loop while z < n:
+            local d is (ord of s[z]) - 48
+            if acc < -922337203685477580 or (acc == -922337203685477580 and d > (7 + neg)):
+                ok is 0
+            if ok:
+                acc is acc * 10 - d
+            z is z + 1
+        if ok:
+            if neg:
+                return acc
+            return 0 - acc
     local v is num of text
     if neg:
         return 0 - v
@@ -1474,7 +1493,12 @@ define lr_idivnum(x, y, site) as:
     # remain values rather than being passed to EigenScript's finite floor.
     if y == 0:
         return x / y
-    local q is floor of (x / y)
+    local d is x / y
+    # floor(-0.0) canonicalizes on EigenScript; Lua's float floor division
+    # preserves the quotient's negative zero.
+    if d == 0:
+        return d
+    local q is floor of d
     return q * 1.0
 
 define lr_pownum(x, y, site) as:
@@ -1484,7 +1508,9 @@ define lr_unm(a, site) as:
     if type of a == "num":
         if num_type of (a) == "int":
             return i64_wrapping_sub of [0, a]
-        return 0.0 - a
+        # Multiplication preserves IEEE-754's zero sign on EigenScript,
+        # whereas subtraction canonicalizes 0.0 - 0.0 to positive zero.
+        return a * -1.0
     local h is lr_metafield of [a, "__unm"]
     if h != null:
         return lr_callmm1 of [h, "unm", [a, a], site]
@@ -1752,7 +1778,9 @@ define lr_ari_forstep(i, step, count) as:
     return i + step
 
 define lr_forprep(a, b, c, site) as:
-    if type of a == "num" and type of c == "num" and lr_isint of (a) and lr_isint of (c):
+    # lvm.c uses the integer loop only when initial value and step convert
+    # to integer-kind values; an integral float still selects a float loop.
+    if type of a == "num" and type of c == "num" and lr_isintegerkind of (a) and lr_isintegerkind of (c):
         if c == 0:
             lr_rterr of [site, "'for' step is zero"]
         local lb is lr_fornum of [b, "limit", site]
@@ -1953,7 +1981,7 @@ define lr_b_tonumber(A) as:
             break
         if d >= bs:
             return [null]
-        acc is acc * bs + d
+        acc is i64_wrapping_add of [i64_wrapping_mul of [acc, bs], d]
         nd is nd + 1
         i is i + 1
     if nd == 0:
@@ -1963,7 +1991,7 @@ define lr_b_tonumber(A) as:
     if i != n:
         return [null]
     if neg:
-        return [0 - acc]
+        return [i64_wrapping_sub of [0, acc]]
     return [acc]
 
 define lr_b_error(A) as:
@@ -2649,7 +2677,9 @@ define lr_m_tointeger(A) as:
     local x is lr_arnum of (lr_arg of [A, 0])
     local mini is 0 - 9223372036854775807 - 1
     if x != null and x == x and x <= 9223372036854775807 and x >= mini and lr_isint of (x):
-        return [x]
+        # luaV_tointeger returns an integer-kind value even when the input
+        # was an integral float (Lua 5.4 manual, math.tointeger).
+        return [floor of x]
     lr_checkany of [A, 0, "tointeger"]
     return [null]
 
@@ -2668,12 +2698,21 @@ define lr_m_fmod(A) as:
         if r != 0 and (r < 0) != (a < 0):
             r is r - b
         return [r]
+    # C fmod(x, +/-inf) is x, while fmod(+/-inf, y) is NaN.  These cases
+    # are settled without needing the runtime's missing truncating remainder.
+    if b == 1.0 / 0 or b == -1.0 / 0:
+        return [a * 1.0]
+    if a == 1.0 / 0 or a == -1.0 / 0:
+        return [a - a]
     local q is a / b
     if q < 0:
         q is ceil of q
     else:
         q is floor of q
-    return [a - q * b]
+    local r2 is a - q * b
+    if r2 == 0:
+        return [a * 0.0]
+    return [r2]
 
 # ------------------------------------------------------------ io / os
 

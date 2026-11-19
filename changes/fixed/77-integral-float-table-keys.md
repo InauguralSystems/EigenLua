@@ -1,1 +1,1 @@
-- Canonicalize integral float table keys to their equal integer keys on EigenScript's exact-number runtime, matching Lua 5.4 (`t[5]` and `t[5.0]` are one entry) (#77).
+- Canonicalize integral float table keys to equal integer keys (`t[5]` and `t[5.0]` are one entry) (#77).

@@ -244,9 +244,8 @@ define lex_long(src, i, lv, line, is_comment) as:
 # Numeral at i (llex.c read_numeral). Returns [next_index, value, is_float].
 # Like Lua, it takes every hex digit and '.', an exponent mark with its
 # sign, and one letter touching the end, then converts the whole text or
-# reports it as malformed. Hex integers wrap modulo 2^64 in Lua; that wrap
-# is not representable on one double and is left to the value (an
-# EigenScript gap, see LEDGER.md).
+# reports it as malformed. Hex integers wrap modulo 2^64 (Lua 5.4 manual
+# §3.1); the two-limb conversion below implements that boundary directly.
 define lex_number(src, i, line) as:
     local n is len of src
     local j is i + 1
@@ -391,7 +390,7 @@ define lex_str2num(s) as:
         local shi is whi
         if shi >= 2147483648:
             shi is shi - 4294967296
-        local val is shi * 4294967296 + wlo
+        local val is i64_wrapping_add of [i64_wrapping_mul of [shi, 4294967296], wlo]
         if isf:
             val is lex_hexd of [ds, exp]
         return [val, isf]

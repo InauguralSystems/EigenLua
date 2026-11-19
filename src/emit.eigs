@@ -518,6 +518,10 @@ define em_nulstr(e) as:
     return "(str_from_bytes of (" + (em_listlit of (bs)) + "))"
 
 define em_numlit(E, v) as:
+    # `num` accepts overflow spellings such as 1e400, but not the formatted
+    # words inf/nan.  Emit their IEEE bytes without first reparsing `str`.
+    if v != v or v == 1.0 / 0 or v == -1.0 / 0:
+        return "(f64_from_bits of (" + (str of (f64_bits of v)) + "))"
     local s is str of v
     if (num of s) == v and index_of of [s, "e"] < 0 and index_of of [s, "n"] < 0:
         if v < 0:
@@ -678,6 +682,10 @@ define em_expr(E, e) as:
     if k == "False":
         return "false"
     if k == "Num":
+        # A source integer at the signed boundary cannot be respelled as a
+        # negative EigenScript literal: its lexer first sees +2^63.
+        if not e.fl and e.v == -9223372036854775808:
+            return "(i64_wrapping_sub of [-9223372036854775807, 1])"
         return em_numlit of [E, e.v]
     if k == "Str":
         if e.z:

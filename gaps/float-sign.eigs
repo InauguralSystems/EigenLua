@@ -1,4 +1,0 @@
-# EigenScript has no documented scalar sign-bit or copy-sign operation.  Its
-# subtraction canonicalizes the zero in 0.0 - 0.0, so unary negation cannot
-# produce Lua's negative zero without parsing formatted numeric text.
-print of (0.0 - 0.0)

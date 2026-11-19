@@ -1,1 +1,1 @@
-Adapt null recognition, signed remainders, int64 endpoints and numeric formatting to the next EigenScript number model, including long hexadecimal float significands. (#78)
+- Match Lua numeric parsing, arithmetic, endpoint loops, and formatting on EigenScript v0.48.0 (#78).

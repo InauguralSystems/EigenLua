@@ -11,6 +11,10 @@ Every ledger entry is exactly one of:
 - **unspecified** behavior, fixed in the corpus;
 - **out of scope**, listed below and never graded.
 
+## Gaps standing on EigenScript v0.48.0
+
+The current number-layer runtime gaps are `gaps/nan-sign.eigs` (canonical scalar NaNs lose source sign) and `gaps/float-fmod.eigs` (no exact truncating float remainder). `float-sign` is closed because documented `f64_bits` observes the sign and multiplication by `-1.0` constructs negative zero. The historical `no-int64`, `int64-for-count`, `no-float-subtype`, and `no-nonfinite` programs are retained as closed-history reproducers, with current output in `LEDGER.md`.
+
 ## The oracle
 
 The reference is **PUC-Rio Lua 5.4.9**, built from the release tarball and verified against the SHA-256 that lua.org
