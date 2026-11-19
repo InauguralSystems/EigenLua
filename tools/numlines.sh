@@ -3,7 +3,7 @@ set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 REF=${REF:-"$ROOT/.ref/bin/lua"}
 CANDIDATE=${CANDIDATE:-"$ROOT/bin/eigenlua"}
-rows='number_arith.lua:1428 number_arith2.lua:142 number_text.lua:555 number_keys.lua:30 nil_number.lua:31'
+rows='number_arith.lua:1428 number_arith2.lua:142 number_text.lua:555 number_keys.lua:30 nil_number.lua:31 number_kinds.lua:60'
 work=$(mktemp -d "${TMPDIR:-/tmp}/eigenlua-numlines.XXXXXX") || exit 2
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 compare() {

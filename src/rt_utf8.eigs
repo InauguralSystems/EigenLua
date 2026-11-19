@@ -46,7 +46,10 @@ define lr_u8_decode(s, i, strict) as:
     if strict:
         if res > lr_u8_MAXUNICODE or (res >= 55296 and res <= 57343):
             return null
-    return [nxt, res]
+    # lutf8lib.c utf8_decode returns an unsigned integer code point.  `pow`
+    # above is floating-point in EigenScript, so explicitly restore the Lua
+    # integer kind after the value has been validated.
+    return [nxt, floor of res]
 
 # luaO_utf8esc: the bytes of code point x (up to 2^31 - 1).
 define lr_u8_esc(x) as:

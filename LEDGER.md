@@ -38,6 +38,13 @@ Rounds 3 through 13 and their additions are described in the historical material
 classes. Tier S has 23 rows. Across both tiers, the first-failure classes are 28 EigenScript gaps (27 before the
 #61/#62 additions), 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
 
+## Integer-kind row: before repair
+
+At base `6048882a21e3228929f09de44679e4419f19beed`, the new 60-line
+`number_kinds.lua` row differed on one line: `utf8_codepoint integer 233`
+versus `utf8_codepoint float 233.0`. The other 59 probes matched. This is
+the committed before measurement required before changing `src/`.
+
 ## Current five-row number-layer measurement
 
 | row | lines | differing |
@@ -193,7 +200,7 @@ fails correctly.
 
 | row | verdict | count (ref) | class | first ten failures (line: class); round 3. Rows re-peeled in round 4 are in the section above |
 |---|---|---|---|---|
-| bitwise.lua | FAIL | 19 (1326) | front-end difference | Current run reaches 19 assertions, then `integer overflow in -`; no longer a runtime gap. |
+| bitwise.lua | FAIL | 40 (1326) | EigenScript gap | Wrapping shift-count negation repairs the former 19-assert `integer overflow in -`; the row now reaches assertion 40 and stops because embedded-NUL numeric text is truncated (`nul-in-string`). |
 | calls.lua | FAIL | 28 (20114) | EigenScript gap | 119 TC (`deep(30000)`); 111 CD; 120 C; 122 TC; 123 C; 176 TC (tail calls through 100 `__call`s); 313 NUL; 314 OOS (`getinfo(f).source`); 331 OOS (`string.dump`); 332 C. |
 | closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
 | constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
@@ -210,7 +217,7 @@ fails correctly.
 | math.lua | FAIL | 22 (floor 28124) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the remaining first failure is the non-finite `math.modf` gap at line 99. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
-| sort.lua | FAIL | 18 (258507) | front-end difference | Current first failure is line 54: the endpoint `unpack` call lacks the expected `too many results` error. |
+| sort.lua | FAIL | 20 (258507) | front-end difference | Unsigned-equivalent endpoint counting repairs line 54 and reaches 20 assertions; a later endpoint still raises `integer overflow in '+'` and remains to repair. |
 | strings.lua | FAIL | 3 (332) | EigenScript gap | 22, 23, 24, 25, 27, 29, 30, 33 NUL; 51 I64; 53 NUL. |
 | tpack.lua | FAIL | 6 (471) | EigenScript gap | 51, 53, 54, 55 NUL (packed bytes hold zeros); 68, 69, 70 NUL; 75 I64 (a hex literal that wraps mod 2^64); 76, 77 C. Line 63 (`unpack("i7", ...)` of -1 gave 0) was a front-end bug, fixed. |
 | utf8.lua | FAIL | 61 (1193) | EigenScript gap | 57, 83 NUL (`utf8.charpattern`); 85, 87, 89, 90 C; 42, 51, 52 NUL (`check` of strings with U+0000, lines 218 and 236); 80 C. With `utf8.charpattern` replaced and those two checks blanked, the whole file passes (871 asserts). |
@@ -223,11 +230,11 @@ Nine rows retain documented EigenScript gaps. Integer-kind decimal formatting an
 
 | row | first difference | class | evidence |
 |---|---|---|---|
-| ops_matrix.lua | line 5665 `<< 7 4 integer 0` vs `float 0` | front-end difference | Shift result kind remains to repair; not a runtime gap. |
+| ops_matrix.lua | line 5717: shift of the rounded `math.maxinteger` value errors | EigenScript gap | The former line 5665 result-kind failure is repaired; the next difference is the existing `no-int64` boundary. |
 | str_byte_char_sub_rep.lua | line 1 `65 0 200` vs `65 nil` | EigenScript gap | `nul-in-string` |
 | str_embedded_nul.lua | line 1 `4` vs `1` | EigenScript gap | `nul-in-string` |
 | str_len.lua | line 3 `3` vs `1` | EigenScript gap | `nul-in-string` |
-| utf8_lib.lua | line 2 integer code points print as floats | front-end difference | Integer-kind UTF-8 decoding remains to repair; later differences are `nul-in-string`. |
+| utf8_lib.lua | line 9 `utf8.charpattern` embedded-NUL bytes are truncated | EigenScript gap | UTF-8 decoding now restores the integer kind; remaining differences are `nul-in-string`. |
 | math_fmod_ult_reverse.lua | line 16: reversed embedded-NUL string is truncated | EigenScript gap | `nul-in-string`; output lines 12 and 13 at the int64 endpoints match exactly. |
 | nil_number.lua | line 22 `2 2 7` vs `2 0 7` | not number layer | `#{nil,1}` and the later `table.unpack` arity line are table semantics. |
 | number_arith2.lua | line 99 f24 `2.0` vs `0.0` | EigenScript gap | `float-fmod` |

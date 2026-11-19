@@ -1599,15 +1599,19 @@ define lr_bitop(op, a, b, site) as:
         return x ^ y
     if op == "<<":
         return lr_shiftl of [x, y]
-    return lr_shiftl of [x, 0 - y]
+    return lr_shiftl of [x, i64_wrapping_sub of [0, y]]
 
 # x shifted left by n (right, logically, for n < 0) as a 64-bit word: done
 # on the two's complement halves, so every representable result is exact.
 define lr_shiftl(x, n) as:
     if n <= -64 or n >= 64:
-        return 0
+        # lvm.c luaV_shiftl returns integer zero for an oversized shift;
+        # EigenScript's documented bitwise operation supplies that kind.
+        return num of "0"
     if n == 0:
-        return x
+        if lr_isintegerkind of (x):
+            return x
+        return i64_wrapping_add of [x, 0]
     local w is lr_u64 of (x)
     local hi is w[0]
     local lo is w[1]
@@ -2446,10 +2450,23 @@ define lr_t_unpack(A) as:
         j is lr_checkint of [A, 2, "unpack"]
     if i > j:
         return []
-    # n + 1 elements, counted as ltablib.c does (the stack holds about 1e6)
-    local n is j - i
-    if n >= 999900:
+    # ltablib.c tunpack computes (lua_Unsigned)e - i, so opposite signed
+    # endpoints become a huge unsigned span instead of overflowing in `-`.
+    local huge is false
+    if i >= 0:
+        if j >= 999900:
+            huge is i <= j - 999900
+    elif j < 0:
+        if i <= -999900:
+            huge is j >= i + 999900
+    else:
+        if i < -999900:
+            huge is true
+        else:
+            huge is j >= 999900 + i
+    if huge:
         lr_throw of ((lr_where of (1)) + "too many results to unpack")
+    local n is j - i
     local out is []
     local k is 0
     loop while k < n:
