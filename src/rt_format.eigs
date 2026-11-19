@@ -470,7 +470,9 @@ define lr_fx_int(fl, n, conv) as:
 
 define lr_fx_float(fl, x, conv) as:
     local neg is x < 0 or (x == 0 and (f64_to_bytes of x)[0] >= 128)
-    local ax is abs of x
+    # Formatting is a floating conversion even when its Lua argument has
+    # integer kind; convert before abs so INT64_MIN does not overflow.
+    local ax is abs of (x * 1.0)
     local upper is conv == "E" or conv == "G" or conv == "A"
     local body is ""
     local p is fl.prec
@@ -534,7 +536,7 @@ define lr_fx_literal(A, arg) as:
         if v < 0:
             return "-" + h
         return h
-    if t == "none" or t == "bool":
+    if v == null or t == "bool":
         return lr_tostr of (v)
     lr_argerr of [arg + 1, "format", "value has no literal form"]
 

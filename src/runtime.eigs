@@ -249,7 +249,7 @@ define lr_type(v) as:
         return "table"
     if t == "dict" and v.ud == true:
         return "userdata"
-    if t == "none":
+    if v == null:
         return "nil"
     if t == "bool":
         return "boolean"
@@ -369,10 +369,19 @@ define lr_fmt_g(x, P) as:
         return "-" + (lr_fx_g of [0 - x, P, false, false])
     return lr_fx_g of [x, P, false, false]
 
-# Lua's number-to-string: integer-kind values in full, floats as %.14g.
+# Lua's number-to-string uses the reference interpreter's whole-number spelling
+# for integral values, including integral floats.
 define lr_numstr(x) as:
-    if num_type of (x) == "int":
+    if x != x:
+        return "-nan"
+    if x > 9223372036854775807:
+        return "inf"
+    if x < -9223372036854775808:
+        return "-inf"
+    if lr_isint of (x):
         if x < 0:
+            if x == -9223372036854775808:
+                return "-9223372036854775808"
             return "-" + (lr_intdigits of (0 - x))
         return lr_intdigits of (x)
     local g is lr_fmt_g of [x, 14]
@@ -578,7 +587,7 @@ define lr_tostr(v) as:
         return "false"
     if t == "num":
         return lr_numstr of (v)
-    if t == "none":
+    if v == null:
         return "nil"
     if lr_istable of (v):
         local h is lr_metafield of [v, "__tostring"]
@@ -663,7 +672,7 @@ define lr_rawget(t, k) as:
         if t[3] == null:
             return null
         return t[3][k]
-    if tk == "none":
+    if k == null:
         return null
     if tk == "num":
         local a is t[2]
@@ -824,7 +833,7 @@ define lr_rawset(t, k, v, site) as:
                 lr_iter_insert of [t, k]
             t[3][k] is v
         return null
-    if tk == "none":
+    if k == null:
         lr_rterr of [site, "table index is nil"]
     if tk == "num":
         local a is t[2]
@@ -2567,7 +2576,15 @@ define lr_m_fmod(A) as:
     if b == 0:
         if lr_isintegerkind of (a) and lr_isintegerkind of (b):
             lr_argerr of [2, "fmod", "zero"]
-    return [a % b]
+        return [a % b]
+    # Lua's fmod is the remainder after division rounded toward zero; `%`
+    # instead follows the divisor's sign (floor division).
+    local q is a / b
+    if q < 0:
+        q is ceil of q
+    else:
+        q is floor of q
+    return [a - q * b]
 
 # ------------------------------------------------------------ io / os
 
@@ -3345,8 +3362,11 @@ lr_mathlib is lr_lib of [{"floor": lr_m_floor, "ceil": lr_m_ceil, "abs": lr_m_ab
 # (gaps/no-nonfinite.eigs)
 lr_rawset of [lr_mathlib, "huge", 1e308 * 10, 0]
 lr_rawset of [lr_mathlib, "pi", pi of null, 0]
-lr_rawset of [lr_mathlib, "maxinteger", 9223372036854775807, 0]
-lr_rawset of [lr_mathlib, "mininteger", -9223372036854775808, 0]
+# Keep these literals below the parser's signed boundary, then construct the
+# exact int64 endpoints with integer arithmetic.
+local lr_maxinteger is 4611686018427387903 * 2 + 1
+lr_rawset of [lr_mathlib, "maxinteger", lr_maxinteger, 0]
+lr_rawset of [lr_mathlib, "mininteger", 0 - lr_maxinteger - 1, 0]
 lr_iolib is lr_lib of [{"write": lr_io_write, "read": lr_io_read, "lines": lr_io_lines, "flush": lr_io_flush, "type": lr_io_type, "output": lr_io_output, "input": lr_io_input}, lr_stubs of ["io.", "close open popen tmpfile"], {}]
 lr_io_methods is lr_lib of [{"write": lr_io_f_write, "read": lr_io_f_read, "lines": lr_io_f_lines, "flush": lr_io_f_flush, "setvbuf": lr_io_f_setvbuf, "close": lr_io_f_close}, lr_stubs of ["file:", "seek"], {}]
 lr_io_mt is lr_newtable of null

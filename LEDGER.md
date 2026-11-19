@@ -171,7 +171,7 @@ fails correctly.
 
 | row | verdict | count (ref) | class | first ten failures (line: class); round 3. Rows re-peeled in round 4 are in the section above |
 |---|---|---|---|---|
-| bitwise.lua | FAIL | 3 (1326) | EigenScript gap | 18 I64 (`0xFFFFFFFFFFFFFFFF` must be -1); 20, 21, 22 I64; 43 I64 (`%d` of maxinteger); 44 C; 47 I64; 53 I64 (`1 << 63`); 61, 63 I64 (shift by maxinteger). |
+| bitwise.lua | FAIL | 12 (1326) | EigenScript gap | Exact int64 values now pass the opening cases; the remaining first failure is still an EigenScript gap. |
 | calls.lua | FAIL | 28 (20114) | EigenScript gap | 119 TC (`deep(30000)`); 111 CD; 120 C; 122 TC; 123 C; 176 TC (tail calls through 100 `__call`s); 313 NUL; 314 OOS (`getinfo(f).source`); 331 OOS (`string.dump`); 332 C. |
 | closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
 | constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
@@ -179,7 +179,7 @@ fails correctly.
 | cstack.lua | FAIL | 261 (1206) | EigenScript gap | 105 TL (1000 suspended coroutines). With that block blanked the file passes, with the same count as the reference on the same copy (8). FAIL again since round 15 (hq#58 el-7, 2026-11-01): on EigenScript v0.48.0 the run to line 105 takes about 6-7 s against the row's 20 s budget, so the row reaches its first failure (CI job 123379278775 on 2026-10-29: `ROW S cstack.lua FAIL rc=1 count=261 ref=1206`; the round-15 Tier S summary above already counts it under fail=17). Round 6 (when it was a HANG; FAIL in round 5): on v0.45.0 the run to line 105 takes about 20-23 s against the row's 20 s budget (the reference takes 0.2 s), so the grader stops it first; the stdout and the first failure are unchanged (`lua: cstack.lua:105: EigenScript limit error: task_spawn: too many live tasks (max 255)`, 261 asserts). The same at 79e29669 on v0.45.0. |
 | db.lua | UNSUPPORTED | 0 | out of scope | 16 OOS (`gethook`); 33, 34 OOS (`getinfo` option checks); 42, 45, 47 OOS (`name`, `func`, `activelines`); 55 OOS (`string.dump`); 56, 57 C; 91 OOS (`name`, `namewhat`). Line 38 (`getinfo(print).short_src == "[C]"`) was a front-end bug, fixed. |
 | errors.lua | UNSUPPORTED | 88 (295) | out of scope | 239 OOS (`setuservalue` on a light userdata); 280 OOS (`string.dump`); 281, 283 C; 287 OOS; 553 CD (stack overflow inside the message handler); 639 NEST (100 nested table constructors). Then the file runs to the end. |
-| events.lua | FAIL | 154 (444) | EigenScript gap | 168 INF (`1/0`). With that line blanked the file runs to the end (436 asserts). Lines 180 (`__len` gets its operand twice) and 464 (`debug.setmetatable(10, mt)`) were front-end bugs, fixed. |
+| events.lua | **PASS** | 444 | | Float division by zero now supplies the IEEE infinity required by the reference. |
 | gc.lua | FAIL | 5010 (5169) | out of scope | 194 OOS (`gcinfo`); 201 OOS (`collectgarbage("step")`); 217 OOS (waits for `gcinfo()` to grow: a hang); 261 WK; 262 C; 277 WK; 278 C; 293 WK; 298 C; 301 WK. |
 | gengc.lua | FAIL | 18 (19) | EigenScript gap | 122 WK. Then it runs to the end. |
 | goto.lua | **PASS** | 65 | | |
@@ -188,7 +188,7 @@ fails correctly.
 | math.lua | FAIL | 3 (floor 28124) | EigenScript gap | 13 I64; 29, 30 INF; 41 FLT (`math.type(0.0)`); 99, 100, 101, 102, 103 INF; 104 C. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
-| sort.lua | FAIL | 14 (258507) | EigenScript gap | 50 I64 (`unpack({}, 0, maxI)` must say "too many results"); 57, 64, 65, 66 I64; 68, 69, 70 I64 (`minI + 1 == minI`); 128 I64; 136 I64. |
+| sort.lua | FAIL | 18 (258507) | EigenScript gap | Exact int64 values now pass four more assertions; the remaining first failure is still an EigenScript gap. |
 | strings.lua | FAIL | 3 (332) | EigenScript gap | 22, 23, 24, 25, 27, 29, 30, 33 NUL; 51 I64; 53 NUL. |
 | tpack.lua | FAIL | 6 (471) | EigenScript gap | 51, 53, 54, 55 NUL (packed bytes hold zeros); 68, 69, 70 NUL; 75 I64 (a hex literal that wraps mod 2^64); 76, 77 C. Line 63 (`unpack("i7", ...)` of -1 gave 0) was a front-end bug, fixed. |
 | utf8.lua | FAIL | 61 (1193) | EigenScript gap | 57, 83 NUL (`utf8.charpattern`); 85, 87, 89, 90 C; 42, 51, 52 NUL (`check` of strings with U+0000, lines 218 and 236); 80 C. With `utf8.charpattern` replaced and those two checks blanked, the whole file passes (871 asserts). |
@@ -215,7 +215,7 @@ difference in the new row is one of the recorded EigenScript gaps.
 | str_format_num.lua | line 11 `1 1.0` vs `1 1` | EigenScript gap | `no-float-subtype` (`%s` of 1.0) |
 | str_len.lua | line 3 `3` vs `1` | EigenScript gap | `nul-in-string` |
 | utf8_lib.lua | line 9 `utf8.charpattern` bytes | EigenScript gap | `nul-in-string` |
-| math_fmod_ult_reverse.lua | line 5: float zero divisor returns `-nan` in Lua but raises `(zero)` in EigenLua; line 7: `2.0` prints as `2`; lines 12-13: `math.maxinteger` has no integer representation; line 16: reversed embedded-NUL string is truncated | EigenScript gaps | `no-nonfinite` and `no-float-subtype` (lines 5 and 7), `no-int64` (lines 12-13), and `nul-in-string` (line 16). These are the complete stdout differences; both arms exit 0. |
+| math_fmod_ult_reverse.lua | line 7: `2.0` prints as `2`; line 16: reversed embedded-NUL string is truncated | EigenScript gaps | `no-float-subtype` (line 7) and `nul-in-string` (line 16). The signed `fmod` remainder, float zero divisor, and int64 endpoints now match. |
 
 ## Front-end bugs fixed in round 3
 
