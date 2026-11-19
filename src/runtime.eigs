@@ -621,6 +621,12 @@ define lr_okey(k) as:
     if t == "num":
         if k == 0:
             return "n0"
+        # EigenScript keeps int64 and binary64 values distinct, including in
+        # their text (5 versus 5.0).  Lua table keys do not: an integral float
+        # in range is converted to its equal integer key.  floor performs that
+        # conversion while leaving out-of-int64 integral floats as floats.
+        if k == floor of k:
+            return "n" + (str of (floor of k))
         return "n" + (str of k)
     if lr_istable of (k):
         return "t" + (str of k[1])
