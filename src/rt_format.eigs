@@ -433,6 +433,19 @@ define lr_fx_check(spec, conv, flags, precision) as:
     if not ok:
         lr_throw of ((lr_where of (1)) + "invalid conversion specification: '%" + spec + conv + "'")
 
+define lr_txt_u64_digits(n, b, upper) as:
+    local digs is "0123456789abcdef"
+    if upper:
+        digs is "0123456789ABCDEF"
+    if n == 0:
+        return "0"
+    local out is []
+    loop while n != 0:
+        local r is u64_rem of [n, b]
+        list_insert_at of [out, 0, digs[r]]
+        n is u64_div of [n, b]
+    return join of [out, ""]
+
 define lr_fx_int(fl, n, conv) as:
     local neg is false
     local body is ""
@@ -440,9 +453,15 @@ define lr_fx_int(fl, n, conv) as:
     if conv == "d" or conv == "i":
         if n < 0:
             neg is true
-            body is lr_intdigits of (0 - n)
+            if lr_isintegerkind of (n):
+                body is (str of n)[1:]
+            else:
+                body is lr_intdigits of (0 - n)
         else:
-            body is lr_intdigits of (n)
+            if lr_isintegerkind of (n):
+                body is str of n
+            else:
+                body is lr_intdigits of (n)
         prefix is lr_fx_sign of [neg, fl]
     else:
         local base is 16
@@ -450,7 +469,10 @@ define lr_fx_int(fl, n, conv) as:
             base is 8
         elif conv == "u":
             base is 10
-        body is lr_u64_digits of [lr_u64 of (n), base, conv == "X"]
+        if lr_isintegerkind of (n):
+            body is lr_txt_u64_digits of [n, base, conv == "X"]
+        else:
+            body is lr_u64_digits of [lr_u64 of (n), base, conv == "X"]
     if fl.prec != null:
         if fl.prec == 0 and n == 0:
             body is ""
@@ -469,7 +491,15 @@ define lr_fx_int(fl, n, conv) as:
     return lr_fx_padnum of [prefix, body, fl, fl.width]
 
 define lr_fx_float(fl, x, conv) as:
-    local neg is x < 0 or (x == 0 and (f64_to_bytes of x)[0] >= 128)
+    local cls is lr_txt_floatclass of (x)
+    local neg is x < 0 or (x == 0 and (f64_bits of x) < 0) or cls == "-nan"
+    if cls != "finite":
+        local special is "inf"
+        if cls == "nan" or cls == "-nan":
+            special is "nan"
+        if conv == "E" or conv == "G" or conv == "A" or conv == "F":
+            special is upper of special
+        return lr_fx_padnum of [lr_fx_sign of [neg, fl], special, fl, fl.width]
     # Formatting is a floating conversion even when its Lua argument has
     # integer kind; convert before abs so INT64_MIN does not overflow.
     local ax is abs of (x * 1.0)
@@ -545,7 +575,7 @@ define lr_fx_checkint(A, arg) as:
     local x is lr_arnum of (v)
     if x == null:
         lr_argerr of [arg + 1, "format", "number expected, got " + (lr_tname of (v))]
-    if x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
+    if lr_txt_floatclass of (x) != "finite" or x != floor of x or x < -9223372036854775808 or x >= 9223372036854775808:
         lr_argerr of [arg + 1, "format", "number has no integer representation"]
     return x
 

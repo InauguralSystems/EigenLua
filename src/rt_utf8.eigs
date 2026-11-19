@@ -171,7 +171,7 @@ define lr_u8_iter(A, strict) as:
     local d is lr_u8_decode of [s, n, strict]
     if d == null or lr_u8_iscont of [s, d[0]]:
         lr_throw of ((lr_where of (1)) + "invalid UTF-8 code")
-    return [n + 1, d[1]]
+    return [floor of (n + 1), floor of d[1]]
 
 define lr_u8_iter_strict(A) as:
     return lr_u8_iter of [A, true]
