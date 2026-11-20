@@ -1,0 +1,1 @@
+- Match Lua's numeric parsing, endpoint loops, formatting, and result kinds in the pinned number-layer corpus (#77).

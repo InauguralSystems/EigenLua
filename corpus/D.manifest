@@ -163,3 +163,12 @@ co_close_error_chain.lua unspecified-audit: ok
 co_close_error_chain_edges.lua unspecified-audit: ok
 co_close_error_inner_tbc.lua unspecified-audit: ok
 co_close_suspended_cdepth.lua unspecified-audit: ok
+number_arith.lua unspecified-audit: ok
+number_arith2.lua unspecified-audit: ok
+number_text.lua unspecified-audit: ok
+number_keys.lua unspecified-audit: ok
+nil_number.lua unspecified-audit: ok
+number_kinds.lua unspecified-audit: ok
+
+review2_kinds.lua unspecified-audit: ok
+number_review_nul_pack.lua unspecified-audit: ok

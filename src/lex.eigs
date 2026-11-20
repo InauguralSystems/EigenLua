@@ -244,9 +244,8 @@ define lex_long(src, i, lv, line, is_comment) as:
 # Numeral at i (llex.c read_numeral). Returns [next_index, value, is_float].
 # Like Lua, it takes every hex digit and '.', an exponent mark with its
 # sign, and one letter touching the end, then converts the whole text or
-# reports it as malformed. Hex integers wrap modulo 2^64 in Lua; that wrap
-# is not representable on one double and is left to the value (an
-# EigenScript gap, see LEDGER.md).
+# reports it as malformed. Hex integers wrap modulo 2^64 (Lua 5.4 manual
+# §3.1); the two-limb conversion below implements that boundary directly.
 define lex_number(src, i, line) as:
     local n is len of src
     local j is i + 1
@@ -341,12 +340,19 @@ define lex_str2num(s) as:
     local isf is 0
     if n > 1 and s[0] == "0" and (s[1] == "x" or s[1] == "X"):
         j is 2
-        local mant is 0
+        # Parse through limbs so a long significand cannot overflow an exact
+        # int before a later exponent marker establishes that it is a float.
+        local whi is 0
+        local wlo is 0
         local exp is 0
         local any is 0
         local ds is []
         loop while j < n and lex_is_xdigit of (ord of s[j]):
-            mant is mant * 16 + (lex_xval of (ord of s[j]))
+            local wd is lex_xval of (ord of s[j])
+            local wl is wlo * 16 + wd
+            local wc is floor of (wl / 4294967296)
+            wlo is wl - wc * 4294967296
+            whi is (whi * 16 + wc) % 4294967296
             if len of ds > 0 or s[j] != "0":
                 append of [ds, lex_xval of (ord of s[j])]
             any is 1
@@ -381,7 +387,10 @@ define lex_str2num(s) as:
             return null
         # a hex integer wraps modulo 2^64 in Lua (gaps/no-int64.eigs); a hex
         # float is strtod's
-        local val is mant
+        local shi is whi
+        if shi >= 2147483648:
+            shi is shi - 4294967296
+        local val is i64_wrapping_add of [i64_wrapping_mul of [shi, 4294967296], wlo]
         if isf:
             val is lex_hexd of [ds, exp]
         return [val, isf]

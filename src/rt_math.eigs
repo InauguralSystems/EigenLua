@@ -178,16 +178,21 @@ define lr_m_rad(A) as:
 # modf: integral part (a float in Lua) and fraction
 define lr_m_modf(A) as:
     local x is lr_checknum of [A, 0, "modf"]
+    if x != x:
+        return [x, x]
+    if x == 1e308 * 10 or x == 0 - (1e308 * 10):
+        return [x, 0.0]
     local ip is 0
     if x >= 0:
         ip is floor of x
     else:
         ip is ceil of x
-    return [ip, x - ip]
+    local fp is x - ip
+    if fp == 0:
+        fp is 0.0
+    return [ip, fp]
 
 define lr_m_ult(A) as:
-    local a is lr_u64 of (lr_checkint of [A, 0, "ult"])
-    local b is lr_u64 of (lr_checkint of [A, 1, "ult"])
-    if a[0] != b[0]:
-        return [a[0] < b[0]]
-    return [a[1] < b[1]]
+    local a is lr_checkint of [A, 0, "ult"]
+    local b is lr_checkint of [A, 1, "ult"]
+    return [u64_compare of [a, b] < 0]

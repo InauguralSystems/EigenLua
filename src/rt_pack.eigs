@@ -144,6 +144,11 @@ define lr_pk_f32bits(x) as:
     local sign is 0
     if x < 0 or (x == 0 and (f64_to_bytes of x)[0] >= 128):
         sign is 2147483648
+    local cls is lr_txt_floatclass of (x)
+    if cls == "inf" or cls == "-inf":
+        return sign + 2139095040
+    if cls != "finite":
+        return 2143289344
     local ax is abs of x
     if ax == 0:
         return sign
@@ -311,15 +316,15 @@ define lr_pk_unpackint(bytes, pos, size, little, signed) as:
         else:
             lo is lo * 256 + le[k2]
         k2 is k2 - 1
-    local v is hi * 4294967296 + lo
     if size < 8:
+        local v is hi * 4294967296 + lo
         if signed and v >= pow of [2, size * 8 - 1]:
             if size > 4:
                 # from the halves, so a small negative value stays exact
                 # (v itself is rounded once it passes 2^53)
-                return (hi - (pow of [2, (size - 4) * 8])) * 4294967296 + lo
+                return floor of ((hi - (pow of [2, (size - 4) * 8])) * 4294967296 + lo)
             v is v - (pow of [2, size * 8])
-        return v
+        return floor of v
     local neg is signed and hi >= 2147483648
     if size > 8:
         local mask is 0
@@ -333,7 +338,7 @@ define lr_pk_unpackint(bytes, pos, size, little, signed) as:
     if neg or (not signed and hi >= 2147483648):
         # the 64-bit two's complement value read as a lua_Integer
         return (hi - 4294967296) * 4294967296 + lo
-    return v
+    return hi * 4294967296 + lo
 
 define lr_s_unpack(A) as:
     local fmt is lr_checkstr of [A, 0, "unpack"]

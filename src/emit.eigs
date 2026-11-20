@@ -303,7 +303,7 @@ define em_desc(E, e) as:
 
 # lobject.c luaO_tointegerns: conversion used by luaO_rawarith's bitwise arm.
 define em_tointegerns(v) as:
-    if v[0] == "str" or v[1] != floor of v[1] or v[1] < -9223372036854775808 or v[1] >= 9223372036854775808:
+    if v[0] == "str" or v[1] != v[1] or v[1] < -9223372036854775808 or v[1] >= 9223372036854775808 or v[1] != floor of v[1]:
         return null
     return v[1]
 
@@ -312,31 +312,27 @@ define em_tointegerns(v) as:
 define em_shiftl(x, n) as:
     if n <= -64 or n >= 64:
         return 0
-    if n == 0:
-        return x
-    local hi is floor of (x / 4294967296)
-    local lo is x - hi * 4294967296
-    if hi < 0:
-        hi is hi + 4294967296
-    local M is 4294967295
-    if n > 0:
-        if n >= 32:
-            hi is (lo << (n - 32)) & M
-            lo is 0
-        else:
-            hi is ((hi << n) & M) | (lo >> (32 - n))
-            lo is (lo << n) & M
-    else:
-        local s is 0 - n
-        if s >= 32:
-            lo is hi >> (s - 32)
-            hi is 0
-        else:
-            lo is (lo >> s) | ((hi << (32 - s)) & M)
-            hi is hi >> s
-    if hi >= 2147483648:
-        hi is hi - 4294967296
-    return hi * 4294967296 + lo
+    if n >= 0:
+        return x << n
+    return x >> (0 - n)
+
+# Constant-folding counterpart of the runtime's exact signed division.
+define lr_ari_emit_idivint(x, y) as:
+    if y == -1:
+        return i64_wrapping_sub of [0, x]
+    local ax is x
+    local ay is y
+    if x < 0:
+        ax is i64_wrapping_sub of [0, x]
+    if y < 0:
+        ay is i64_wrapping_sub of [0, y]
+    local q is u64_div of [ax, ay]
+    local r is u64_rem of [ax, ay]
+    if (x < 0) != (y < 0):
+        q is i64_wrapping_sub of [0, q]
+        if r != 0:
+            q is i64_wrapping_sub of [q, 1]
+    return q
 
 # lobject.c luaO_rawarith, for the operators accepted by lcode.c validop.
 # A null result means either that conversion failed or that the operation is
@@ -366,23 +362,41 @@ define em_rawarith(op, a, b) as:
         fl is true
     local v is null
     if op == "-u":
-        v is 0 - a[1]
+        if fl:
+            v is 0.0 - a[1]
+        else:
+            v is i64_wrapping_sub of [0, a[1]]
     elif op == "+":
-        v is a[1] + b[1]
+        if fl:
+            v is a[1] + b[1]
+        else:
+            v is i64_wrapping_add of [a[1], b[1]]
     elif op == "-":
-        v is a[1] - b[1]
+        if fl:
+            v is a[1] - b[1]
+        else:
+            v is i64_wrapping_sub of [a[1], b[1]]
     elif op == "*":
-        v is a[1] * b[1]
+        if fl:
+            v is a[1] * b[1]
+        else:
+            v is i64_wrapping_mul of [a[1], b[1]]
     elif op == "/" and b[1] != 0:
         v is a[1] / b[1]
-    elif op == "^" and not (a[1] < 0 and b[1] != floor of b[1]):
+    elif op == "^" and not (a[1] < 0 and (b[1] != b[1] or b[1] == 1.0 / 0 or b[1] == -1.0 / 0 or b[1] != floor of b[1])):
         v is pow of [a[1], b[1]]
     elif op == "%" and b[1] != 0:
-        v is a[1] % b[1]
+        if not fl and a[1] == -9223372036854775808 and b[1] == -1:
+            v is 0
+        else:
+            v is a[1] % b[1]
         if v != 0 and (v < 0) != (b[1] < 0):
             v is v + b[1]
     elif op == "//" and b[1] != 0:
-        v is floor of (a[1] / b[1])
+        if not fl:
+            v is lr_ari_emit_idivint of [a[1], b[1]]
+        else:
+            v is floor of (a[1] / b[1])
     else:
         return null
     if fl:
@@ -482,6 +496,10 @@ define em_nulstr(e) as:
     return "(str_from_bytes of (" + (em_listlit of (bs)) + "))"
 
 define em_numlit(E, v) as:
+    # `num` accepts overflow spellings such as 1e400, but not the formatted
+    # words inf/nan.  Emit their IEEE bytes without first reparsing `str`.
+    if v != v or v == 1.0 / 0 or v == -1.0 / 0:
+        return "(f64_from_bits of (" + (str of (f64_bits of v)) + "))"
     local s is str of v
     if (num of s) == v and index_of of [s, "e"] < 0 and index_of of [s, "n"] < 0:
         if v < 0:
@@ -642,6 +660,10 @@ define em_expr(E, e) as:
     if k == "False":
         return "false"
     if k == "Num":
+        # A source integer at the signed boundary cannot be respelled as a
+        # negative EigenScript literal: its lexer first sees +2^63.
+        if not e.fl and e.v == -9223372036854775808:
+            return "(i64_wrapping_sub of [-9223372036854775807, 1])"
         return em_numlit of [E, e.v]
     if k == "Str":
         if e.z:
@@ -1217,7 +1239,7 @@ define em_numfor(E, s) as:
     local LN is em_loop_begin of [E, "lua"]
     LN.endl is s.endl
     em_declare of [E, s.v, ti]
-    em_line of [E, ti + " is " + ti + " + " + st]
+    em_line of [E, ti + " is lr_ari_forstep of [" + ti + ", " + st + ", " + tc + "]"]
     em_line of [E, tc + " is " + tc + " - 1"]
     em_block of [E, s.body, s.bend]
     em_line of [E, "null"]

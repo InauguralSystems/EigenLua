@@ -11,6 +11,40 @@ Every ledger entry is exactly one of:
 - **unspecified** behavior, fixed in the corpus;
 - **out of scope**, listed below and never graded.
 
+## Gaps standing on EigenScript v0.48.0
+
+The current number-layer runtime gap is `gaps/nan-sign.eigs` (canonical scalar NaNs lose source sign, but no graded line is charged to it). `float-sign` is closed because documented `f64_bits` observes the sign and multiplication by `-1.0` constructs negative zero. The historical `no-int64`, `int64-for-count`, `no-float-subtype`, and `no-nonfinite` programs are retained as closed-history reproducers, with current output in `LEDGER.md`.
+
+### Probe census on the pinned runtime
+
+Measured on EigenScript v0.48.0 at `phase2-consumers-1` on 2026-11-19.
+The command was `for f in gaps/*.eigs; do timeout 30 eigenscript "$f"; done`;
+diagnostic locations below omit the repeated source excerpt and stack frame.
+An entry marked **closed** is retained as history and must not be used to
+classify a current ledger row.
+
+| probe | current significant output | state |
+|---|---|---|
+| `call-depth.eigs` | `{"kind": "limit", "message": "call stack overflow", "line": 18, ...}` | open |
+| `expr-nesting.eigs` | `51`, parser diagnostics, `eval: parse error in code string` | open |
+| `handler-after-overflow.eigs` | `[true, 0, true, 4094]` | open |
+| `int64-for-count.eigs` | `false`, then integer overflow at line 14 | closed history |
+| `list-literal-cap.eigs` | `1024`, parser diagnostics, `eval: parse error in code string` | open |
+| `nan-sign.eigs` | `[9221120237041090560, 9221120237041090560]` | open; no graded first difference |
+| `nesting-limits.eigs` | indentation diagnostics, parse failure, then compile-nesting failure | open |
+| `no-errno.eigs` | located `No such file or directory` error at line 15 | closed |
+| `no-float-subtype.eigs` | `1`, `1.0`, `3.0`, `9007199254740992.0`, `false` | closed history |
+| `no-int64.eigs` | `9007199254740993`, then integer overflow at line 13 | closed history |
+| `no-nonfinite.eigs` | `inf`, `inf` | closed history |
+| `no-string-identity.eigs` | `true`, `str` | open |
+| `no-tail-calls.eigs` | `{"kind": "limit", "message": "call stack overflow", "line": 13, ...}` | open |
+| `no-weak-refs.eigs` | `[{"x": 1}]` | open |
+| `nul-in-string.eigs` | `1` | open; explains the seven current D rows |
+| `pipe-read-line.eigs` | for `a\r\nb`: `["a\r\n", 3, "b", 1, null]`; with final newline: `["a\r\n", 3, "b\n", 2, null]` | closed; not a graded first difference |
+| `subscript-nesting.eigs` | `300`, `300` | closed |
+| `task-limit.eigs` | `task_spawn: too many live tasks (max 255)`, `255` | open |
+| `vm-op-cost.eigs` | four timing rows; this run measured 1.11, 0.22, 1.58, and 22.68 microseconds | performance observation, not a semantic first difference |
+
 ## The oracle
 
 The reference is **PUC-Rio Lua 5.4.9**, built from the release tarball and verified against the SHA-256 that lua.org

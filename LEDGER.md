@@ -1,10 +1,12 @@
-# EigenLua front end: divergence ledger (round 15)
+# EigenLua front end: divergence ledger (number-layer repair 3)
 
 Every row of `tools/grade.sh --candidate bin/eigenlua --tier all` that is not PASS/MATCH, classified. The detailed
-failure tables below preserve the round-6 measurements; the current measurement uses EigenScript v0.47.0.
+failure tables below preserve historical measurements; the number-layer measurement below uses EigenScript v0.48.0.
 
-- **Runtime:** EigenScript v0.47.0 at commit `3d8a14b49e88a59a37e1d3501891afe2d430ffcb` (round 15).
+- **Runtime:** EigenScript v0.48.0 at pinned tag `phase2-consumers-1`. Older measurements below are explicitly historical.
 - **Reference:** PUC-Rio Lua 5.4.9 from `tools/build_ref.sh`.
+- **Current grade (commit `987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19):**
+  `SUMMARY S=3/23 D=165/172 fail=15 diverge=7 hang=1 crash=0 unsupported=4 examined=195 assert=trusted`.
 - **Grader verdict, round 15 (Tier D, measured 2026-10-28):**
   `SUMMARY S=0/0 D=145/157 fail=0 diverge=12 hang=0 crash=0 unsupported=0 examined=157 assert=n/a`.
 - **Grader verdict, round 15 (Tier S, measured 2026-10-28):**
@@ -29,14 +31,48 @@ failure tables below preserve the round-6 measurements; the current measurement 
   hang=2 crash=0 unsupported=4 examined=122 assert=trusted`. Round 5's own line (on 686d3b7d) had fail=16 hang=1:
   cstack.lua is a HANG on v0.45.0 (below), with its first failure unchanged.
 
-Tier D has 164 rows: 151 match, and the 13 current divergences are the longstanding EigenScript gaps listed below
+The historical Tier D measurement had 164 rows; its historical counts are retained below
 (159 rows measured after the #61/#62 additions, plus #55's `tbl_sparse_offset_descending.lua`, which MATCHed in its
 own run, D=146/158, EigenLua#67, plus EigenLua#73's four matching rows, D=151/164 on v0.48.0).
 Rounds 3 through 13 and their additions are described in the historical material below; rounds 14 and 15 added
 20 matching rows without changing the divergence classes, and the #61/#62 library-edge programs add one MATCH
 (`utf8_codes_offset.lua`) and one row (`math_fmod_ult_reverse.lua`) that diverges only within the existing gap
-classes. Tier S has 23 rows. Across both tiers, the first-failure classes are 28 EigenScript gaps (27 before the
-#61/#62 additions), 6 out-of-scope rows, no open front-end bugs, and no unspecified rows.
+classes. Tier S has 23 rows.  The current class totals are computed from the
+current tables in the **Counts** section rather than carried forward from those
+historical measurements.
+
+## Integer-kind row: before repair
+
+At base `6048882a21e3228929f09de44679e4419f19beed`, the new 60-line
+`number_kinds.lua` row differed on one line: `utf8_codepoint integer 233`
+versus `utf8_codepoint float 233.0`. The other 59 probes matched. This is
+the committed before measurement required before changing `src/`.
+
+## Current five-row number-layer measurement
+
+### Review 3 population: before source repair
+
+At base `d921e07f4ff0df581f450f939fff633d133d385a`, before changing `src/`,
+the fourteen-row measurement was `TOTAL differ=105 incomplete=0`.  Per row:
+`number_arith` 0, `number_arith2` 1, `number_text` 9, `number_keys` 0,
+`nil_number` 2, `number_kinds` 0, review `arith` 12, `text` 33, `keys` 0,
+`nil` 9 (all three unspecified expressions, emitted three ways), `kinds` 12,
+`mathinf` 16, `fdiv` 8, and `forlim` 3.
+
+| row | lines | differing |
+|---|---:|---:|
+| `number_arith.lua` | 1428 | 0 |
+| `number_arith2.lua` | 142 | 1 |
+| `number_text.lua` | 555 | 9 |
+| `number_keys.lua` | 30 | 0 |
+| `nil_number.lua` | 31 | 2 |
+
+These historical differences were repaired or removed from the measured output in review 3. The former `float-sign` entry was a false gap: v0.48.0 documents `f64_bits`, and multiplication by `-1.0` constructs negative zero while its bits expose the sign.
+
+On commit `987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19,
+the Tier D grade is `D=165/172`.  Its seven divergence rows are exactly the
+seven rows in the Tier D table below; `nil_number.lua` and `ops_matrix.lua`
+both MATCH.
 
 ## Classes
 
@@ -53,15 +89,15 @@ A row's class is the class of its **first failure**. Its first ten failures were
 
 | class | rows | S | D |
 |---|---|---|---|
-| EigenScript gap | 28 | 15 | 13 |
-| out of scope | 6 | 6 | 0 |
-| front-end bug (open) | 0 | 0 | 0 |
+| EigenScript gap | 19 | 12 | 7 |
+| out of scope | 7 | 7 | 0 |
+| front-end bug (open) | 1 | 1 | 0 |
 | unspecified | 0 | 0 | 0 |
-| PASS / MATCH | 153 | 2 | 151 |
+| PASS / MATCH | 168 | 3 | 165 |
 
-**Scope of the zero in the "front-end bug (open)" row: graded rows only.** No graded row's first failure is a
-known front-end bug. That says nothing about code the corpus does not reach, and probing beyond it keeps finding
-front-end bugs. Probe-found bugs, by issue:
+**Scope of the "front-end bug (open)" row: graded rows only.** Its one row is
+`sort.lua`; the count says nothing about code the corpus does not reach, and
+probing beyond it keeps finding front-end bugs. Probe-found bugs, by issue:
 - round-4 blind critic: EigenLua#13 (load reader), #14 (positions in C functions), #15 (three number bugs), #16
   (traceback of a thread), #17 (os.exit close), #18 (load mode), #19 (table.move hang), #20 (`<close>` with labels),
   #12 (`%p` substitute). All fixed in round 5, each with a D row (section below).
@@ -102,11 +138,11 @@ output is the same (vm-op-cost's timings vary).
 
 | file | gap | stdout | rows it explains |
 |---|---|---|---|
-| `no-int64.eigs` | No 64-bit integer, so values past 2^53 round and nothing wraps. `math.maxinteger` is the double 2^63, which has no integer representation. | `9007199254740992` / `9.223372036854776e+18` / `true` | D: int_maxinteger, int_past53, int_wrap, rng_xoshiro. S: bitwise, locals, math, nextvar, sort, tpack (hex wrap). |
-| `int64-for-count.eigs` | An instance of no-int64: `for i = maxinteger - 1, maxinteger` cannot count 2 rounds, both bounds are 2^63. | `true` / `true` | None graded (round-3 critic). nextvar.lua's loops over maxinteger end now but count wrongly (690-704). |
-| `no-float-subtype.eigs` | One number type, so 1.0 cannot be told from 1. | `1` / `1` / `3` / `9007199254740992` / `true` | D: int_one_vs_one, ops_matrix, str_format_num. S: math (41), nextvar (624). |
-| `no-nonfinite.eigs` | No inf/nan. Every finite value in (1e308, DBL_MAX], including a literal, clamps to 1e308 (and likewise for negatives); x/0 raises. | `1e+308` / `division by zero` | D: num_print, ops_matrix. S: events, math. |
-| `nul-in-string.eigs` | Strings are NUL-terminated. | `1` / `chr of 0: strings are NUL-terminated ...` | D: str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib. S: literals, pm, strings, tpack, utf8, calls (313). |
+| `no-int64.eigs` | **Closed in v0.48.0.** | `9007199254740993`, then `integer overflow in +` at line 13 | Historical rows only. |
+| `int64-for-count.eigs` | **Closed in v0.48.0.** | `false`, then `integer overflow in +` at line 14 | None. |
+| `no-float-subtype.eigs` | **Closed in v0.48.0.** | `1` / `1.0` / `3.0` / `9007199254740992.0` / `false` | None. |
+| `no-nonfinite.eigs` | **Closed in v0.48.0.** | `inf` / `inf` | None. |
+| `nul-in-string.eigs` | Strings are NUL-terminated. | `1` | D: number_review_nul_pack, review2_kinds, str_byte_char_sub_rep, str_embedded_nul, str_len, utf8_lib, math_fmod_ult_reverse. S: literals, pm, strings, tpack, utf8, calls (313). |
 | `call-depth.eigs` | 4093 VM frames, against Lua's 200000 levels; a Lua call costs three frames, so a program overflows at 1362 Lua levels (round 3 said about 5000 frames and two per call). | `{"kind": "limit", "message": "call stack overflow", "line": 18}` | S: calls (111), errors (553). |
 | `no-tail-calls.eigs` | No proper tail calls. | `{"kind": "limit", "message": "call stack overflow", "line": 13}` | S: calls (119, 122, 176). |
 | `no-weak-refs.eigs` | No weak references and no finalizers. | `[{"x": 1}]` (and `eigenscript --api` lists no weak/finalizer builtin) | S: closure (HANG), gengc, coroutine (417), gc. |
@@ -114,12 +150,12 @@ output is the same (vm-op-cost's timings vary).
 | `expr-nesting.eigs` | The parser refuses an expression about 60 levels deep; each Lua operator or constructor is a call with a list, two levels. Round 2 hoisted every 16th level to dodge this; round 3 removed that workaround. | `51` / `eval: parse error in code string` | S: errors (639, 100 nested table constructors). |
 | `list-literal-cap.eigs` | A list literal holds at most 1024 elements. Round 2 split long literals; round 3 removed that workaround. | `1024` / `eval: parse error in code string` | None graded. |
 | `nesting-limits.eigs` | 64 indentation levels and 128 compile-nesting levels, against Lua's ~200. | `eval: parse error in code string` / `eval: compile error in code string` | None graded (errors.lua's deeper testrep cases would reach it). |
-| `subscript-nesting.eigs` | Each subscript in one expression leaks a nesting level. Round 2 kept subscripts out of loaded chunks to dodge this; round 3 removed that workaround. | `300` / `eval: parse error in code string` | None graded. |
+| `subscript-nesting.eigs` | **Closed in v0.48.0.** Historical probe for a nesting leak from repeated subscripts. | `300` / `300` | None graded. |
 | `no-string-identity.eigs` | A string has no identity. `%p` of a string names its value (round 5, EigenLua#12): one string always formats alike, as in Lua, but an equal long string built elsewhere formats like the original. | `true` / `str` | S: literals (230: `getadd(sd) ~= a1`). pm.lua 413/416/426 and literals 225-228 now hold. |
 | `vm-op-cost.eigs` | Speed: the VM's cost per basic operation (0.25 us per character looked at, 0.18 us per call, 0.68 us per dict literal, 17 us per eval of a 7-line chunk) floors a front end written in EigenScript at about 534 us per constructs.lua chunk, 1.8 x the 300 us per load the row's budget allows (EigenLua#7). | four timings (vary by about 20%) | S: constructs (time, after its OOS line 306). |
 | `handler-after-overflow.eigs` | A catch runs only after the VM has unwound; nothing runs at the raise point, so an xpcall handler after a call-depth overflow has the whole stack again (EigenLua#11 item 3). | `[true, 0, true, 4094]` | S: errors (549-557, CD). |
-| `pipe-read-line.eigs` | `read_line` on a pipe drops a "\r" before "\n" and hides a missing final newline (EigenLua#10). Run with a pipe on stdin. | `["a", 1, "b", 1, null]` for both `a\r\nb` and `a\r\nb\n` | None graded (the grader feeds an empty pipe). |
-| `no-errno.eigs` | A failed file open gives no reason: `read_text` returns "" for a missing, an unreadable and an empty file alike, and nothing exposes errno, so `dofile`/`loadfile`'s `: No such file or directory` (strerror) cannot be translated (EigenLua#28). | `["", false]` / `["", true]` / `["", true]` (as root; see the file) | None graded (D rows avoid it; verybig.lua's `dofile` is OOS). |
+| `pipe-read-line.eigs` | **Closed in v0.48.0.** `read_line` now preserves CRLF and distinguishes a missing final newline. | for `a\r\nb`: `["a\r\n", 3, "b", 1, null]`; with final newline: `["a\r\n", 3, "b\n", 2, null]` | None graded (the grader feeds an empty pipe). |
+| `no-errno.eigs` | **Closed in v0.48.0.** A missing-file `read_text` now exposes the OS reason. | located `No such file or directory` error at line 15 | None graded (D rows avoid it; verybig.lua's `dofile` is OOS). |
 
 ## Round 4: peel to the row's end, with a count check
 
@@ -171,7 +207,7 @@ fails correctly.
 
 | row | verdict | count (ref) | class | first ten failures (line: class); round 3. Rows re-peeled in round 4 are in the section above |
 |---|---|---|---|---|
-| bitwise.lua | FAIL | 3 (1326) | EigenScript gap | 18 I64 (`0xFFFFFFFFFFFFFFFF` must be -1); 20, 21, 22 I64; 43 I64 (`%d` of maxinteger); 44 C; 47 I64; 53 I64 (`1 << 63`); 61, 63 I64 (shift by maxinteger). |
+| bitwise.lua | FAIL | 40 (1326) | EigenScript gap | Wrapping shift-count negation repairs the former 19-assert `integer overflow in -`; the row now reaches assertion 40 and stops because embedded-NUL numeric text is truncated (`nul-in-string`). |
 | calls.lua | FAIL | 28 (20114) | EigenScript gap | 119 TC (`deep(30000)`); 111 CD; 120 C; 122 TC; 123 C; 176 TC (tail calls through 100 `__call`s); 313 NUL; 314 OOS (`getinfo(f).source`); 331 OOS (`string.dump`); 332 C. |
 | closure.lua | HANG | none | EigenScript gap | 37 WK (`while x[1]` waits for a weak entry); round 5 diagnosis (EigenLua#7): the HANG is this loop, not speed: 100000 rounds with `collectgarbage()` leave the weak entry set (the reference clears it on the first), and with 37-40 blanked the file reaches 262 in under a second; 262 OOS (`upvalueid` of a C function); 265, 268, 270 OOS (`upvaluejoin`); 266, 271 C. Then it ends (exit 3 in a later `upvaluejoin`). |
 | constructs.lua | FAIL | 5374 (209484) | out of scope | 306 OOS (`getinfo(1, "n").name`). With that line blanked the rest of the file passes (209482 asserts, the 2 missing being the blanked line's) but takes 469 s, far past the row's budget (20 × the reference's seconds): about 200000 `load`s, at about 1.2 ms each through the EigenScript-hosted compiler. Round 5 (EigenLua#7): the time is attributed to the VM's per-operation cost (`gaps/vm-op-cost.eigs`: even a minimal front end needs about 534 us per chunk against the 300 us the budget allows), not a wrong answer. |
@@ -179,43 +215,39 @@ fails correctly.
 | cstack.lua | FAIL | 261 (1206) | EigenScript gap | 105 TL (1000 suspended coroutines). With that block blanked the file passes, with the same count as the reference on the same copy (8). FAIL again since round 15 (hq#58 el-7, 2026-11-01): on EigenScript v0.48.0 the run to line 105 takes about 6-7 s against the row's 20 s budget, so the row reaches its first failure (CI job 123379278775 on 2026-10-29: `ROW S cstack.lua FAIL rc=1 count=261 ref=1206`; the round-15 Tier S summary above already counts it under fail=17). Round 6 (when it was a HANG; FAIL in round 5): on v0.45.0 the run to line 105 takes about 20-23 s against the row's 20 s budget (the reference takes 0.2 s), so the grader stops it first; the stdout and the first failure are unchanged (`lua: cstack.lua:105: EigenScript limit error: task_spawn: too many live tasks (max 255)`, 261 asserts). The same at 79e29669 on v0.45.0. |
 | db.lua | UNSUPPORTED | 0 | out of scope | 16 OOS (`gethook`); 33, 34 OOS (`getinfo` option checks); 42, 45, 47 OOS (`name`, `func`, `activelines`); 55 OOS (`string.dump`); 56, 57 C; 91 OOS (`name`, `namewhat`). Line 38 (`getinfo(print).short_src == "[C]"`) was a front-end bug, fixed. |
 | errors.lua | UNSUPPORTED | 88 (295) | out of scope | 239 OOS (`setuservalue` on a light userdata); 280 OOS (`string.dump`); 281, 283 C; 287 OOS; 553 CD (stack overflow inside the message handler); 639 NEST (100 nested table constructors). Then the file runs to the end. |
-| events.lua | FAIL | 154 (444) | EigenScript gap | 168 INF (`1/0`). With that line blanked the file runs to the end (436 asserts). Lines 180 (`__len` gets its operand twice) and 464 (`debug.setmetatable(10, mt)`) were front-end bugs, fixed. |
+| events.lua | **PASS** | 444 | | Float division by zero now supplies the IEEE infinity required by the reference. |
 | gc.lua | FAIL | 5010 (5169) | out of scope | 194 OOS (`gcinfo`); 201 OOS (`collectgarbage("step")`); 217 OOS (waits for `gcinfo()` to grow: a hang); 261 WK; 262 C; 277 WK; 278 C; 293 WK; 298 C; 301 WK. |
 | gengc.lua | FAIL | 18 (19) | EigenScript gap | 122 WK. Then it runs to the end. |
 | goto.lua | **PASS** | 65 | | |
 | literals.lua | FAIL | 1 (877) | EigenScript gap | 11 NUL (a chunk holding `'a\0a'`); 12 C; 27 NUL; 126 NUL (`string.char(0)` is empty); 225-228 now hold (round 5: `%p` names the string value); 230 `no-string-identity` (an equal string built by concatenation must have its own address). Line 252 (`"\n\r"` counted as two line breaks) was a front-end bug, fixed. Then it runs to the end. |
-| locals.lua | FAIL | 2175 (2735) | EigenScript gap | 88-104 I64 (`until p <= 0` waits for overflow; past 2^53 the loaded chunk's `a == 2^i` fails); 262 OOS (`getinfo(2).name`); 463 C of 451 OOS (`getinfo(2).name` in `__close`); 493 OOS (`traceback` function names); 797, 804 OOS (`sethook`); 574, 576 C. Then it runs to the end. |
-| math.lua | FAIL | 3 (floor 28124) | EigenScript gap | 13 I64; 29, 30 INF; 41 FLT (`math.type(0.0)`); 99, 100, 101, 102, 103 INF; 104 C. |
+| locals.lua | FAIL | 2606 (2735) | out of scope | Exact int64 formatting and wrapping arithmetic now pass the loop at lines 88-104; the remaining first failure is `debug.getinfo` naming in the `__close` tests. |
+| math.lua | FAIL | 634 (floor 28098) | EigenScript gap | The reachable integer-subtraction boundary now wraps explicitly; the first failure is now the result kind of `math.modf(3)` at line 106. |
 | nextvar.lua | FAIL | 210 (floor 8868) | EigenScript gap | 77 I64 (`next` from maxinteger); 78, 79 C; 534 I64 (`__len` returns maxinteger); 536 C; 624 FLT; 635 I64 (a loop from maxinteger); 682 I64. Round 4: the loops over `maxi`/`mini` now end and the row runs to its end (section above). |
 | pm.lua | FAIL | 4 (395) | EigenScript gap | 27, 29, 31, 33, 35 NUL; 61 NUL (`utf8.charpattern` holds a NUL). With `utf8.charpattern` replaced by a NUL-free pattern: 118 NUL; 119, 120 C (the `f1` helper's line was blanked); 131 NUL (`abc` is cut at its NUL). |
-| sort.lua | FAIL | 14 (258507) | EigenScript gap | 50 I64 (`unpack({}, 0, maxI)` must say "too many results"); 57, 64, 65, 66 I64; 68, 69, 70 I64 (`minI + 1 == minI`); 128 I64; 136 I64. |
+| sort.lua | FAIL | 20 (258507) | front-end difference | Unsigned-equivalent endpoint counting repairs line 54 and reaches 20 assertions; a later endpoint still raises `integer overflow in '+'` and remains to repair. |
 | strings.lua | FAIL | 3 (332) | EigenScript gap | 22, 23, 24, 25, 27, 29, 30, 33 NUL; 51 I64; 53 NUL. |
 | tpack.lua | FAIL | 6 (471) | EigenScript gap | 51, 53, 54, 55 NUL (packed bytes hold zeros); 68, 69, 70 NUL; 75 I64 (a hex literal that wraps mod 2^64); 76, 77 C. Line 63 (`unpack("i7", ...)` of -1 gave 0) was a front-end bug, fixed. |
 | utf8.lua | FAIL | 61 (1193) | EigenScript gap | 57, 83 NUL (`utf8.charpattern`); 85, 87, 89, 90 C; 42, 51, 52 NUL (`check` of strings with U+0000, lines 218 and 236); 80 C. With `utf8.charpattern` replaced and those two checks blanked, the whole file passes (871 asserts). |
 | vararg.lua | **PASS** | 80 | | |
 | verybig.lua | UNSUPPORTED | 5 | out of scope | 141 OOS (`os.tmpname`); 147 OOS (`io.close`); 148 OOS (`dofile` of the file); 149 OOS (`os.remove`). Then it runs to the end. |
 
-## Tier D: DIVERGE (13 rows)
+## Tier D: DIVERGE (7 rows)
 
-The original 12 rows are unchanged from round 2; round 14 adds the final row.
-Each first difference, every differing line of `ops_matrix.lua`, and every
-difference in the new row is one of the recorded EigenScript gaps.
+Seven rows retain the `nul-in-string` EigenScript gap. Integer-kind decimal
+formatting and wrapping arithmetic moved `int_maxinteger.lua`,
+`int_past53.lua`, `int_wrap.lua`, and `rng_xoshiro.lua` from DIVERGE to MATCH
+on the next runtime; `ops_matrix.lua` also MATCHes.  The first difference of
+each remaining row is recorded from the grade below.
 
 | row | first difference | class | evidence |
 |---|---|---|---|
-| int_maxinteger.lua | line 1 `9223372036854775807` vs `9.2233720368548e+18` | EigenScript gap | `no-int64`: maxinteger maps to 2^63. |
-| int_one_vs_one.lua | line 2 `1.0` vs `1` | EigenScript gap | `no-float-subtype` |
-| int_past53.lua | line 2 `9007199254740993` vs `...992` | EigenScript gap | `no-int64` (line 5 is the float subtype) |
-| int_wrap.lua | line 1 mininteger vs `9.2233720368548e+18` | EigenScript gap | `no-int64`: no wrap |
-| num_print.lua | line 1 (nothing printed) | EigenScript gap | `no-nonfinite`: its value table holds `1/0`, which raises |
-| ops_matrix.lua | line 24 `float -0` vs `integer 0` | EigenScript gap | `no-float-subtype`, `no-int64`, `no-nonfinite` |
-| rng_xoshiro.lua | line 3 `math.random(0)` | EigenScript gap | `no-int64`. Floats, ranged integers and seeds match; only full 64-bit integers round. |
+| number_review_nul_pack.lua | line 1: packed i4 string ends at its first zero byte | EigenScript gap | `nul-in-string`; focused control for the remaining review difference. |
+| review2_kinds.lua | line 628: packed i4 string ends at its first zero byte | EigenScript gap | `nul-in-string`; review expression E210, generated by `tools/review2/gen.py kinds`. |
 | str_byte_char_sub_rep.lua | line 1 `65 0 200` vs `65 nil` | EigenScript gap | `nul-in-string` |
 | str_embedded_nul.lua | line 1 `4` vs `1` | EigenScript gap | `nul-in-string` |
-| str_format_num.lua | line 11 `1 1.0` vs `1 1` | EigenScript gap | `no-float-subtype` (`%s` of 1.0) |
 | str_len.lua | line 3 `3` vs `1` | EigenScript gap | `nul-in-string` |
-| utf8_lib.lua | line 9 `utf8.charpattern` bytes | EigenScript gap | `nul-in-string` |
-| math_fmod_ult_reverse.lua | line 5: float zero divisor returns `-nan` in Lua but raises `(zero)` in EigenLua; line 7: `2.0` prints as `2`; lines 12-13: `math.maxinteger` has no integer representation; line 16: reversed embedded-NUL string is truncated | EigenScript gaps | `no-nonfinite` and `no-float-subtype` (lines 5 and 7), `no-int64` (lines 12-13), and `nul-in-string` (line 16). These are the complete stdout differences; both arms exit 0. |
+| utf8_lib.lua | line 9 `utf8.charpattern` embedded-NUL bytes are truncated | EigenScript gap | UTF-8 decoding now restores the integer kind; remaining differences are `nul-in-string`. |
+| math_fmod_ult_reverse.lua | line 16: reversed embedded-NUL string is truncated | EigenScript gap | `nul-in-string`; output lines 12 and 13 at the int64 endpoints match exactly. |
 
 ## Front-end bugs fixed in round 3
 
@@ -472,3 +504,345 @@ again, matching its row above.
 | `co_close_error_chain.lua`, `co_close_error_chain_edges.lua` | `coroutine.close` of a suspended coroutine stopped at the first `__close` that raised: the error became a Lua error, so the remaining variables were deferred (and never closed) or a `pcall` in the body caught it. Every pending variable is now closed, each receiving the latest error, and close returns false plus the last error (`luaD_closeprotected`). | #73 |
 | `co_close_error_inner_tbc.lua` | An error inside a `__close` run by `coroutine.close` deferred that method's own `<close>` variables, which then never ran, instead of closing them before the next pending close, and the body's `xpcall` handler ran although `lua_closethread` clears the message handler. | #73 |
 | `co_close_suspended_cdepth.lua` | A suspended coroutine's closes ran one C level above the closer (a resume's level) instead of at the closer's level (`lua_closethread`: `nCcalls = getCcalls(from)`). | #73 |
+
+## Number-layer non-stopping differential (runtime-next)
+
+The five reviewer programs are Tier D rows. Calls which could terminate a row are protected in
+`number_text.lua`; the two endpoint loops in `number_arith2.lua` collect their output under
+`pcall` so each loop remains one probe line. `number_keys.lua` already sorts the only
+unspecified `pairs` traversal in `kinds`, so no additional ordering change was required.
+
+### Before repair (`192a2d65b13d052f183d52b5909936c55a1d496a`)
+
+| row | pinned lines | differing lines | cause |
+|---|---:|---:|---|
+| number_arith.lua | 1428 | 81 | Class B not started |
+| number_arith2.lua | 142 | 57 | Classes A-C not started |
+| number_text.lua | 555 | 143 | Classes A-C not started |
+| number_keys.lua | 30 | 13 | Classes A and D not started |
+| nil_number.lua | 31 | 2 | Number formatting in Class A not started |
+| **total** | **2186** | **296** | |
+
+The arithmetic count is the reviewer's 81/1428. Arithmetic-2 is 57 rather than 59 because
+the two endpoint loops are each protected and reported as one line (142 rather than 144).
+Text is 143/555 rather than the reviewer's early-exit 161/556 because `load`, `tonumber`, and
+the final base conversions are protected and the row completes; the reference emits 555
+physical lines. Keys is unchanged at 13/30. Nil has the same two differences, but the pasted
+program emits 31 physical lines on Lua 5.4.9, not 32.
+
+Every paired line below is assigned to the not-started class(es) in the table above; no
+front-end repair was started in this time-boxed delivery.
+
+```text
+ROW number_arith.lua lines=1428 differ=81
+bnd004 L 9223372036854775806 // 1	integer	9223372036854775806 | bnd004 L 9223372036854775806 // 1	float	inf
+bnd004 V	integer	9223372036854775806 | bnd004 V	float	inf
+bnd004 D	integer	9223372036854775806 | bnd004 D	float	inf
+bnd009 L 9223372036854775806 // (-1)	integer	-9223372036854775806 | bnd009 L 9223372036854775806 // (-1)	integer	-9223372036854775808
+bnd009 V	integer	-9223372036854775806 | bnd009 V	integer	-9223372036854775808
+bnd009 D	integer	-9223372036854775806 | bnd009 D	integer	-9223372036854775808
+bnd014 L 9223372036854775806 // 2	integer	4611686018427387903 | bnd014 L 9223372036854775806 // 2	integer	4611686018427387904
+bnd014 V	integer	4611686018427387903 | bnd014 V	integer	4611686018427387904
+bnd014 D	integer	4611686018427387903 | bnd014 D	integer	4611686018427387904
+bnd019 L 9223372036854775806 // 3	integer	3074457345618258602 | bnd019 L 9223372036854775806 // 3	integer	3074457345618258432
+bnd019 V	integer	3074457345618258602 | bnd019 V	integer	3074457345618258432
+bnd019 D	integer	3074457345618258602 | bnd019 D	integer	3074457345618258432
+bnd030 L 9223372036854775807 // 1	integer	9223372036854775807 | bnd030 L 9223372036854775807 // 1	float	inf
+bnd030 V	integer	9223372036854775807 | bnd030 V	float	inf
+bnd030 D	integer	9223372036854775807 | bnd030 D	float	inf
+bnd035 L 9223372036854775807 // (-1)	integer	-9223372036854775807 | bnd035 L 9223372036854775807 // (-1)	integer	-9223372036854775808
+bnd035 V	integer	-9223372036854775807 | bnd035 V	integer	-9223372036854775808
+bnd035 D	integer	-9223372036854775807 | bnd035 D	integer	-9223372036854775808
+bnd040 L 9223372036854775807 // 2	integer	4611686018427387903 | bnd040 L 9223372036854775807 // 2	integer	4611686018427387904
+bnd040 V	integer	4611686018427387903 | bnd040 V	integer	4611686018427387904
+bnd040 D	integer	4611686018427387903 | bnd040 D	integer	4611686018427387904
+bnd045 L 9223372036854775807 // 3	integer	3074457345618258602 | bnd045 L 9223372036854775807 // 3	integer	3074457345618258432
+bnd045 V	integer	3074457345618258602 | bnd045 V	integer	3074457345618258432
+bnd045 D	integer	3074457345618258602 | bnd045 D	integer	3074457345618258432
+bnd061 L (-9223372036854775807-1) // (-1)	integer	-9223372036854775808 | bnd061 L (-9223372036854775807-1) // (-1)	float	-9223372036854775808
+bnd061 V	integer	-9223372036854775808 | bnd061 V	float	-9223372036854775808
+bnd061 D	integer	-9223372036854775808 | bnd061 D	float	-9223372036854775808
+bnd071 L (-9223372036854775807-1) // 3	integer	-3074457345618258603 | bnd071 L (-9223372036854775807-1) // 3	integer	-3074457345618258432
+bnd071 V	integer	-3074457345618258603 | bnd071 V	integer	-3074457345618258432
+bnd071 D	integer	-3074457345618258603 | bnd071 D	integer	-3074457345618258432
+bnd082 L (-9223372036854775807) // 1	integer	-9223372036854775807 | bnd082 L (-9223372036854775807) // 1	integer	-9223372036854775808
+bnd082 V	integer	-9223372036854775807 | bnd082 V	integer	-9223372036854775808
+bnd082 D	integer	-9223372036854775807 | bnd082 D	integer	-9223372036854775808
+bnd087 L (-9223372036854775807) // (-1)	integer	9223372036854775807 | bnd087 L (-9223372036854775807) // (-1)	float	inf
+bnd087 V	integer	9223372036854775807 | bnd087 V	float	inf
+bnd087 D	integer	9223372036854775807 | bnd087 D	float	inf
+bnd097 L (-9223372036854775807) // 3	integer	-3074457345618258603 | bnd097 L (-9223372036854775807) // 3	integer	-3074457345618258432
+bnd097 V	integer	-3074457345618258603 | bnd097 V	integer	-3074457345618258432
+bnd097 D	integer	-3074457345618258603 | bnd097 D	integer	-3074457345618258432
+bnd316 L 9007199254740993 // 1	integer	9007199254740993 | bnd316 L 9007199254740993 // 1	integer	9007199254740992
+bnd316 V	integer	9007199254740993 | bnd316 V	integer	9007199254740992
+bnd316 D	integer	9007199254740993 | bnd316 D	integer	9007199254740992
+bnd321 L 9007199254740993 // (-1)	integer	-9007199254740993 | bnd321 L 9007199254740993 // (-1)	integer	-9007199254740992
+bnd321 V	integer	-9007199254740993 | bnd321 V	integer	-9007199254740992
+bnd321 D	integer	-9007199254740993 | bnd321 D	integer	-9007199254740992
+bnd331 L 9007199254740993 // 3	integer	3002399751580331 | bnd331 L 9007199254740993 // 3	integer	3002399751580330
+bnd331 V	integer	3002399751580331 | bnd331 V	integer	3002399751580330
+bnd331 D	integer	3002399751580331 | bnd331 D	integer	3002399751580330
+bnd342 L 4611686018427387903 // 1	integer	4611686018427387903 | bnd342 L 4611686018427387903 // 1	integer	4611686018427387904
+bnd342 V	integer	4611686018427387903 | bnd342 V	integer	4611686018427387904
+bnd342 D	integer	4611686018427387903 | bnd342 D	integer	4611686018427387904
+bnd347 L 4611686018427387903 // (-1)	integer	-4611686018427387903 | bnd347 L 4611686018427387903 // (-1)	integer	-4611686018427387904
+bnd347 V	integer	-4611686018427387903 | bnd347 V	integer	-4611686018427387904
+bnd347 D	integer	-4611686018427387903 | bnd347 D	integer	-4611686018427387904
+bnd352 L 4611686018427387903 // 2	integer	2305843009213693951 | bnd352 L 4611686018427387903 // 2	integer	2305843009213693952
+bnd352 V	integer	2305843009213693951 | bnd352 V	integer	2305843009213693952
+bnd352 D	integer	2305843009213693951 | bnd352 D	integer	2305843009213693952
+bnd357 L 4611686018427387903 // 3	integer	1537228672809129301 | bnd357 L 4611686018427387903 // 3	integer	1537228672809129216
+bnd357 V	integer	1537228672809129301 | bnd357 V	integer	1537228672809129216
+bnd357 D	integer	1537228672809129301 | bnd357 D	integer	1537228672809129216
+bnd383 L 4611686018427387904 // 3	integer	1537228672809129301 | bnd383 L 4611686018427387904 // 3	integer	1537228672809129216
+bnd383 V	integer	1537228672809129301 | bnd383 V	integer	1537228672809129216
+bnd383 D	integer	1537228672809129301 | bnd383 D	integer	1537228672809129216
+bnd394 L 4611686018427387905 // 1	integer	4611686018427387905 | bnd394 L 4611686018427387905 // 1	integer	4611686018427387904
+bnd394 V	integer	4611686018427387905 | bnd394 V	integer	4611686018427387904
+bnd394 D	integer	4611686018427387905 | bnd394 D	integer	4611686018427387904
+bnd399 L 4611686018427387905 // (-1)	integer	-4611686018427387905 | bnd399 L 4611686018427387905 // (-1)	integer	-4611686018427387904
+bnd399 V	integer	-4611686018427387905 | bnd399 V	integer	-4611686018427387904
+bnd399 D	integer	-4611686018427387905 | bnd399 D	integer	-4611686018427387904
+bnd409 L 4611686018427387905 // 3	integer	1537228672809129301 | bnd409 L 4611686018427387905 // 3	integer	1537228672809129216
+bnd409 V	integer	1537228672809129301 | bnd409 V	integer	1537228672809129216
+bnd409 D	integer	1537228672809129301 | bnd409 D	integer	1537228672809129216
+rnd428 L (-9223372036854775806) // 3	integer	-3074457345618258602 | rnd428 L (-9223372036854775806) // 3	integer	-3074457345618258432
+rnd428 V	integer	-3074457345618258602 | rnd428 V	integer	-3074457345618258432
+rnd428 D	integer	-3074457345618258602 | rnd428 D	integer	-3074457345618258432
+rnd459 L 4611686018427387904 // 5	integer	922337203685477580 | rnd459 L 4611686018427387904 // 5	integer	922337203685477632
+rnd459 V	integer	922337203685477580 | rnd459 V	integer	922337203685477632
+rnd459 D	integer	922337203685477580 | rnd459 D	integer	922337203685477632
+rnd471 L 4611686018427387907 // 7	integer	658812288346769701 | rnd471 L 4611686018427387907 // 7	integer	658812288346769664
+rnd471 V	integer	658812288346769701 | rnd471 V	integer	658812288346769664
+rnd471 D	integer	658812288346769701 | rnd471 D	integer	658812288346769664
+ROW number_arith2.lua lines=142 differ=57
+m1	float 9.2233720368548e+18 | m1	float inf
+m2	float 1.844674407371e+19 | m2	float inf
+m3	float -9.2233720368548e+18 | m3	float -9223372036854775808
+m4	float 3.0 | m4	float 3
+m5	float 9.007199254741e+15 | m5	float 9007199254740992
+m6	float 9.007199254741e+15 | m6	float 9007199254740992
+m9	float -1.844674407371e+19 | m9	float -inf
+m10	float 3.0 | m10	float 3
+m11	float -4.0 | m11	float -4
+m12	float 2.0 | m12	float 2
+m13	float 1.0 | m13	float 1
+m14	float inf | m14	ERR	[string "return 7.5 // 0"]:1: EigenScript value error: floor: expected a finite number
+m15	float 9.2233720368548e+18 | m15	float inf
+m16	float 0.0 | m16	float 0
+m17	float -0.0 | m17	float 0
+m18	float -inf | m18	float inf
+m19	float -inf | m19	float inf
+m20	float -0.0 | m20	float -0
+s7	integer -9223372036854775808 | s7	ERR	[string "return '-0x8000000000000000' + 0"]:1: EigenScript value error: integer overflow in '-'
+s10	float 100.0 | s10	float 100
+s14	float 9.2233720368548e+18 | s14	float inf
+s15	integer -9223372036854775808 | s15	float -9223372036854775808
+z3	float inf | z3	ERR	[string "return 1.0 // 0"]:1: EigenScript value error: floor: expected a finite number
+z4	float inf | z4	ERR	[string "return 1 // 0.0"]:1: EigenScript value error: floor: expected a finite number
+z5	float -inf | z5	ERR	[string "return -1 // 0.0"]:1: EigenScript value error: floor: expected a finite number
+z6	float -nan | z6	ERR	[string "return 0 // 0.0"]:1: EigenScript value error: floor: expected a finite number
+a1	integer -9223372036854775808 | a1	ERR	[string "return math.abs(math.mininteger)"]:1: EigenScript value error: abs: int64 overflow
+a3	float 0.0 | a3	float 0
+u3	boolean true | u3	ERR	[string "return math.ult(math.maxinteger, math.mininte..."]:1: EigenScript value error: integer overflow in '*'
+u4	boolean false | u4	ERR	[string "return math.ult(math.mininteger, math.maxinte..."]:1: EigenScript value error: integer overflow in '*'
+t1	integer 3 | t1	float 3
+t4	integer -9223372036854775808 | t4	float -9223372036854775808
+t6	integer 9007199254740992 | t6	float 9007199254740992
+t8	integer 0 | t8	float 0
+t9	nil nil | t9	ERR	[string "return math.tointeger(0/0)"]:1: EigenScript value error: floor: expected a finite number
+t10	nil nil | t10	ERR	[string "return math.tointeger(math.huge)"]:1: EigenScript value error: floor: expected a finite number
+f13	integer 0 | f13	float 0
+f14	integer 1 | f14	ERR	[string "return math.fmod(math.maxinteger, 2)"]:1: EigenScript value error: integer overflow in '*'
+f15	integer -2 | f15	integer -512
+f16	float 1.0 | f16	float -nan
+f17	float -1.0 | f17	float -nan
+f18	float -nan | f18	ERR	[string "return math.fmod(math.huge, 1)"]:1: EigenScript value error: floor: expected a finite number
+f22	float -0.0 | f22	float 0
+f23	float 5.0 | f23	float 5
+f24	float 2.0 | f24	float 0
+f26	integer 9223372036854775807 | f26	ERR	[string "return math.fmod(math.maxinteger, math.minint..."]:1: EigenScript value error: integer overflow in '*'
+l1	true	3	9223372036854775807 | l1	false	EigenScript value error: integer overflow in '+'
+l2	true	3	-9223372036854775808 | l2	false	EigenScript value error: integer overflow in '+'
+l3	true	3	9223372036854775806 | l3	false	EigenScript value error: integer overflow in '+'
+l5	true	3	-9223372036854775807 | l5	false	EigenScript value error: integer overflow in '-'
+l7	true	2	9223372036854775807 | l7	false	EigenScript value error: floor: expected a finite number
+l8	true	2	-9223372036854775808 | l8	false	EigenScript value error: ceil: expected a finite number
+l10	true	2	9223372036854775807 | l10	false	EigenScript value error: integer overflow in '+'
+l11	true	3	3.0 | l11	true	3	3
+l12	true	2	9223372036854775807 | l12	true	1	9223372036854775806
+lit	true	9223372036854775806 9223372036854775807	 | lit	false	9223372036854775806	EigenScript value error: integer overflow in '+'
+litn	true	-9223372036854775807 -9223372036854775808	 | litn	false	-9223372036854775807	EigenScript value error: integer overflow in '+'
+ROW number_text.lua lines=555 differ=143
+maxi	%d	true	9223372036854775807 | maxi	%d	true	9223372036854775808
+maxi	%x	true	7fffffffffffffff | maxi	%x	false	EigenScript value error: integer overflow in '*'
+maxi	%i	true	9223372036854775807 | maxi	%i	true	9223372036854775808
+mini	%d	true	-9223372036854775808 | mini	%d	false	EigenScript value error: integer overflow in '-'
+mini	%i	true	-9223372036854775808 | mini	%i	false	EigenScript value error: integer overflow in '-'
+2^53+1	%d	true	9007199254740993 | 2^53+1	%d	true	9007199254740992
+2^53+1	%i	true	9007199254740993 | 2^53+1	%i	true	9007199254740992
+-(2^53+1)	%d	true	-9007199254740993 | -(2^53+1)	%d	true	-9007199254740992
+-(2^53+1)	%i	true	-9007199254740993 | -(2^53+1)	%i	true	-9007199254740992
+maxi-1	%d	true	9223372036854775806 | maxi-1	%d	true	9223372036854775808
+maxi-1	%x	true	7ffffffffffffffe | maxi-1	%x	false	EigenScript value error: integer overflow in '*'
+maxi-1	%i	true	9223372036854775806 | maxi-1	%i	true	9223372036854775808
+mini+1	%d	true	-9223372036854775807 | mini+1	%d	true	-9223372036854775808
+mini+1	%i	true	-9223372036854775807 | mini+1	%i	true	-9223372036854775808
+1.0	print:	1.0 | 1.0	print:	1
+1.0	tostring:	1.0	concat:	1.0	type:	float | 1.0	tostring:	1	concat:	1	type:	float
+1.0	%s	true	1.0 | 1.0	%s	true	1
+-0.0	print:	-0.0 | -0.0	print:	0
+-0.0	tostring:	-0.0	concat:	-0.0	type:	float | -0.0	tostring:	0	concat:	0	type:	float
+-0.0	%s	true	-0.0 | -0.0	%s	true	0
+-0.0	%g	true	-0 | -0.0	%g	true	0
+-0.0	%.14g	true	-0 | -0.0	%.14g	true	0
+-0.0	%a	true	-0x0p+0 | -0.0	%a	true	0x0p+0
+-0.0	%5.2f	true	-0.00 | -0.0	%5.2f	true	 0.00
+-0.0	%.3f	true	-0.000 | -0.0	%.3f	true	0.000
+-0.0	%e	true	-0.000000e+00 | -0.0	%e	true	0.000000e+00
+1e15	print:	1e+15 | 1e15	print:	1000000000000000
+1e15	tostring:	1e+15	concat:	1e+15	type:	float | 1e15	tostring:	1000000000000000	concat:	1000000000000000	type:	float
+1e15	%s	true	1e+15 | 1e15	%s	true	1000000000000000
+1e16	print:	1e+16 | 1e16	print:	10000000000000000
+1e16	tostring:	1e+16	concat:	1e+16	type:	float | 1e16	tostring:	10000000000000000	concat:	10000000000000000	type:	float
+1e16	%s	true	1e+16 | 1e16	%s	true	10000000000000000
+2^53	print:	9.007199254741e+15 | 2^53	print:	9007199254740992
+2^53	tostring:	9.007199254741e+15	concat:	9.007199254741e+15	type:	float | 2^53	tostring:	9007199254740992	concat:	9007199254740992	type:	float
+2^53	%s	true	9.007199254741e+15 | 2^53	%s	true	9007199254740992
+2^63	print:	9.2233720368548e+18 | 2^63	print:	inf
+2^63	tostring:	9.2233720368548e+18	concat:	9.2233720368548e+18	type:	float | 2^63	tostring:	inf	concat:	inf	type:	float
+2^63	%s	true	9.2233720368548e+18 | 2^63	%s	true	inf
+-2^63	print:	-9.2233720368548e+18 | -2^63	print:	-9223372036854775808
+-2^63	tostring:	-9.2233720368548e+18	concat:	-9.2233720368548e+18	type:	float | -2^63	tostring:	-9223372036854775808	concat:	-9223372036854775808	type:	float
+-2^63	%s	true	-9.2233720368548e+18 | -2^63	%s	true	-9223372036854775808
+inf	%d	false	bad argument #2 to 'string.format' (number has no integer representation) | inf	%d	false	EigenScript value error: floor: expected a finite number
+inf	%g	true	inf | inf	%g	false	EigenScript value error: abs: expected a finite number
+inf	%.14g	true	inf | inf	%.14g	false	EigenScript value error: abs: expected a finite number
+inf	%a	true	inf | inf	%a	false	EigenScript value error: abs: expected a finite number
+inf	%5.2f	true	  inf | inf	%5.2f	false	EigenScript value error: abs: expected a finite number
+inf	%x	false	bad argument #2 to 'string.format' (number has no integer representation) | inf	%x	false	EigenScript value error: floor: expected a finite number
+inf	%i	false	bad argument #2 to 'string.format' (number has no integer representation) | inf	%i	false	EigenScript value error: floor: expected a finite number
+inf	%.3f	true	inf | inf	%.3f	false	EigenScript value error: abs: expected a finite number
+inf	%e	true	inf | inf	%e	false	EigenScript value error: abs: expected a finite number
+-inf	%d	false	bad argument #2 to 'string.format' (number has no integer representation) | -inf	%d	false	EigenScript value error: floor: expected a finite number
+-inf	%g	true	-inf | -inf	%g	false	EigenScript value error: abs: expected a finite number
+-inf	%.14g	true	-inf | -inf	%.14g	false	EigenScript value error: abs: expected a finite number
+-inf	%a	true	-inf | -inf	%a	false	EigenScript value error: abs: expected a finite number
+-inf	%5.2f	true	 -inf | -inf	%5.2f	false	EigenScript value error: abs: expected a finite number
+-inf	%x	false	bad argument #2 to 'string.format' (number has no integer representation) | -inf	%x	false	EigenScript value error: floor: expected a finite number
+-inf	%i	false	bad argument #2 to 'string.format' (number has no integer representation) | -inf	%i	false	EigenScript value error: floor: expected a finite number
+-inf	%.3f	true	-inf | -inf	%.3f	false	EigenScript value error: abs: expected a finite number
+-inf	%e	true	-inf | -inf	%e	false	EigenScript value error: abs: expected a finite number
+nan	%d	false	bad argument #2 to 'string.format' (number has no integer representation) | nan	%d	false	EigenScript value error: floor: expected a finite number
+nan	%g	true	-nan | nan	%g	false	EigenScript value error: abs: expected a finite number
+nan	%.14g	true	-nan | nan	%.14g	false	EigenScript value error: abs: expected a finite number
+nan	%a	true	-nan | nan	%a	false	EigenScript value error: abs: expected a finite number
+nan	%5.2f	true	 -nan | nan	%5.2f	false	EigenScript value error: abs: expected a finite number
+nan	%x	false	bad argument #2 to 'string.format' (number has no integer representation) | nan	%x	false	EigenScript value error: floor: expected a finite number
+nan	%i	false	bad argument #2 to 'string.format' (number has no integer representation) | nan	%i	false	EigenScript value error: floor: expected a finite number
+nan	%.3f	true	-nan | nan	%.3f	false	EigenScript value error: abs: expected a finite number
+nan	%e	true	-nan | nan	%e	false	EigenScript value error: abs: expected a finite number
+-nan	print:	nan | -nan	print:	-nan
+-nan	tostring:	nan	concat:	nan	type:	float | -nan	tostring:	-nan	concat:	-nan	type:	float
+-nan	%d	false	bad argument #2 to 'string.format' (number has no integer representation) | -nan	%d	false	EigenScript value error: floor: expected a finite number
+-nan	%s	true	nan | -nan	%s	true	-nan
+-nan	%g	true	nan | -nan	%g	false	EigenScript value error: abs: expected a finite number
+-nan	%.14g	true	nan | -nan	%.14g	false	EigenScript value error: abs: expected a finite number
+-nan	%a	true	nan | -nan	%a	false	EigenScript value error: abs: expected a finite number
+-nan	%5.2f	true	  nan | -nan	%5.2f	false	EigenScript value error: abs: expected a finite number
+-nan	%x	false	bad argument #2 to 'string.format' (number has no integer representation) | -nan	%x	false	EigenScript value error: floor: expected a finite number
+-nan	%i	false	bad argument #2 to 'string.format' (number has no integer representation) | -nan	%i	false	EigenScript value error: floor: expected a finite number
+-nan	%.3f	true	nan | -nan	%.3f	false	EigenScript value error: abs: expected a finite number
+-nan	%e	true	nan | -nan	%e	false	EigenScript value error: abs: expected a finite number
+1e19	print:	1e+19 | 1e19	print:	inf
+1e19	tostring:	1e+19	concat:	1e+19	type:	float | 1e19	tostring:	inf	concat:	inf	type:	float
+1e19	%s	true	1e+19 | 1e19	%s	true	inf
+1e100	print:	1e+100 | 1e100	print:	inf
+1e100	tostring:	1e+100	concat:	1e+100	type:	float | 1e100	tostring:	inf	concat:	inf	type:	float
+1e100	%s	true	1e+100 | 1e100	%s	true	inf
+1.5e300	print:	1.5e+300 | 1.5e300	print:	inf
+1.5e300	tostring:	1.5e+300	concat:	1.5e+300	type:	float | 1.5e300	tostring:	inf	concat:	inf	type:	float
+1.5e300	%s	true	1.5e+300 | 1.5e300	%s	true	inf
+9.3e18	print:	9.3e+18 | 9.3e18	print:	inf
+9.3e18	tostring:	9.3e+18	concat:	9.3e+18	type:	float | 9.3e18	tostring:	inf	concat:	inf	type:	float
+9.3e18	%s	true	9.3e+18 | 9.3e18	%s	true	inf
+-9.3e18	print:	-9.3e+18 | -9.3e18	print:	-inf
+-9.3e18	tostring:	-9.3e+18	concat:	-9.3e+18	type:	float | -9.3e18	tostring:	-inf	concat:	-inf	type:	float
+-9.3e18	%s	true	-9.3e+18 | -9.3e18	%s	true	-inf
+2^63-1024	print:	9.2233720368548e+18 | 2^63-1024	print:	9223372036854774784
+2^63-1024	tostring:	9.2233720368548e+18	concat:	9.2233720368548e+18	type:	float | 2^63-1024	tostring:	9223372036854774784	concat:	9223372036854774784	type:	float
+2^63-1024	%s	true	9.2233720368548e+18 | 2^63-1024	%s	true	9223372036854774784
+2^64	print:	1.844674407371e+19 | 2^64	print:	inf
+2^64	tostring:	1.844674407371e+19	concat:	1.844674407371e+19	type:	float | 2^64	tostring:	inf	concat:	inf	type:	float
+2^64	%s	true	1.844674407371e+19 | 2^64	%s	true	inf
+1e308	print:	1e+308 | 1e308	print:	inf
+1e308	tostring:	1e+308	concat:	1e+308	type:	float | 1e308	tostring:	inf	concat:	inf	type:	float
+1e308	%s	true	1e+308 | 1e308	%s	true	inf
+-1e15	print:	-1e+15 | -1e15	print:	-1000000000000000
+-1e15	tostring:	-1e+15	concat:	-1e+15	type:	float | -1e15	tostring:	-1000000000000000	concat:	-1000000000000000	type:	float
+-1e15	%s	true	-1e+15 | -1e15	%s	true	-1000000000000000
+3.0	print:	3.0 | 3.0	print:	3
+3.0	tostring:	3.0	concat:	3.0	type:	float | 3.0	tostring:	3	concat:	3	type:	float
+3.0	%s	true	3.0 | 3.0	%s	true	3
+-3.0	print:	-3.0 | -3.0	print:	-3
+-3.0	tostring:	-3.0	concat:	-3.0	type:	float | -3.0	tostring:	-3	concat:	-3	type:	float
+-3.0	%s	true	-3.0 | -3.0	%s	true	-3
+100.0	print:	100.0 | 100.0	print:	100
+100.0	tostring:	100.0	concat:	100.0	type:	float | 100.0	tostring:	100	concat:	100	type:	float
+100.0	%s	true	100.0 | 100.0	%s	true	100
+tonumber	0x1p4	float	16.0 | tonumber	0x1p4	float	16
+lex	0x1p4	true	float	16.0 | lex	0x1p4	true	float	16
+tonumber	0x.8p1	float	1.0 | tonumber	0x.8p1	float	1
+lex	0x.8p1	true	float	1.0 | lex	0x.8p1	true	float	1
+tonumber	0X1P4	float	16.0 | tonumber	0X1P4	float	16
+lex	0X1P4	true	float	16.0 | lex	0X1P4	true	float	16
+tonumber	9223372036854775808	float	9.2233720368548e+18 | tonumber	9223372036854775808	float	inf
+lex	9223372036854775808	true	float	9.2233720368548e+18 | lex	9223372036854775808	true	float	inf
+tonumber	-9223372036854775808	integer	-9223372036854775808 | tonumber	-9223372036854775808	float	-9223372036854775808
+lex	-9223372036854775808	true	float	-9.2233720368548e+18 | lex	-9223372036854775808	true	float	-9223372036854775808
+tonumber	-9223372036854775809	float	-9.2233720368548e+18 | tonumber	-9223372036854775809	float	-9223372036854775808
+lex	-9223372036854775809	true	float	-9.2233720368548e+18 | lex	-9223372036854775809	true	float	-9223372036854775808
+tonumber	18446744073709551616	float	1.844674407371e+19 | tonumber	18446744073709551616	float	inf
+lex	18446744073709551616	true	float	1.844674407371e+19 | lex	18446744073709551616	true	float	inf
+lex	0x8000000000000000	true	integer	-9223372036854775808 | lex	0x8000000000000000	true	float	-9223372036854775808
+tonumber	-0x8000000000000000	integer	-9223372036854775808 | tonumber	-0x8000000000000000	ERR	EigenScript value error: integer overflow in '-'
+lex	-0x8000000000000000	true	integer	-9223372036854775808 | lex	-0x8000000000000000	true	float	inf
+lex	1e400	true	float	inf | lex	1e400	false	EigenScript value error: num: expected complete numeric-literal text
+lex	-1e400	true	float	-inf | lex	-1e400	false	EigenScript value error: num: expected complete numeric-literal text
+tonumber	0x123456789abcdef0123p0	float	5.3730036427317e+21 | tonumber	0x123456789abcdef0123p0	float	inf
+lex	0x123456789abcdef0123p0	true	float	5.3730036427317e+21 | lex	0x123456789abcdef0123p0	true	float	inf
+tonumber	1.	float	1.0 | tonumber	1.	float	1
+lex	1.	true	float	1.0 | lex	1.	true	float	1
+tonumber	0x1.fffffffffffffp1023	float	1.7976931348623e+308 | tonumber	0x1.fffffffffffffp1023	float	inf
+lex	0x1.fffffffffffffp1023	true	float	1.7976931348623e+308 | lex	0x1.fffffffffffffp1023	true	float	inf
+lex	0x1p1024	true	float	inf | lex	0x1p1024	false	EigenScript value error: num: expected complete numeric-literal text
+16	16	255	1295	9223372036854775807	-9223372036854775808	-255 | tonumber-base	false	/workspace/EigenLua/corpus/D/number_text.lua:17: EigenScript value error: integer overflow in '*'
+ROW number_keys.lua lines=30 differ=13
+k2	x	x	integer:9007199254740992=x | k2	x	x	float:9007199254740992=x
+k5	z	z	integer:0=z | k5	z	z	float:0=z
+k7	false	/workspace/EigenLua/corpus/D/number_keys.lua:10: table index is NaN | k7	false	EigenScript value error: floor: expected a finite number
+k9	true	1	float:inf=1 | k9	false	EigenScript value error: floor: expected a finite number
+k10	true	1 | k10	false	EigenScript value error: floor: expected a finite number
+k11	true	1	2	float:9.2233720368548e+18=1 integer:-9223372036854775808=2 | k11	true	1	2	float:inf=1 integer:-9223372036854775808=2
+k12	true	1	float:1.844674407371e+19=1 | k12	true	1	float:inf=1
+k13	integer:-5=2 integer:100=1 integer:1099511627776=3 | k13	float:-5=2 float:100=1 float:1099511627776=3
+k20	3	integer:1=a integer:2=b integer:3=c	7	integer | k20	3	integer:1=a integer:2=b integer:3=c	7	float
+k24	integer:4=r | k24	float:4=r
+k25	float:9.2233720368548e+18=m | k25	float:inf=m
+k26	integer:1000000000000000=2 | k26	float:1000000000000000=2
+ni	float	3.0 | ni	float	3
+ROW nil_number.lua lines=31 differ=2
+2	2	7 | 2	0	7
+3	3 | 1	3
+TOTAL differ=296
+```
+
+### After repair (`987174e85df231c6b0717e7ff71ee6b0ec843801`, measured 2026-11-19)
+
+`tools/numlines.sh` measures three differing lines across the fourteen-row
+population and no incomplete output.  Each is one expression charged to
+`nul-in-string`: the focused `number_review_nul_pack.lua` row and the literal,
+variable, and loaded forms of review expression E210 occupy three output lines
+in `review2-kinds.lua`.  The five rows in the historical table above now have
+zero differences.

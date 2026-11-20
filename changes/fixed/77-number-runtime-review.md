@@ -1,0 +1,1 @@
+- Number operations now match Lua for exact float remainder, non-finite values, shifts, quoted floats, and unpack limits (#77).
